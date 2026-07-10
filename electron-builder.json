@@ -1,0 +1,26 @@
+{
+  "appId": "com.cotador.inteligente.st",
+  "productName": "Cotador Inteligente ST",
+  "directories": {
+    "output": "dist-electron"
+  },
+  "files": [
+    "dist/**/*",
+    "main.js",
+    "preload.js",
+    "database.js",
+    "parser.js",
+    "recommendation.js",
+    "exporter.js",
+    "connectors/**/*",
+    "package.json",
+    "node_modules/**/*"
+  ],
+  "win": {
+    "target": "nsis"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}
