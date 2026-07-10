@@ -13,7 +13,7 @@ const mockApi = {
       
       const results = [];
       
-      if (cleaned.includes('dipirona')) {
+      if (cleaned.includes('dipirona') || cleaned.includes('7896004719016') || cleaned.includes('7896004719023')) {
         results.push(
           {
             id: idx * 10 + 1,
@@ -91,7 +91,7 @@ const mockApi = {
             unitPrice: 0.270
           }
         );
-      } else if (cleaned.includes('omeprazol')) {
+      } else if (cleaned.includes('omeprazol') || cleaned.includes('7896004719030')) {
         results.push(
           {
             id: idx * 10 + 1,
@@ -144,7 +144,7 @@ const mockApi = {
             unitPrice: 0.416
           }
         );
-      } else if (cleaned.includes('losartana')) {
+      } else if (cleaned.includes('losartana') || cleaned.includes('7896004719047') || cleaned.includes('7896004719054')) {
         results.push(
           {
             id: idx * 10 + 1,
@@ -169,7 +169,7 @@ const mockApi = {
             ean: '7896004719047',
             packaging: '30 comprimidos',
             quantity: 30,
-            unitPrice: 0.30 // cost per tablet
+            unitPrice: 0.30
           },
           {
             id: idx * 10 + 2,
@@ -184,7 +184,7 @@ const mockApi = {
             availability: 'disponível',
             isValidOption: 1,
             ignoreReason: '',
-            recommendationStatus: 'Melhor preço com ST', // Wins because unit price 0.25 < 0.30
+            recommendationStatus: 'Melhor preço com ST',
             reviewStatus: 'PENDENTE',
             notes: '',
             confidence: 1.0,
@@ -194,7 +194,35 @@ const mockApi = {
             ean: '7896004719054',
             packaging: '60 comprimidos',
             quantity: 60,
-            unitPrice: 0.25 // cost per tablet (cheaper!)
+            unitPrice: 0.25
+          }
+        );
+      } else if (cleaned.includes('cetoconazol') || cleaned.includes('7896004719078')) {
+        results.push(
+          {
+            id: idx * 10 + 1,
+            quoteItemId: idx + 1,
+            supplierProductName: 'Cetoconazol 20mg/g Creme 30g Eurofarma',
+            laboratory: 'Eurofarma',
+            dosage: '20mg/g',
+            presentation: 'creme',
+            price: 14.20,
+            hasST: 1,
+            stStatus: 'COM_ST',
+            availability: 'disponível',
+            isValidOption: 1,
+            ignoreReason: '',
+            recommendationStatus: 'Melhor preço com ST',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
+            source: 'ANB',
+            supplierName: 'ANB',
+            ean: '7896004719078',
+            packaging: '30g',
+            quantity: 1,
+            unitPrice: 14.20
           }
         );
       } else {
@@ -223,56 +251,6 @@ const mockApi = {
             packaging: '30 comprimidos',
             quantity: 30,
             unitPrice: 0.18
-          },
-          {
-            id: idx * 10 + 2,
-            quoteItemId: idx + 1,
-            supplierProductName: `${name.toUpperCase()} ${dosage} Simulado ST SEPARADO`,
-            laboratory: 'EMS',
-            dosage: dosage,
-            presentation: presentation,
-            price: 4.80,
-            hasST: 1,
-            stStatus: 'ST_SEPARADO',
-            availability: 'disponível',
-            isValidOption: 1,
-            ignoreReason: '',
-            recommendationStatus: 'ST separado — conferir custo final',
-            reviewStatus: 'PENDENTE',
-            notes: '',
-            confidence: 1.0,
-            capturedAt: new Date().toISOString(),
-            source: 'Profarma',
-            supplierName: 'Profarma',
-            ean: '7896004719099',
-            packaging: '30 comprimidos',
-            quantity: 30,
-            unitPrice: 0.16
-          },
-          {
-            id: idx * 10 + 3,
-            quoteItemId: idx + 1,
-            supplierProductName: `${name.toUpperCase()} ${dosage} Simulado ST DESCONHECIDO`,
-            laboratory: 'EUROFARMA',
-            dosage: dosage,
-            presentation: presentation,
-            price: 6.10,
-            hasST: 0,
-            stStatus: 'ST_DESCONHECIDO',
-            availability: 'disponível',
-            isValidOption: 0,
-            ignoreReason: 'Precisa revisar ST',
-            recommendationStatus: 'Precisa revisar ST',
-            reviewStatus: 'PENDENTE',
-            notes: '',
-            confidence: 0.5,
-            capturedAt: new Date().toISOString(),
-            source: 'Santa Cruz',
-            supplierName: 'Santa Cruz',
-            ean: '7896004719099',
-            packaging: '30 comprimidos',
-            quantity: 30,
-            unitPrice: 0.203
           }
         );
       }
@@ -330,11 +308,9 @@ const mockApi = {
     if (targetRes) {
       Object.assign(targetRes, fields);
       
-      // Update unitPrice
       const qty = targetRes.quantity || 1;
       targetRes.unitPrice = targetRes.price ? (targetRes.price / qty) : 0;
 
-      // Re-run recommendation logic
       const processed = targetItem.results.map(res => {
         let isValidOption = false;
         let ignoreReason = '';
@@ -387,7 +363,7 @@ const mockApi = {
           if (priorityA !== priorityB) {
             return priorityA - priorityB;
           }
-          return a.unitPrice - b.unitPrice; // Cost efficiency first
+          return a.unitPrice - b.unitPrice;
         });
 
       if (validSorted.length > 0) {
@@ -428,6 +404,10 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [selectedQuoteId, setSelectedQuoteId] = useState(null);
   
+  // Git updates state
+  const [updateAvailable, setUpdateAvailable] = useState(null);
+  const [updating, setUpdating] = useState(false);
+
   // Suppliers selection
   const [selectedSuppliers, setSelectedSuppliers] = useState({
     ANB: true,
@@ -457,6 +437,12 @@ function App() {
 
   useEffect(() => {
     loadHistory();
+    // Register Git update callback
+    if (api.onGitUpdateAvailable) {
+      api.onGitUpdateAvailable((data) => {
+        setUpdateAvailable(data);
+      });
+    }
   }, []);
 
   const loadHistory = async () => {
@@ -465,6 +451,24 @@ function App() {
       setHistory(data || []);
     } catch (e) {
       console.error('Failed to load history:', e);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!api.installUpdate) {
+      alert('Atualização automática via Git não suportada neste ambiente.');
+      return;
+    }
+    setUpdating(true);
+    try {
+      const res = await api.installUpdate();
+      if (!res.success) {
+        alert(`Erro ao atualizar: ${res.error}`);
+        setUpdating(false);
+      }
+    } catch (err) {
+      alert(`Falha no processo de pull/update: ${err.message}`);
+      setUpdating(false);
     }
   };
 
@@ -519,10 +523,14 @@ function App() {
     setInputText('');
   };
 
-  const handleUseExample = () => {
-    setInputText(
-      `losartana 50mg 30 comp\nlosartana 50mg 60 cpr\n7896004719016 losartana 50mg 30cp\ncetoconazol creme 20g`
-    );
+  const handleExampleClick = (query) => {
+    setInputText(prev => {
+      const trimmed = prev.trim();
+      if (!trimmed) return query;
+      // Check if already in text to avoid duplicates
+      if (trimmed.includes(query)) return prev;
+      return `${trimmed}\n${query}`;
+    });
   };
 
   const handleExportExcel = async () => {
@@ -607,10 +615,9 @@ function App() {
         needsReview++;
       }
 
-      // Savings: compare lowest unit price with second lowest unit price (cost per unit diff * package quantity)
+      // Savings based on unit price difference
       const validSorted = results.filter(r => r.isValidOption).sort((a, b) => a.unitPrice - b.unitPrice);
       if (validSorted.length > 1) {
-        // Savings = (second cheapest unit price - cheapest unit price) * quantity of cheapest option
         const savingPerUnit = validSorted[1].unitPrice - validSorted[0].unitPrice;
         savings += (savingPerUnit * validSorted[0].quantity);
       }
@@ -693,8 +700,46 @@ function App() {
 
   return (
     <div className="app-container">
+      {/* Top update notification banner */}
+      {updateAvailable && (
+        <div style={{
+          background: '#0284c7',
+          color: '#fff',
+          padding: '0.6rem 1.25rem',
+          textAlign: 'center',
+          fontSize: '0.85rem',
+          fontWeight: 600,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '1rem',
+          position: 'fixed',
+          top: 0, left: 0, right: 0,
+          zIndex: 10000,
+          boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'
+        }}>
+          <span>🚀 Atualização disponível no repositório ({updateAvailable.count} novos commits na branch {updateAvailable.branch})!</span>
+          <button 
+            onClick={handleInstallUpdate} 
+            disabled={updating}
+            className="btn" 
+            style={{ 
+              padding: '0.25rem 0.75rem', 
+              fontSize: '0.75rem', 
+              background: '#0f172a',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            {updating ? 'Instalando e reiniciando...' : 'Atualizar Agora'}
+          </button>
+        </div>
+      )}
+
       {/* Sidebar: Logo + History */}
-      <aside className="sidebar">
+      <aside className="sidebar" style={{ paddingTop: updateAvailable ? '3.5rem' : '1.5rem' }}>
         <div className="logo-container">
           <div className="logo-icon">ST</div>
           <div className="logo-text">Cotador Inteligente ST</div>
@@ -709,7 +754,7 @@ function App() {
           value={historySearchTerm}
           onChange={(e) => setHistorySearchTerm(e.target.value)}
           className="search-textarea"
-          style={{ height: '36px', fontSize: '0.8rem', padding: '0.5rem', marginBottom: '1rem' }}
+          style={{ height: '36px', fontSize: '0.8rem', padding: '0.5rem', marginBottom: '1rem', background: 'rgba(255,255,255,0.03)' }}
         />
 
         {filteredHistory.length === 0 ? (
@@ -748,7 +793,7 @@ function App() {
       </aside>
 
       {/* Main Panel */}
-      <main className="main-content">
+      <main className="main-content" style={{ paddingTop: updateAvailable ? '4.5rem' : '1.5rem' }}>
         {loading ? (
           <div className="loading-overlay">
             <div className="spinner"></div>
@@ -758,36 +803,54 @@ function App() {
             </p>
           </div>
         ) : !activeQuote ? (
-          /* Search Input View */
-          <div className="search-card">
+          /* Search Input View - Premium Centered Layout */
+          <div className="search-card" style={{ maxWidth: '850px', width: '100%', margin: '2rem auto' }}>
             <h2 className="search-title">Pesquisa de Preços ST</h2>
             <p className="search-subtitle">
-              Digite um produto por linha. O sistema recomenda as opções com ST ordenadas pelo preço unitário.
+              Digite os itens a serem cotados (um por linha). O sistema fará a busca nas distribuidoras e ordenará pelo preço unitário mais vantajoso com ST.
             </p>
 
             <div className="textarea-container">
               <textarea
                 className="search-textarea"
-                placeholder="Insira os produtos (um por linha)..."
+                placeholder="Insira os produtos (Ex: losartana 50mg 30 comp)..."
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
+                style={{ minHeight: '220px' }}
               />
             </div>
 
-            <div className="example-box" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div className="example-title">Exemplo de buscas suportadas:</div>
-                <div className="example-text" style={{ fontSize: '0.8rem' }}>
-                  losartana 50mg 30 comp | losartana 50mg 60 cpr | 7896004719016 losartana 50mg 30cp
-                </div>
+            {/* Clickable example queries */}
+            <div className="example-box" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem' }}>
+              <div style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.65rem', display: 'flex', justifyContent: 'space-between' }}>
+                <span>💡 EXEMPLOS DE BUSCA (Clique para adicionar ao terminal)</span>
+                <span style={{ color: '#06b6d4', textTransform: 'none' }}>Portátil (Pendrive) • Auto-Update Git</span>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={handleUseExample}>
-                  Usar exemplo
-                </button>
-                <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={handleClearInput}>
-                  Limpar
-                </button>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {[
+                  'losartana 50mg 30 comp',
+                  'losartana 50mg 60 cpr',
+                  '7896004719016 losartana 50mg 30cp',
+                  'cetoconazol creme 20g',
+                  'dipirona gotas 50ml'
+                ].map(ex => (
+                  <button
+                    key={ex}
+                    onClick={() => handleExampleClick(ex)}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '0.35rem 0.65rem',
+                      fontSize: '0.75rem',
+                      borderRadius: '6px',
+                      background: 'rgba(255,255,255,0.04)',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      cursor: 'pointer',
+                      color: '#cbd5e1'
+                    }}
+                  >
+                    {ex}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -805,9 +868,14 @@ function App() {
                 ))}
               </div>
 
-              <button className="btn" onClick={handleRunQuote} disabled={!inputText.trim()}>
-                🔍 Cotar Preços
-              </button>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button className="btn btn-secondary" onClick={handleClearInput}>
+                  Limpar
+                </button>
+                <button className="btn" onClick={handleRunQuote} disabled={!inputText.trim()}>
+                  🔍 Iniciar Cotação
+                </button>
+              </div>
             </div>
           </div>
         ) : (
@@ -907,7 +975,7 @@ function App() {
                       }
                     }}
                   />
-                  Apenas produtos com ST
+                  Apenas com ST
                 </label>
                 
                 {!filterOnlyST && (
@@ -927,14 +995,14 @@ function App() {
                         checked={filterShowUnknown}
                         onChange={(e) => setFilterShowUnknown(e.target.checked)}
                       />
-                      Mostrar ST desconhecido
+                      Mostrar desconhecido
                     </label>
                   </>
                 )}
               </div>
 
               <div className="filter-group" style={{ marginLeft: 'auto' }}>
-                <span className="filter-label">Fornecedor:</span>
+                <span className="filter-label">Distribuidora:</span>
                 <select
                   value={filterSupplier}
                   onChange={(e) => setFilterSupplier(e.target.value)}
@@ -958,7 +1026,7 @@ function App() {
             {/* Results Table */}
             {filteredRows.length === 0 ? (
               <div className="alert-empty">
-                Nenhum produto correspondente aos filtros de visualização ativos foi encontrado.
+                Nenhum produto correspondente aos filtros de visualização ativos.
               </div>
             ) : (
               <div className="table-container">
@@ -967,9 +1035,9 @@ function App() {
                     <tr>
                       <th>Busca</th>
                       <th>EAN</th>
-                      <th>Produto Encont.</th>
-                      <th>Emb.</th>
-                      <th>Fornecedor</th>
+                      <th>Produto Encontrado</th>
+                      <th>Embalagem</th>
+                      <th>Distribuidora</th>
                       <th>Preço Caixa</th>
                       <th>Preço Unit.</th>
                       <th>ST</th>
@@ -1058,7 +1126,7 @@ function App() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 9999
+          zIndex: 99999
         }}>
           <div style={{
             background: '#0f172a',
@@ -1105,7 +1173,7 @@ function App() {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                 <div>
-                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2' }}>Embalagem</label>
+                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Embalagem</label>
                   <input
                     type="text"
                     value={editPackaging}
@@ -1116,7 +1184,7 @@ function App() {
                   />
                 </div>
                 <div>
-                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2' }}>Qtd. Unidades</label>
+                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Qtd. Unidades</label>
                   <input
                     type="number"
                     value={editQuantity}

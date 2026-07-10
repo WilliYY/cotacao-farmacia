@@ -8,8 +8,11 @@ import { isValidST, getVisualStatusLabel, getSTPriority } from './st-rules.js';
 let db = null;
 
 export async function initDatabase(userDataPath) {
-  const dbDir = userDataPath || '.';
-  if (!fs.existsSync(dbDir) && dbDir !== '.') {
+  let dbDir = userDataPath || '.';
+  if (process.env.DATABASE_PATH === 'local') {
+    dbDir = path.join(process.cwd(), 'data');
+  }
+  if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
   const dbPath = path.join(dbDir, 'cotador-st.db');

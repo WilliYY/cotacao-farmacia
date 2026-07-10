@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import dotenv from 'dotenv';
+import { exec } from 'child_process';
 
 dotenv.config();
 
@@ -16,6 +17,39 @@ const __dirname = path.dirname(__filename);
 
 let mainWindow = null;
 
+function checkGitUpdates() {
+  if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
+    logger.info('Not a git repository, skipping update check.');
+    return;
+  }
+  
+  logger.info('Checking for Git updates...');
+  exec('git fetch origin', (err) => {
+    if (err) {
+      logger.warn(`Git fetch failed: ${err.message}`);
+      return;
+    }
+    
+    exec('git rev-parse --abbrev-ref HEAD', (err, stdout) => {
+      if (err) return;
+      const branch = stdout.trim();
+      
+      exec(`git rev-list --count HEAD..origin/${branch}`, (err, stdout) => {
+        if (err) return;
+        const count = parseInt(stdout.trim(), 10);
+        if (count > 0) {
+          logger.info(`Git updates available: ${count} commits behind origin/${branch}`);
+          if (mainWindow) {
+            mainWindow.webContents.send('git-update-available', { count, branch });
+          }
+        } else {
+          logger.info('App is up to date with Git repository.');
+        }
+      });
+    });
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -28,15 +62,20 @@ function createWindow() {
     }
   });
 
-  // In development, load the Vite dev server
   const isDev = !app.isPackaged;
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
-    // Open DevTools if desired
-    mainWindow.webContents.openDevTools();
+    // Clean startup: Only open DevTools if explicitly configured in .env
+    if (process.env.OPEN_DEVTOOLS === 'true') {
+      mainWindow.webContents.openDevTools();
+    }
   } else {
     mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
   }
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    setTimeout(checkGitUpdates, 2000);
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -44,9 +83,9 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  // Initialize Database
+  // Initialize Database (handles local vs AppData paths)
   const userDataPath = app.getPath('userData');
-  console.log('Database path:', userDataPath);
+  console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
   await initDatabase(userDataPath);
 
   createWindow();
@@ -64,69 +103,48 @@ app.on('window-all-closed', () => {
   }
 });
 
-// IPC Handler: Ping
-ipcMain.handle('ping', () => 'pong');
+// IPC Handler: Install updates pull & npm install
+ipcMain.handle('install-update', async () => {
+  logger.info('Installing Git updates...');
+  return new Promise((resolve) => {
+    exec('git pull && npm install', (err, stdout, stderr) => {
+      if (err) {
+        logger.error(`Update failed: ${err.message}`);
+        resolve({ success: false, error: err.message });
+      } else {
+        logger.info('Update completed. Relaunching...');
+        resolve({ success: true });
+        app.relaunch();
+        app.exit(0);
+      }
+    });
+  });
+});
 
 // IPC Handler: Run Quote Process
 ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
   try {
+    logger.info(`Starting new Quote process for ${rawTextList.length} items`);
     const quoteId = await createQuote('processing');
-    
+
     for (const rawText of rawTextList) {
-      if (!rawText.trim()) continue;
+      const quote = await processQuoteQuery(rawText, activeSuppliers);
+      const itemId = await createQuoteItem(quoteId, rawText, quote.parsed, 'completed');
 
-      // 1. Process search with recommendation engine
-      const { parsed, results } = await processQuoteQuery(rawText, activeSuppliers);
-      
-      // Save query search history for analytics / lookup
-      await saveSearch(rawText, parsed);
-
-      // 2. Save search item to QuoteItem
-      const quoteItemId = await createQuoteItem(quoteId, rawText, parsed, 'completed');
-
-      // 3. Save matching supplier results
-      for (const res of results) {
+      for (const res of quote.results) {
         await saveQuoteResult({
-          quoteItemId,
+          quoteItemId: itemId,
           supplierId: getSupplierIdByName(res.source),
-          supplierProductName: res.supplierProductName,
-          laboratory: res.laboratory,
-          dosage: res.dosage,
-          presentation: res.presentation,
-          price: res.price,
-          hasST: res.hasST,
-          stStatus: res.stStatus,
-          availability: res.availability,
-          isValidOption: res.isValidOption,
-          ignoreReason: res.ignoreReason,
-          recommendationStatus: res.recommendationStatus,
-          source: res.source
+          ...res
         });
       }
     }
 
     await updateQuoteStatus(quoteId, 'completed');
-    
-    // Retrieve full quote with nested details to return
+    logger.info(`Quote process completed for ID: ${quoteId}`);
     return await getQuoteDetails(quoteId);
   } catch (error) {
-    console.error('Error running quote process:', error);
-    throw error;
-  }
-});
-
-// IPC Handler: Update Result for Manual Review overrides
-ipcMain.handle('update-result', async (event, resultId, fields) => {
-  try {
-    const quoteItemId = await updateQuoteResult(resultId, fields);
-    const dbInstance = getDb();
-    const resultItem = await dbInstance.get('SELECT quoteId FROM QuoteItem WHERE id = ?', quoteItemId);
-    if (resultItem) {
-      return await getQuoteDetails(resultItem.quoteId);
-    }
-    return null;
-  } catch (error) {
-    console.error('Error updating result:', error);
+    logger.error(`Quote execution failed: ${error.message}`);
     throw error;
   }
 });
@@ -147,6 +165,19 @@ ipcMain.handle('get-quote-details', async (event, quoteId) => {
     return await getQuoteDetails(quoteId);
   } catch (error) {
     console.error('Error getting quote details:', error);
+    throw error;
+  }
+});
+
+// IPC Handler: Update Result Status
+ipcMain.handle('update-result', async (event, resultId, fields) => {
+  try {
+    const quoteItemId = await updateQuoteResult(resultId, fields);
+    const dbInstance = getDb();
+    const item = await dbInstance.get('SELECT quoteId FROM QuoteItem WHERE id = ?', quoteItemId);
+    return await getQuoteDetails(item.quoteId);
+  } catch (error) {
+    console.error('Error updating result:', error);
     throw error;
   }
 });
