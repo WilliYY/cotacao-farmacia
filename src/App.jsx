@@ -34,7 +34,11 @@ const mockApi = {
             confidence: 1.0,
             capturedAt: new Date().toISOString(),
             source: 'ANB',
-            supplierName: 'ANB'
+            supplierName: 'ANB',
+            ean: '7896004719016',
+            packaging: '10 comprimidos',
+            quantity: 10,
+            unitPrice: 0.285
           },
           {
             id: idx * 10 + 2,
@@ -55,7 +59,11 @@ const mockApi = {
             confidence: 1.0,
             capturedAt: new Date().toISOString(),
             source: 'Santa Cruz',
-            supplierName: 'Santa Cruz'
+            supplierName: 'Santa Cruz',
+            ean: '7896004719016',
+            packaging: '10 comprimidos',
+            quantity: 10,
+            unitPrice: 0.305
           },
           {
             id: idx * 10 + 3,
@@ -76,7 +84,11 @@ const mockApi = {
             confidence: 1.0,
             capturedAt: new Date().toISOString(),
             source: 'Profarma',
-            supplierName: 'Profarma'
+            supplierName: 'Profarma',
+            ean: '7896004719016',
+            packaging: '10 comprimidos',
+            quantity: 10,
+            unitPrice: 0.270
           }
         );
       } else if (cleaned.includes('omeprazol')) {
@@ -100,7 +112,11 @@ const mockApi = {
             confidence: 1.0,
             capturedAt: new Date().toISOString(),
             source: 'Profarma',
-            supplierName: 'Profarma'
+            supplierName: 'Profarma',
+            ean: '7896004719030',
+            packaging: '30 cápsulas',
+            quantity: 30,
+            unitPrice: 0.373
           },
           {
             id: idx * 10 + 2,
@@ -121,7 +137,64 @@ const mockApi = {
             confidence: 1.0,
             capturedAt: new Date().toISOString(),
             source: 'ANB',
-            supplierName: 'ANB'
+            supplierName: 'ANB',
+            ean: '7896004719030',
+            packaging: '30 cápsulas',
+            quantity: 30,
+            unitPrice: 0.416
+          }
+        );
+      } else if (cleaned.includes('losartana')) {
+        results.push(
+          {
+            id: idx * 10 + 1,
+            quoteItemId: idx + 1,
+            supplierProductName: 'Losartana Potássica 50mg 30 comprimidos Medley',
+            laboratory: 'Medley',
+            dosage: '50mg',
+            presentation: 'comprimido',
+            price: 9.00,
+            hasST: 1,
+            stStatus: 'COM_ST',
+            availability: 'disponível',
+            isValidOption: 1,
+            ignoreReason: '',
+            recommendationStatus: 'Segunda opção com ST',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
+            source: 'ANB',
+            supplierName: 'ANB',
+            ean: '7896004719047',
+            packaging: '30 comprimidos',
+            quantity: 30,
+            unitPrice: 0.30 // cost per tablet
+          },
+          {
+            id: idx * 10 + 2,
+            quoteItemId: idx + 1,
+            supplierProductName: 'Losartana Potássica 50mg 60 comprimidos Medley',
+            laboratory: 'Medley',
+            dosage: '50mg',
+            presentation: 'comprimido',
+            price: 15.00,
+            hasST: 1,
+            stStatus: 'COM_ST',
+            availability: 'disponível',
+            isValidOption: 1,
+            ignoreReason: '',
+            recommendationStatus: 'Melhor preço com ST', // Wins because unit price 0.25 < 0.30
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
+            source: 'ANB',
+            supplierName: 'ANB',
+            ean: '7896004719054',
+            packaging: '60 comprimidos',
+            quantity: 60,
+            unitPrice: 0.25 // cost per tablet (cheaper!)
           }
         );
       } else {
@@ -145,7 +218,11 @@ const mockApi = {
             confidence: 1.0,
             capturedAt: new Date().toISOString(),
             source: 'ANB',
-            supplierName: 'ANB'
+            supplierName: 'ANB',
+            ean: '7896004719099',
+            packaging: '30 comprimidos',
+            quantity: 30,
+            unitPrice: 0.18
           },
           {
             id: idx * 10 + 2,
@@ -166,7 +243,11 @@ const mockApi = {
             confidence: 1.0,
             capturedAt: new Date().toISOString(),
             source: 'Profarma',
-            supplierName: 'Profarma'
+            supplierName: 'Profarma',
+            ean: '7896004719099',
+            packaging: '30 comprimidos',
+            quantity: 30,
+            unitPrice: 0.16
           },
           {
             id: idx * 10 + 3,
@@ -187,7 +268,11 @@ const mockApi = {
             confidence: 0.5,
             capturedAt: new Date().toISOString(),
             source: 'Santa Cruz',
-            supplierName: 'Santa Cruz'
+            supplierName: 'Santa Cruz',
+            ean: '7896004719099',
+            packaging: '30 comprimidos',
+            quantity: 30,
+            unitPrice: 0.203
           }
         );
       }
@@ -224,7 +309,6 @@ const mockApi = {
     return history.find(q => q.id === quoteId) || null;
   },
   updateResult: async (resultId, fields) => {
-    // Simulated mock recalculation
     const history = JSON.parse(localStorage.getItem('quote_history') || '[]');
     let targetQuote = null;
     let targetItem = null;
@@ -245,8 +329,12 @@ const mockApi = {
 
     if (targetRes) {
       Object.assign(targetRes, fields);
+      
+      // Update unitPrice
+      const qty = targetRes.quantity || 1;
+      targetRes.unitPrice = targetRes.price ? (targetRes.price / qty) : 0;
 
-      // Re-run recommendation logic for mock items
+      // Re-run recommendation logic
       const processed = targetItem.results.map(res => {
         let isValidOption = false;
         let ignoreReason = '';
@@ -255,7 +343,6 @@ const mockApi = {
         const isAvailable = res.availability === 'disponível';
         const isApproved = res.reviewStatus !== 'REJEITADO';
         const stValid = res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_SEPARADO';
-        const hasST = res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO';
 
         if (res.reviewStatus === 'REJEITADO') {
           ignoreReason = 'Rejeitado pelo usuário';
@@ -300,7 +387,7 @@ const mockApi = {
           if (priorityA !== priorityB) {
             return priorityA - priorityB;
           }
-          return a.price - b.price;
+          return a.unitPrice - b.unitPrice; // Cost efficiency first
         });
 
       if (validSorted.length > 0) {
@@ -341,7 +428,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [selectedQuoteId, setSelectedQuoteId] = useState(null);
   
-  // Suppliers toggle selection
+  // Suppliers selection
   const [selectedSuppliers, setSelectedSuppliers] = useState({
     ANB: true,
     Profarma: true,
@@ -356,7 +443,6 @@ function App() {
 
   // Search History Filters
   const [historySearchTerm, setHistorySearchTerm] = useState('');
-  const [historyFilterType, setHistoryFilterType] = useState('All');
 
   // Edit / Manual Review Modal State
   const [editingResult, setEditingResult] = useState(null);
@@ -365,6 +451,9 @@ function App() {
   const [editAvailability, setEditAvailability] = useState('disponível');
   const [editReviewStatus, setEditReviewStatus] = useState('PENDENTE');
   const [editNotes, setEditNotes] = useState('');
+  const [editEan, setEditEan] = useState('');
+  const [editPackaging, setEditPackaging] = useState('');
+  const [editQuantity, setEditQuantity] = useState(1);
 
   useEffect(() => {
     loadHistory();
@@ -401,7 +490,7 @@ function App() {
       loadHistory();
     } catch (e) {
       console.error(e);
-      alert('Erro ao realizar a cotação. Verifique o console ou logs.');
+      alert('Erro ao realizar a cotação. Verifique logs.');
     } finally {
       setLoading(false);
     }
@@ -415,7 +504,7 @@ function App() {
       setSelectedQuoteId(id);
     } catch (e) {
       console.error(e);
-      alert('Erro ao carregar detalhes da cotação.');
+      alert('Erro ao carregar detalhes.');
     } finally {
       setLoading(false);
     }
@@ -432,7 +521,7 @@ function App() {
 
   const handleUseExample = () => {
     setInputText(
-      `dipirona comprimido 500mg\nomeprazol 20mg capsula\nnimesulida 100mg cp\nparacetamol 750mg comprimido`
+      `losartana 50mg 30 comp\nlosartana 50mg 60 cpr\n7896004719016 losartana 50mg 30cp\ncetoconazol creme 20g`
     );
   };
 
@@ -459,6 +548,9 @@ function App() {
     setEditAvailability(result.availability);
     setEditReviewStatus(result.reviewStatus || 'PENDENTE');
     setEditNotes(result.notes || '');
+    setEditEan(result.ean || '');
+    setEditPackaging(result.packaging || '');
+    setEditQuantity(result.quantity || 1);
   };
 
   // Save manual review edits
@@ -471,11 +563,13 @@ function App() {
         stStatus: editSTStatus,
         availability: editAvailability,
         reviewStatus: editReviewStatus,
-        notes: editNotes
+        notes: editNotes,
+        ean: editEan,
+        packaging: editPackaging,
+        quantity: parseInt(editQuantity, 10) || 1
       });
       setActiveQuote(updatedQuote);
       setEditingResult(null);
-      // Reload history in background
       loadHistory();
     } catch (e) {
       console.error(e);
@@ -513,10 +607,12 @@ function App() {
         needsReview++;
       }
 
-      // Economy Savings: Difference between best valid price and second best valid price
-      const validSorted = results.filter(r => r.isValidOption).sort((a, b) => a.price - b.price);
+      // Savings: compare lowest unit price with second lowest unit price (cost per unit diff * package quantity)
+      const validSorted = results.filter(r => r.isValidOption).sort((a, b) => a.unitPrice - b.unitPrice);
       if (validSorted.length > 1) {
-        savings += (validSorted[1].price - validSorted[0].price);
+        // Savings = (second cheapest unit price - cheapest unit price) * quantity of cheapest option
+        const savingPerUnit = validSorted[1].unitPrice - validSorted[0].unitPrice;
+        savings += (savingPerUnit * validSorted[0].quantity);
       }
     });
 
@@ -581,7 +677,6 @@ function App() {
     return recs;
   };
 
-  // Filter history listing by search input
   const getFilteredHistory = () => {
     return history.filter(item => {
       const matchText = historySearchTerm.trim() === '' || 
@@ -659,7 +754,7 @@ function App() {
             <div className="spinner"></div>
             <h3 style={{ fontWeight: '500' }}>Processando Cotação...</h3>
             <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
-              Pesquisando e aplicando regras tributárias da Fase 2.
+              Pesquisando e calculando melhor preço por unidade de comprimido/embalagem.
             </p>
           </div>
         ) : !activeQuote ? (
@@ -667,7 +762,7 @@ function App() {
           <div className="search-card">
             <h2 className="search-title">Pesquisa de Preços ST</h2>
             <p className="search-subtitle">
-              Digite um produto por linha. O sistema recomenda apenas opções com ST.
+              Digite um produto por linha. O sistema recomenda as opções com ST ordenadas pelo preço unitário.
             </p>
 
             <div className="textarea-container">
@@ -682,8 +777,8 @@ function App() {
             <div className="example-box" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <div className="example-title">Exemplo de buscas suportadas:</div>
-                <div className="example-text">
-                  dipirona comprimido 500mg | omeprazol 20 caps | nimesulida 100 cp
+                <div className="example-text" style={{ fontSize: '0.8rem' }}>
+                  losartana 50mg 30 comp | losartana 50mg 60 cpr | 7896004719016 losartana 50mg 30cp
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -755,7 +850,7 @@ function App() {
                 <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#f59e0b', marginTop: '0.25rem' }}>{metrics.needsReview}</div>
               </div>
               <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(6, 182, 212, 0.2)', background: 'rgba(6, 182, 212, 0.05)' }}>
-                <div style={{ color: '#06b6d4', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Economia</div>
+                <div style={{ color: '#06b6d4', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Economia Est.</div>
                 <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#06b6d4', marginTop: '0.25rem' }}>
                   R$ {metrics.savings.toFixed(2).replace('.', ',')}
                 </div>
@@ -778,13 +873,17 @@ function App() {
                       <strong style={{ color: '#fff' }}>{rec.source}</strong>
                     </div>
                     <div className="rec-detail-row">
-                      <span>Laboratório:</span>
-                      <span>{rec.laboratory}</span>
+                      <span>EAN:</span>
+                      <span>{rec.ean || 'N/A'}</span>
+                    </div>
+                    <div className="rec-detail-row">
+                      <span>Embalagem:</span>
+                      <span>{rec.packaging}</span>
                     </div>
                     <div className="rec-detail-row" style={{ marginTop: '0.75rem', alignItems: 'center' }}>
-                      <span>Preço Válido:</span>
-                      <span className="rec-price">
-                        R$ {rec.price.toFixed(2).replace('.', ',')}
+                      <span>Preço Total / Unitário:</span>
+                      <span className="rec-price" style={{ fontSize: '1.15rem' }}>
+                        R$ {rec.price.toFixed(2).replace('.', ',')} <span style={{ fontSize: '0.8rem', fontWeight: 'normal', color: '#64748b' }}>(R$ {rec.unitPrice.toFixed(3).replace('.', ',')}/un)</span>
                       </span>
                     </div>
                   </div>
@@ -863,14 +962,16 @@ function App() {
               </div>
             ) : (
               <div className="table-container">
-                <table className="quote-table">
+                <table className="quote-table" style={{ fontSize: '0.8rem' }}>
                   <thead>
                     <tr>
-                      <th>Produto Pesquisado</th>
-                      <th>Produto Encontrado</th>
+                      <th>Busca</th>
+                      <th>EAN</th>
+                      <th>Produto Encont.</th>
+                      <th>Emb.</th>
                       <th>Fornecedor</th>
-                      <th>Laboratório</th>
-                      <th>Preço</th>
+                      <th>Preço Caixa</th>
+                      <th>Preço Unit.</th>
                       <th>ST</th>
                       <th>Estoque</th>
                       <th>Recomendação</th>
@@ -881,19 +982,25 @@ function App() {
                     {filteredRows.map((row, index) => (
                       <tr key={index} style={{ opacity: row.reviewStatus === 'REJEITADO' ? 0.45 : 1 }}>
                         <td className="searched-query-cell">"{row.rawText}"</td>
+                        <td style={{ fontFamily: 'monospace', color: '#94a3b8' }}>{row.ean || '-'}</td>
                         <td>
                           <div className="product-name-cell">{row.supplierProductName}</div>
-                          <div style={{ color: '#64748b', fontSize: '0.75rem', marginTop: '0.15rem' }}>
-                            {row.presentation} | {row.dosage} {row.notes && <span style={{ color: '#06b6d4' }}>• Obs: "{row.notes}"</span>}
+                          <div style={{ color: '#64748b', fontSize: '0.7rem', marginTop: '0.15rem' }}>
+                            {row.laboratory} | {row.presentation} | {row.dosage} {row.notes && <span style={{ color: '#06b6d4' }}>• Obs: "{row.notes}"</span>}
                           </div>
                         </td>
+                        <td style={{ color: '#cbd5e1' }}>{row.packaging || `${row.quantity} cp`}</td>
                         <td>
                           <span style={{ fontWeight: '500', color: '#e2e8f0' }}>{row.source}</span>
                         </td>
-                        <td>{row.laboratory}</td>
                         <td>
                           <span className={`text-price ${row.isValidOption ? 'highlight' : ''}`}>
                             R$ {row.price.toFixed(2).replace('.', ',')}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ color: '#06b6d4', fontWeight: 600 }}>
+                            R$ {row.unitPrice.toFixed(3).replace('.', ',')}
                           </span>
                         </td>
                         <td>
@@ -901,7 +1008,7 @@ function App() {
                             row.stStatus === 'COM_ST' || row.stStatus === 'ST_INCLUSO' ? 'badge-st-com' : 
                             row.stStatus === 'ST_SEPARADO' ? 'badge-status-second' :
                             row.stStatus === 'SEM_ST' ? 'badge-st-sem' : 'badge-st-unknown'
-                          }`}>
+                          }`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>
                             {row.stStatus === 'ST_SEPARADO' ? 'ST SEPARADO' : row.stStatus}
                           </span>
                         </td>
@@ -909,7 +1016,7 @@ function App() {
                           <span style={{
                             color: row.availability === 'disponível' ? '#10b981' : '#ef4444',
                             fontWeight: '600',
-                            fontSize: '0.8rem'
+                            fontSize: '0.75rem'
                           }}>
                             {row.availability}
                           </span>
@@ -922,12 +1029,12 @@ function App() {
                             row.recommendationStatus === 'ST separado — conferir custo final' ? 'badge-status-second' :
                             row.recommendationStatus === 'Produto parecido — revisar' ? 'badge-status-similar' :
                             'badge-status-review'
-                          }`}>
+                          }`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>
                             {row.recommendationStatus}
                           </span>
                         </td>
                         <td>
-                          <button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => openEditModal(row)}>
+                          <button className="btn btn-secondary" style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem' }} onClick={() => openEditModal(row)}>
                             ✏️ Revisar
                           </button>
                         </td>
@@ -957,33 +1064,71 @@ function App() {
             background: '#0f172a',
             border: '1px solid rgba(255, 255, 255, 0.1)',
             borderRadius: '12px',
-            padding: '2rem',
+            padding: '1.5rem',
             maxWidth: '500px',
             width: '100%',
-            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)'
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)',
+            maxHeight: '90vh',
+            overflowY: 'auto'
           }}>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1rem', color: '#fff' }}>
+            <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '0.5rem', color: '#fff' }}>
               Revisão Manual de Item
             </h3>
-            <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '1.5rem' }}>
+            <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '1rem' }}>
               Ajuste as propriedades capturadas de <strong>{editingResult.supplierProductName}</strong> ({editingResult.source}).
             </p>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
-              <div>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Preço (R$)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={editPrice}
-                  onChange={(e) => setEditPrice(e.target.value)}
-                  className="search-textarea"
-                  style={{ height: '38px', padding: '0.5rem', fontSize: '0.9rem', color: '#fff' }}
-                />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.25rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Código EAN</label>
+                  <input
+                    type="text"
+                    value={editEan}
+                    onChange={(e) => setEditEan(e.target.value)}
+                    className="search-textarea"
+                    style={{ height: '34px', padding: '0.4rem', fontSize: '0.85rem', color: '#fff' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Preço Caixa (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editPrice}
+                    onChange={(e) => setEditPrice(e.target.value)}
+                    className="search-textarea"
+                    style={{ height: '34px', padding: '0.4rem', fontSize: '0.85rem', color: '#fff' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2' }}>Embalagem</label>
+                  <input
+                    type="text"
+                    value={editPackaging}
+                    placeholder="Ex: 30 comprimidos"
+                    onChange={(e) => setEditPackaging(e.target.value)}
+                    className="search-textarea"
+                    style={{ height: '34px', padding: '0.4rem', fontSize: '0.85rem', color: '#fff' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2' }}>Qtd. Unidades</label>
+                  <input
+                    type="number"
+                    value={editQuantity}
+                    onChange={(e) => setEditQuantity(e.target.value)}
+                    className="search-textarea"
+                    style={{ height: '34px', padding: '0.4rem', fontSize: '0.85rem', color: '#fff' }}
+                  />
+                </div>
               </div>
 
               <div>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Classificação ST</label>
+                <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Classificação ST</label>
                 <select
                   value={editSTStatus}
                   onChange={(e) => setEditSTStatus(e.target.value)}
@@ -991,10 +1136,10 @@ function App() {
                     background: '#1e293b',
                     border: '1px solid rgba(255, 255, 255, 0.1)',
                     color: '#fff',
-                    padding: '0.5rem',
+                    padding: '0.4rem',
                     borderRadius: '6px',
                     width: '100%',
-                    fontSize: '0.9rem'
+                    fontSize: '0.85rem'
                   }}
                 >
                   <option value="COM_ST">COM_ST (Substituição Tributária)</option>
@@ -1005,66 +1150,67 @@ function App() {
                 </select>
               </div>
 
-              <div>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Disponibilidade</label>
-                <select
-                  value={editAvailability}
-                  onChange={(e) => setEditAvailability(e.target.value)}
-                  style={{
-                    background: '#1e293b',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    color: '#fff',
-                    padding: '0.5rem',
-                    borderRadius: '6px',
-                    width: '100%',
-                    fontSize: '0.9rem'
-                  }}
-                >
-                  <option value="disponível">Disponível</option>
-                  <option value="sem estoque">Sem Estoque</option>
-                </select>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Estoque</label>
+                  <select
+                    value={editAvailability}
+                    onChange={(e) => setEditAvailability(e.target.value)}
+                    style={{
+                      background: '#1e293b',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      color: '#fff',
+                      padding: '0.4rem',
+                      borderRadius: '6px',
+                      width: '100%',
+                      fontSize: '0.85rem'
+                    }}
+                  >
+                    <option value="disponível">Disponível</option>
+                    <option value="sem estoque">Sem Estoque</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Revisão</label>
+                  <select
+                    value={editReviewStatus}
+                    onChange={(e) => setEditReviewStatus(e.target.value)}
+                    style={{
+                      background: '#1e293b',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      color: '#fff',
+                      padding: '0.4rem',
+                      borderRadius: '6px',
+                      width: '100%',
+                      fontSize: '0.85rem'
+                    }}
+                  >
+                    <option value="PENDENTE">PENDENTE</option>
+                    <option value="APROVADO">APROVADO</option>
+                    <option value="REJEITADO">REJEITADO</option>
+                    <option value="PRECISA_REVISAR">PRECISA REVISAR</option>
+                  </select>
+                </div>
               </div>
 
               <div>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Status de Revisão</label>
-                <select
-                  value={editReviewStatus}
-                  onChange={(e) => setEditReviewStatus(e.target.value)}
-                  style={{
-                    background: '#1e293b',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    color: '#fff',
-                    padding: '0.5rem',
-                    borderRadius: '6px',
-                    width: '100%',
-                    fontSize: '0.9rem'
-                  }}
-                >
-                  <option value="PENDENTE">PENDENTE</option>
-                  <option value="APROVADO">APROVADO</option>
-                  <option value="REJEITADO">REJEITADO (Exclui da recomendação)</option>
-                  <option value="PRECISA_REVISAR">PRECISA REVISAR</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Observações</label>
+                <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Observações</label>
                 <textarea
                   value={editNotes}
                   onChange={(e) => setEditNotes(e.target.value)}
                   className="search-textarea"
-                  placeholder="Escreva anotações ou justificativas..."
-                  style={{ height: '70px', padding: '0.5rem', fontSize: '0.85rem' }}
+                  placeholder="Justificativa da alteração..."
+                  style={{ height: '50px', padding: '0.4rem', fontSize: '0.8rem' }}
                 />
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-              <button className="btn btn-secondary" onClick={() => setEditingResult(null)}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={() => setEditingResult(null)}>
                 Cancelar
               </button>
-              <button className="btn" onClick={saveManualReview}>
-                Salvar Alterações
+              <button className="btn" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={saveManualReview}>
+                Salvar
               </button>
             </div>
           </div>

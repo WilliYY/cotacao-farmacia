@@ -10,24 +10,25 @@ export class ProfarmaConnector extends SupplierConnector {
   }
 
   async searchProduct(parsedQuery) {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise(resolve => setTimeout(resolve, 150));
 
-    const { name, dosage, presentation } = parsedQuery;
+    const { name, dosage, presentation, ean } = parsedQuery;
     const results = [];
     const lowerName = name.toLowerCase();
 
-    // Mock products catalog for Profarma
     const mockCatalog = [
       {
         supplierProductName: 'Dipirona 500mg 10 comprimidos Prati',
         laboratory: 'Prati-Donaduzzi',
         dosage: '500mg',
         presentation: 'comprimido',
-        price: 2.70,
-        stStatus: 'SEM_ST', // Muted/Ignored
+        price: 2.70, // unitPrice = 0.27 (Cheapest price overall, but SEM_ST!)
+        stStatus: 'SEM_ST',
         availability: 'disponível',
-        confidence: 1.0
+        confidence: 1.0,
+        ean: '7896004719016',
+        packaging: '10 comprimidos',
+        quantity: 10
       },
       {
         supplierProductName: 'Dipirona Gotas 50ml EMS',
@@ -37,17 +38,49 @@ export class ProfarmaConnector extends SupplierConnector {
         price: 6.80,
         stStatus: 'COM_ST',
         availability: 'disponível',
-        confidence: 0.7
+        confidence: 0.8,
+        ean: '7896004719023',
+        packaging: '50ml',
+        quantity: 1
       },
       {
         supplierProductName: 'Omeprazol 20mg 30 capsulas Neo Química',
         laboratory: 'Neo Química',
         dosage: '20mg',
         presentation: 'capsula',
-        price: 11.20,
+        price: 11.20, // unitPrice = 0.37 (Best ST price)
         stStatus: 'COM_ST',
         availability: 'disponível',
-        confidence: 1.0
+        confidence: 1.0,
+        ean: '7896004719030',
+        packaging: '30 cápsulas',
+        quantity: 30
+      },
+      {
+        supplierProductName: 'Losartana Potássica 50mg 30 comprimidos Prati',
+        laboratory: 'Prati-Donaduzzi',
+        dosage: '50mg',
+        presentation: 'comprimido',
+        price: 8.50, // unitPrice = 0.283
+        stStatus: 'COM_ST',
+        availability: 'disponível',
+        confidence: 1.0,
+        ean: '7896004719047',
+        packaging: '30 comprimidos',
+        quantity: 30
+      },
+      {
+        supplierProductName: 'Losartana Potássica 50mg 60 comprimidos Prati',
+        laboratory: 'Prati-Donaduzzi',
+        dosage: '50mg',
+        presentation: 'comprimido',
+        price: 16.50, // unitPrice = 0.275
+        stStatus: 'COM_ST',
+        availability: 'disponível',
+        confidence: 1.0,
+        ean: '7896004719054',
+        packaging: '60 comprimidos',
+        quantity: 60
       },
       {
         supplierProductName: 'Nimesulida 100mg 12 comprimidos EMS',
@@ -57,43 +90,35 @@ export class ProfarmaConnector extends SupplierConnector {
         price: 7.50,
         stStatus: 'SEM_ST',
         availability: 'disponível',
-        confidence: 1.0
+        confidence: 1.0,
+        ean: '7896004719061',
+        packaging: '12 comprimidos',
+        quantity: 12
       },
       {
-        supplierProductName: 'Paracetamol 750mg 20 comprimidos Medley',
+        supplierProductName: 'Cetoconazol 20mg/g Creme 30g Medley',
         laboratory: 'Medley',
-        dosage: '750mg',
-        presentation: 'comprimido',
-        price: 4.80,
-        stStatus: 'COM_ST',
+        dosage: '20mg/g',
+        presentation: 'creme',
+        price: 14.80,
+        stStatus: 'SEM_ST',
         availability: 'disponível',
-        confidence: 1.0
+        confidence: 1.0,
+        ean: '7896004719078',
+        packaging: '30g',
+        quantity: 1
       }
     ];
 
     for (const prod of mockCatalog) {
-      if (prod.supplierProductName.toLowerCase().includes(lowerName)) {
+      const matchName = prod.supplierProductName.toLowerCase().includes(lowerName) || (ean && prod.ean === ean);
+      if (matchName) {
         results.push({
           ...prod,
           source: 'Profarma',
           capturedAt: new Date().toISOString()
         });
       }
-    }
-
-    if (results.length === 0 && name) {
-      results.push({
-        supplierProductName: `${name.toUpperCase()} ${dosage || ''} Profarma Mock`,
-        laboratory: 'MOCK LAB',
-        dosage: dosage || 'N/A',
-        presentation: presentation || 'N/A',
-        price: 14.50,
-        stStatus: 'COM_ST',
-        availability: 'disponível',
-        confidence: 0.8,
-        source: 'Profarma',
-        capturedAt: new Date().toISOString()
-      });
     }
 
     return results;

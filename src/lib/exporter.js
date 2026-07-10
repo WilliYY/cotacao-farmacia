@@ -29,10 +29,11 @@ export function generateExcelBuffer(quoteData) {
         needsReviewCount++;
       }
 
-      // Calculate Savings for this item: (Cheapest valid price with ST) - (Second cheapest valid price with ST)
-      const validSorted = results.filter(r => r.isValidOption).sort((a, b) => a.price - b.price);
+      // Savings: compare lowest unit price with second lowest unit price (cost per unit diff * package quantity)
+      const validSorted = results.filter(r => r.isValidOption).sort((a, b) => a.unitPrice - b.unitPrice);
       if (validSorted.length > 1) {
-        estimatedSavings += (validSorted[1].price - validSorted[0].price);
+        const savingPerUnit = validSorted[1].unitPrice - validSorted[0].unitPrice;
+        estimatedSavings += (savingPerUnit * validSorted[0].quantity);
       }
     });
   }
@@ -73,17 +74,20 @@ export function generateExcelBuffer(quoteData) {
 
     return {
       'Produto Pesquisado': item.rawText,
+      'EAN': res.ean || '-',
       'Produto Encontrado': res.supplierProductName,
+      'Embalagem': res.packaging || `${res.quantity || 1} unidades`,
       'Fornecedor': res.supplierName || res.source,
       'Laboratório': res.laboratory || '-',
       'Dosagem': res.dosage || '-',
       'Apresentação': res.presentation || '-',
-      'Preço': res.price ? `R$ ${res.price.toFixed(2).replace('.', ',')}` : 'R$ 0,00',
+      'Preço Caixa': res.price ? `R$ ${res.price.toFixed(2).replace('.', ',')}` : 'R$ 0,00',
+      'Preço Unitário': res.unitPrice ? `R$ ${res.unitPrice.toFixed(3).replace('.', ',')}` : 'R$ 0,00',
       'ST': res.stStatus || '-',
       'Disponibilidade': res.availability || '-',
       'Status Recomendação': res.recommendationStatus || '-',
       'Recomendação': recommendationText,
-      'Motivo': res.ignoreReason || res.notes || '-',
+      'Motivo/Notas': res.ignoreReason || res.notes || '-',
       'Data/Hora Captura': new Date(res.capturedAt || Date.now()).toLocaleString('pt-BR'),
       'Fonte': res.notes ? `${res.source} (Modificado)` : res.source
     };
@@ -102,9 +106,12 @@ export function generateExcelBuffer(quoteData) {
         if (res.isValidOption && (res.recommendationStatus === 'Melhor preço com ST' || res.recommendationStatus === 'Segunda opção com ST' || res.recommendationStatus === 'Opção válida com ST')) {
           bestSTRows.push({
             'Produto Pesquisado': excelRow['Produto Pesquisado'],
+            'EAN': excelRow['EAN'],
             'Produto Encontrado': excelRow['Produto Encontrado'],
+            'Embalagem': excelRow['Embalagem'],
             'Fornecedor': excelRow['Fornecedor'],
-            'Preço': excelRow['Preço'],
+            'Preço Caixa': excelRow['Preço Caixa'],
+            'Preço Unitário': excelRow['Preço Unitário'],
             'ST': excelRow['ST'],
             'Disponibilidade': excelRow['Disponibilidade'],
             'Classificação': excelRow['Status Recomendação'],
@@ -136,14 +143,14 @@ export function generateExcelBuffer(quoteData) {
   // Tab 2: Melhores Opções com ST
   const wsBest = XLSX.utils.json_to_sheet(bestSTRows);
   wsBest['!cols'] = [
-    { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 25 }, { wch: 45 }
+    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 15 }, { wch: 18 }, { wch: 25 }, { wch: 45 }
   ];
   XLSX.utils.book_append_sheet(workbook, wsBest, 'Melhores ST');
 
   // Tab 3: Todos os Resultados
   const wsAll = XLSX.utils.json_to_sheet(allResultsRows);
   const fullColsWidths = [
-    { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 12 }, { wch: 18 }, { wch: 18 }, { wch: 25 }, { wch: 45 }, { wch: 30 }, { wch: 20 }, { wch: 20 }
+    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 18 }, { wch: 25 }, { wch: 45 }, { wch: 30 }, { wch: 20 }, { wch: 20 }
   ];
   wsAll['!cols'] = fullColsWidths;
   XLSX.utils.book_append_sheet(workbook, wsAll, 'Todos Resultados');

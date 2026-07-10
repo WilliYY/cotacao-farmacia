@@ -2,6 +2,7 @@ const SYNONYMS = {
   comp: 'comprimido',
   cpr: 'comprimido',
   cp: 'comprimido',
+  cps: 'comprimido',
   comprimido: 'comprimido',
   comprimidos: 'comprimido',
   
@@ -18,7 +19,21 @@ const SYNONYMS = {
   suspensao: 'suspensao',
   
   xarope: 'xarope',
-  xrp: 'xarope'
+  xrp: 'xarope',
+
+  creme: 'creme',
+  pomada: 'pomada',
+  pom: 'pomada',
+  gel: 'gel',
+  liquido: 'liquido',
+  liq: 'liquido',
+  solucao: 'solucao',
+  sol: 'solucao',
+  spray: 'spray',
+  inalador: 'inalador',
+  adesivo: 'adesivo',
+  shampoo: 'shampoo',
+  shamp: 'shampoo'
 };
 
 export function parseSearchQuery(rawText) {
@@ -28,6 +43,8 @@ export function parseSearchQuery(rawText) {
       dosage: '', 
       presentation: '', 
       originalTerms: '', 
+      quantity: 1,
+      ean: '',
       confidence: 0,
       confidenceStatus: 'PRODUTO_PARECIDO_REVISAR'
     };
@@ -35,39 +52,81 @@ export function parseSearchQuery(rawText) {
 
   const cleaned = rawText.trim().toLowerCase();
   
-  // Extract dosage (e.g. 500mg, 20mg, 10ml, etc.)
+  // 1. Extract EAN (usually 13 digits)
+  const eanMatch = cleaned.match(/\b(\d{13})\b/);
+  const ean = eanMatch ? eanMatch[1] : '';
+
+  // 2. Extract dosage (e.g. 500mg, 20mg, 10ml, 50g, etc.)
   const dosageMatch = cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) || cleaned.match(/\b(\d{2,4})\b/);
-  
   let dosage = '';
   if (dosageMatch) {
     dosage = dosageMatch[0].trim();
-    if (/^\d+$/.test(dosage)) {
-      dosage = dosage + 'mg'; // Default to mg for pure numbers
+    if (/^\d+$/.test(dosage) && !eanMatch) {
+      dosage = dosage + 'mg'; 
     }
   }
 
-  // Extract presentation (comprimido, capsula, gotas, suspensao, xarope)
+  // 3. Extract quantity and presentation from compound tokens (like "30cp", "60caps")
+  let quantity = 1;
   let presentation = '';
-  const words = cleaned.split(/\s+/);
-  for (const word of words) {
-    const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '');
-    if (SYNONYMS[cleanWord]) {
-      presentation = SYNONYMS[cleanWord];
-      break;
+
+  // Check if there is an explicit count followed by unit
+  // Units: caps, cap, comp, cpr, cp, cps, gotas, gts, ml, g, tabletes, etc.
+  const qtyRegex = /\b(\d{1,3})\s*(capsulas?|caps?|comprimidos?|comp?s?|cprs?|cps?|gotas?|gts|unidades?|unds?|envelopes?|env?s?|tablets?|tbls?|flaconetes?|flac?s?)\b/i;
+  const qtyMatch = cleaned.match(qtyRegex);
+  
+  if (qtyMatch) {
+    quantity = parseInt(qtyMatch[1], 10);
+    const matchedUnit = qtyMatch[2].toLowerCase();
+    if (SYNONYMS[matchedUnit]) {
+      presentation = SYNONYMS[matchedUnit];
+    }
+  } else {
+    // Check if there is a trailing number at the end
+    const trailingQtyMatch = cleaned.match(/\b(?:comp|cp|caps|gotas|gts|ml|g)\s+(\d{1,3})\b/i) || cleaned.match(/\s+(\d{1,3})$/);
+    if (trailingQtyMatch) {
+      const val = parseInt(trailingQtyMatch[1], 10);
+      if (dosage !== `${val}mg` && dosage !== `${val}ml` && dosage !== `${val}g` && val !== 500 && val !== 750 && val !== 100) {
+        quantity = val;
+      }
     }
   }
 
-  // Extract name (filter out dosage & presentation tokens)
+  // 4. Resolve presentation if not extracted via qtyMatch
+  if (!presentation) {
+    const words = cleaned.split(/\s+/);
+    for (const word of words) {
+      const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '');
+      if (SYNONYMS[cleanWord]) {
+        presentation = SYNONYMS[cleanWord];
+        break;
+      }
+    }
+  }
+
+  // 5. Extract name (filtering out matching tokens)
+  const words = cleaned.split(/\s+/);
   let nameWords = [];
   const dosageStr = dosageMatch ? dosageMatch[0].toLowerCase() : '';
   const dosageNum = dosageMatch ? dosageMatch[1].toLowerCase() : '';
+  const qtyToken = qtyMatch ? qtyMatch[0] : '';
   
   for (const word of words) {
     const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '');
-    const isPresentationWord = SYNONYMS[cleanWord] !== undefined;
+    const isEan = ean && word.includes(ean);
     const isDosageWord = (dosageStr && (word.includes(dosageStr) || word.includes(dosageNum)));
     
-    if (!isPresentationWord && !isDosageWord && cleanWord !== 'mg' && cleanWord !== 'ml' && cleanWord !== 'g') {
+    // Check if word contains the quantity token or the quantity number itself
+    const isQtyWord = qtyToken && word.includes(qtyToken) || 
+                       (qtyMatch && word.includes(qtyMatch[1])) || 
+                       (quantity > 1 && word === String(quantity));
+    
+    // Check if word matches presentation word
+    const isPresentationWord = SYNONYMS[cleanWord] !== undefined || (presentation && cleanWord.endsWith(presentation));
+
+    if (!isPresentationWord && !isDosageWord && !isEan && !isQtyWord && 
+        cleanWord !== 'mg' && cleanWord !== 'ml' && cleanWord !== 'g' && 
+        cleanWord !== 'cp' && cleanWord !== 'cps' && cleanWord !== 'comp' && cleanWord !== 'caps') {
       nameWords.push(word);
     }
   }
@@ -78,8 +137,6 @@ export function parseSearchQuery(rawText) {
   }
 
   // Calculate confidence status
-  // High confidence if we successfully parsed name, dosage, and presentation.
-  // Low confidence (PRODUTO_PARECIDO_REVISAR) if dosage or presentation is missing.
   let confidence = 1.0;
   let confidenceStatus = 'ALTA';
 
@@ -92,6 +149,8 @@ export function parseSearchQuery(rawText) {
     name,
     dosage,
     presentation,
+    quantity,
+    ean,
     originalTerms: rawText,
     confidence,
     confidenceStatus

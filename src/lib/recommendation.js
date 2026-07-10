@@ -95,6 +95,9 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       }
     }
 
+    const qty = res.quantity || parsed.quantity || 1;
+    const unitPrice = res.price ? (res.price / qty) : 0;
+
     return {
       supplierProductName: res.supplierProductName,
       laboratory: res.laboratory,
@@ -111,11 +114,15 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       notes: '',
       confidence: res.confidence ?? parsed.confidence,
       capturedAt: res.capturedAt || new Date().toISOString(),
-      source: res.source
+      source: res.source,
+      ean: res.ean || parsed.ean || null,
+      packaging: res.packaging || `${qty} ${res.presentation || parsed.presentation || 'unidades'}`,
+      quantity: qty,
+      unitPrice: unitPrice
     };
   });
 
-  // Rank valid options: Prioritize ST status priority first, then sort by price
+  // Rank valid options: Prioritize ST status priority first, then sort by unitPrice (cost-efficiency)
   const validOptions = processedResults
     .filter(r => r.isValidOption)
     .sort((a, b) => {
@@ -124,7 +131,7 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       if (priorityA !== priorityB) {
         return priorityA - priorityB; // Prefer COM_ST/ST_INCLUSO over ST_SEPARADO
       }
-      return a.price - b.price; // Lowest price first
+      return a.unitPrice - b.unitPrice; // Lowest unit price first
     });
 
   if (validOptions.length > 0) {

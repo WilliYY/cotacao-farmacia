@@ -10,14 +10,12 @@ export class SantaCruzConnector extends SupplierConnector {
   }
 
   async searchProduct(parsedQuery) {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 250));
+    await new Promise(resolve => setTimeout(resolve, 180));
 
-    const { name, dosage, presentation } = parsedQuery;
+    const { name, dosage, presentation, ean } = parsedQuery;
     const results = [];
     const lowerName = name.toLowerCase();
 
-    // Mock products catalog for Santa Cruz
     const mockCatalog = [
       {
         supplierProductName: 'Dipirona 500mg 10 comprimidos Medley',
@@ -27,7 +25,10 @@ export class SantaCruzConnector extends SupplierConnector {
         price: 3.05,
         stStatus: 'COM_ST',
         availability: 'disponível',
-        confidence: 1.0
+        confidence: 1.0,
+        ean: '7896004719016',
+        packaging: '10 comprimidos',
+        quantity: 10
       },
       {
         supplierProductName: 'Dipirona Gotas 50ml Neo Química',
@@ -37,7 +38,10 @@ export class SantaCruzConnector extends SupplierConnector {
         price: 6.90,
         stStatus: 'SEM_ST',
         availability: 'disponível',
-        confidence: 0.7
+        confidence: 0.8,
+        ean: '7896004719023',
+        packaging: '50ml',
+        quantity: 1
       },
       {
         supplierProductName: 'Omeprazol 20mg 30 capsulas EMS',
@@ -45,9 +49,38 @@ export class SantaCruzConnector extends SupplierConnector {
         dosage: '20mg',
         presentation: 'capsula',
         price: 13.10,
-        stStatus: 'ST_SEPARADO', // ST Separado (pode recomendar mas com alerta)
+        stStatus: 'ST_SEPARADO', // ST Separado
         availability: 'disponível',
-        confidence: 1.0
+        confidence: 1.0,
+        ean: '7896004719030',
+        packaging: '30 cápsulas',
+        quantity: 30
+      },
+      {
+        supplierProductName: 'Losartana Potássica 50mg 30 comprimidos Neo Química',
+        laboratory: 'Neo Química',
+        dosage: '50mg',
+        presentation: 'comprimido',
+        price: 8.80, // unitPrice = 0.293
+        stStatus: 'COM_ST',
+        availability: 'disponível',
+        confidence: 1.0,
+        ean: '7896004719047',
+        packaging: '30 comprimidos',
+        quantity: 30
+      },
+      {
+        supplierProductName: 'Losartana Potássica 50mg 60 comprimidos Neo Química',
+        laboratory: 'Neo Química',
+        dosage: '50mg',
+        presentation: 'comprimido',
+        price: 14.80, // unitPrice = 0.246 (Winning unit price overall!)
+        stStatus: 'COM_ST',
+        availability: 'disponível',
+        confidence: 1.0,
+        ean: '7896004719054',
+        packaging: '60 comprimidos',
+        quantity: 60
       },
       {
         supplierProductName: 'Nimesulida 100mg 12 comprimidos Eurofarma',
@@ -57,43 +90,35 @@ export class SantaCruzConnector extends SupplierConnector {
         price: 7.20,
         stStatus: 'COM_ST',
         availability: 'disponível',
-        confidence: 1.0
+        confidence: 1.0,
+        ean: '7896004719061',
+        packaging: '12 comprimidos',
+        quantity: 12
       },
       {
-        supplierProductName: 'Paracetamol 750mg 20 comprimidos Eurofarma',
-        laboratory: 'Eurofarma',
-        dosage: '750mg',
-        presentation: 'comprimido',
-        price: 4.20,
+        supplierProductName: 'Cetoconazol 20mg/g Creme 30g EMS',
+        laboratory: 'EMS',
+        dosage: '20mg/g',
+        presentation: 'creme',
+        price: 13.90,
         stStatus: 'COM_ST',
         availability: 'disponível',
-        confidence: 1.0
+        confidence: 1.0,
+        ean: '7896004719078',
+        packaging: '30g',
+        quantity: 1
       }
     ];
 
     for (const prod of mockCatalog) {
-      if (prod.supplierProductName.toLowerCase().includes(lowerName)) {
+      const matchName = prod.supplierProductName.toLowerCase().includes(lowerName) || (ean && prod.ean === ean);
+      if (matchName) {
         results.push({
           ...prod,
           source: 'Santa Cruz',
           capturedAt: new Date().toISOString()
         });
       }
-    }
-
-    if (results.length === 0 && name) {
-      results.push({
-        supplierProductName: `${name.toUpperCase()} ${dosage || ''} Santa Cruz Mock`,
-        laboratory: 'MOCK LAB',
-        dosage: dosage || 'N/A',
-        presentation: presentation || 'N/A',
-        price: 16.00,
-        stStatus: 'COM_ST',
-        availability: 'disponível',
-        confidence: 0.8,
-        source: 'Santa Cruz',
-        capturedAt: new Date().toISOString()
-      });
     }
 
     return results;
