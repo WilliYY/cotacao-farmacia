@@ -22,33 +22,34 @@ const SYNONYMS = {
 };
 
 export function parseSearchQuery(rawText) {
-  if (!rawText) return { name: '', dosage: '', presentation: '' };
+  if (!rawText) {
+    return { 
+      name: '', 
+      dosage: '', 
+      presentation: '', 
+      originalTerms: '', 
+      confidence: 0,
+      confidenceStatus: 'PRODUTO_PARECIDO_REVISAR'
+    };
+  }
 
   const cleaned = rawText.trim().toLowerCase();
   
-  // 1. Identify dosage
-  // Look for patterns like "500mg", "20mg", "1.5mg", "100 mcg", "500 ml", "10ml", "10 ml", or standalone numbers of 2-4 digits like "500", "750"
-  // Let's use a regex to capture it.
-  const dosageRegex = /(\d+(?:[.,]\d+)?\s*(?:mg|mcg|ml|g|caps?|comp?s?|cprs?|gotas?|gts|susp|xarope)?)\b/gi;
-  // Actually, let's keep it simple: matches digits optionally followed by units.
+  // Extract dosage (e.g. 500mg, 20mg, 10ml, etc.)
   const dosageMatch = cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) || cleaned.match(/\b(\d{2,4})\b/);
   
   let dosage = '';
   if (dosageMatch) {
     dosage = dosageMatch[0].trim();
-    // Normalize dosage format (e.g. if it's just numbers, default to mg unless specified, or keep as is)
-    // For standard medicine queries, if it's "500", let's make it "500mg" or keep "500" but standardise it.
     if (/^\d+$/.test(dosage)) {
-      dosage = dosage + 'mg'; // common default
+      dosage = dosage + 'mg'; // Default to mg for pure numbers
     }
   }
 
-  // 2. Identify presentation
+  // Extract presentation (comprimido, capsula, gotas, suspensao, xarope)
   let presentation = '';
   const words = cleaned.split(/\s+/);
-  
   for (const word of words) {
-    // strip punctuation
     const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '');
     if (SYNONYMS[cleanWord]) {
       presentation = SYNONYMS[cleanWord];
@@ -56,9 +57,7 @@ export function parseSearchQuery(rawText) {
     }
   }
 
-  // 3. Extract name
-  // The name is usually the first part of the search query, before dosage and presentation
-  // We can filter out dosage and presentation words to find the name
+  // Extract name (filter out dosage & presentation tokens)
   let nameWords = [];
   const dosageStr = dosageMatch ? dosageMatch[0].toLowerCase() : '';
   const dosageNum = dosageMatch ? dosageMatch[1].toLowerCase() : '';
@@ -74,15 +73,27 @@ export function parseSearchQuery(rawText) {
   }
 
   let name = nameWords.join(' ').trim();
-  
-  // Fallback: if name is empty, just take the first word of the query
   if (!name && words.length > 0) {
     name = words[0];
   }
 
+  // Calculate confidence status
+  // High confidence if we successfully parsed name, dosage, and presentation.
+  // Low confidence (PRODUTO_PARECIDO_REVISAR) if dosage or presentation is missing.
+  let confidence = 1.0;
+  let confidenceStatus = 'ALTA';
+
+  if (!dosage || !presentation) {
+    confidence = 0.5;
+    confidenceStatus = 'PRODUTO_PARECIDO_REVISAR';
+  }
+
   return {
-    name: name,
-    dosage: dosage,
-    presentation: presentation
+    name,
+    dosage,
+    presentation,
+    originalTerms: rawText,
+    confidence,
+    confidenceStatus
   };
 }

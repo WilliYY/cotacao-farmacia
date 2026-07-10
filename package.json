@@ -10,10 +10,12 @@
     "dev:electron": "wait-on http://localhost:5173 && electron .",
     "build": "vite build",
     "package": "electron-builder",
+    "test": "node --test tests/all.test.js",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "sqlite": "^5.1.1",

@@ -2,10 +2,14 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import dotenv from 'dotenv';
 
-import { initDatabase, createQuote, updateQuoteStatus, createQuoteItem, saveQuoteResult, getQuotes, getQuoteDetails, saveSearch } from './database.js';
-import { processQuoteQuery } from './recommendation.js';
-import { generateExcelBuffer } from './exporter.js';
+dotenv.config();
+
+import { initDatabase, createQuote, updateQuoteStatus, createQuoteItem, saveQuoteResult, getQuotes, getQuoteDetails, saveSearch, updateQuoteResult, getDb } from './src/lib/database.js';
+import { processQuoteQuery } from './src/lib/recommendation.js';
+import { generateExcelBuffer } from './src/lib/exporter.js';
+import { logger } from './src/lib/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -107,6 +111,22 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     return await getQuoteDetails(quoteId);
   } catch (error) {
     console.error('Error running quote process:', error);
+    throw error;
+  }
+});
+
+// IPC Handler: Update Result for Manual Review overrides
+ipcMain.handle('update-result', async (event, resultId, fields) => {
+  try {
+    const quoteItemId = await updateQuoteResult(resultId, fields);
+    const dbInstance = getDb();
+    const resultItem = await dbInstance.get('SELECT quoteId FROM QuoteItem WHERE id = ?', quoteItemId);
+    if (resultItem) {
+      return await getQuoteDetails(resultItem.quoteId);
+    }
+    return null;
+  } catch (error) {
+    console.error('Error updating result:', error);
     throw error;
   }
 });

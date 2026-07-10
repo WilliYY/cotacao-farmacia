@@ -3,9 +3,8 @@ import React, { useState, useEffect } from 'react';
 // Browser Mock fallback for window.api when running outside Electron
 const mockApi = {
   runQuote: async (rawTextList, activeSuppliers) => {
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
-    // Generate simulated results for testing in browser
     const mockItems = rawTextList.map((rawText, idx) => {
       const cleaned = rawText.trim().toLowerCase();
       let name = cleaned.split(' ')[0] || 'medicamento';
@@ -18,49 +17,64 @@ const mockApi = {
         results.push(
           {
             id: idx * 10 + 1,
+            quoteItemId: idx + 1,
             supplierProductName: 'Dipirona 500mg 10 comprimidos EMS',
             laboratory: 'EMS',
             dosage: '500mg',
             presentation: 'comprimido',
             price: 2.85,
-            hasST: true,
+            hasST: 1,
             stStatus: 'COM_ST',
             availability: 'disponível',
-            isValidOption: true,
+            isValidOption: 1,
             ignoreReason: '',
             recommendationStatus: 'Melhor preço com ST',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
             source: 'ANB',
             supplierName: 'ANB'
           },
           {
             id: idx * 10 + 2,
+            quoteItemId: idx + 1,
             supplierProductName: 'Dipirona 500mg 10 comprimidos Medley',
             laboratory: 'Medley',
             dosage: '500mg',
             presentation: 'comprimido',
             price: 3.05,
-            hasST: true,
+            hasST: 1,
             stStatus: 'COM_ST',
             availability: 'disponível',
-            isValidOption: true,
+            isValidOption: 1,
             ignoreReason: '',
             recommendationStatus: 'Segunda opção com ST',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
             source: 'Santa Cruz',
             supplierName: 'Santa Cruz'
           },
           {
             id: idx * 10 + 3,
+            quoteItemId: idx + 1,
             supplierProductName: 'Dipirona 500mg 10 comprimidos Prati',
             laboratory: 'Prati-Donaduzzi',
             dosage: '500mg',
             presentation: 'comprimido',
             price: 2.70,
-            hasST: false,
+            hasST: 0,
             stStatus: 'SEM_ST',
             availability: 'disponível',
-            isValidOption: false,
+            isValidOption: 0,
             ignoreReason: 'Sem ST',
             recommendationStatus: 'Ignorado — sem ST',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
             source: 'Profarma',
             supplierName: 'Profarma'
           }
@@ -69,85 +83,109 @@ const mockApi = {
         results.push(
           {
             id: idx * 10 + 1,
+            quoteItemId: idx + 1,
             supplierProductName: 'Omeprazol 20mg 30 capsulas Neo Química',
             laboratory: 'Neo Química',
             dosage: '20mg',
             presentation: 'capsula',
             price: 11.20,
-            hasST: true,
+            hasST: 1,
             stStatus: 'COM_ST',
             availability: 'disponível',
-            isValidOption: true,
+            isValidOption: 1,
             ignoreReason: '',
             recommendationStatus: 'Melhor preço com ST',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
             source: 'Profarma',
             supplierName: 'Profarma'
           },
           {
             id: idx * 10 + 2,
+            quoteItemId: idx + 1,
             supplierProductName: 'Omeprazol 20mg 30 capsulas Eurofarma',
             laboratory: 'Eurofarma',
             dosage: '20mg',
             presentation: 'capsula',
             price: 12.50,
-            hasST: true,
-            stStatus: 'COM_ST',
+            hasST: 1,
+            stStatus: 'ST_INCLUSO',
             availability: 'disponível',
-            isValidOption: true,
+            isValidOption: 1,
             ignoreReason: '',
             recommendationStatus: 'Segunda opção com ST',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
             source: 'ANB',
             supplierName: 'ANB'
           }
         );
       } else {
-        // Mapped general mock item
         results.push(
           {
             id: idx * 10 + 1,
+            quoteItemId: idx + 1,
             supplierProductName: `${name.toUpperCase()} ${dosage} Simulado COM ST`,
             laboratory: 'PRATI',
             dosage: dosage,
             presentation: presentation,
             price: 5.40,
-            hasST: true,
+            hasST: 1,
             stStatus: 'COM_ST',
             availability: 'disponível',
-            isValidOption: true,
+            isValidOption: 1,
             ignoreReason: '',
             recommendationStatus: 'Melhor preço com ST',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
             source: 'ANB',
             supplierName: 'ANB'
           },
           {
             id: idx * 10 + 2,
-            supplierProductName: `${name.toUpperCase()} ${dosage} Simulado SEM ST`,
+            quoteItemId: idx + 1,
+            supplierProductName: `${name.toUpperCase()} ${dosage} Simulado ST SEPARADO`,
             laboratory: 'EMS',
             dosage: dosage,
             presentation: presentation,
             price: 4.80,
-            hasST: false,
-            stStatus: 'SEM_ST',
+            hasST: 1,
+            stStatus: 'ST_SEPARADO',
             availability: 'disponível',
-            isValidOption: false,
-            ignoreReason: 'Sem ST',
-            recommendationStatus: 'Ignorado — sem ST',
+            isValidOption: 1,
+            ignoreReason: '',
+            recommendationStatus: 'ST separado — conferir custo final',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 1.0,
+            capturedAt: new Date().toISOString(),
             source: 'Profarma',
             supplierName: 'Profarma'
           },
           {
             id: idx * 10 + 3,
+            quoteItemId: idx + 1,
             supplierProductName: `${name.toUpperCase()} ${dosage} Simulado ST DESCONHECIDO`,
             laboratory: 'EUROFARMA',
             dosage: dosage,
             presentation: presentation,
             price: 6.10,
-            hasST: false,
+            hasST: 0,
             stStatus: 'ST_DESCONHECIDO',
             availability: 'disponível',
-            isValidOption: false,
+            isValidOption: 0,
             ignoreReason: 'Precisa revisar ST',
             recommendationStatus: 'Precisa revisar ST',
+            reviewStatus: 'PENDENTE',
+            notes: '',
+            confidence: 0.5,
+            capturedAt: new Date().toISOString(),
             source: 'Santa Cruz',
             supplierName: 'Santa Cruz'
           }
@@ -185,9 +223,111 @@ const mockApi = {
     const history = JSON.parse(localStorage.getItem('quote_history') || '[]');
     return history.find(q => q.id === quoteId) || null;
   },
+  updateResult: async (resultId, fields) => {
+    // Simulated mock recalculation
+    const history = JSON.parse(localStorage.getItem('quote_history') || '[]');
+    let targetQuote = null;
+    let targetItem = null;
+    let targetRes = null;
+
+    for (const q of history) {
+      for (const item of q.items) {
+        const found = item.results.find(r => r.id === resultId);
+        if (found) {
+          targetQuote = q;
+          targetItem = item;
+          targetRes = found;
+          break;
+        }
+      }
+      if (targetRes) break;
+    }
+
+    if (targetRes) {
+      Object.assign(targetRes, fields);
+
+      // Re-run recommendation logic for mock items
+      const processed = targetItem.results.map(res => {
+        let isValidOption = false;
+        let ignoreReason = '';
+        let recStatus = '';
+
+        const isAvailable = res.availability === 'disponível';
+        const isApproved = res.reviewStatus !== 'REJEITADO';
+        const stValid = res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_SEPARADO';
+        const hasST = res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO';
+
+        if (res.reviewStatus === 'REJEITADO') {
+          ignoreReason = 'Rejeitado pelo usuário';
+          recStatus = 'Ignorado — rejeitado';
+        } else if (!isAvailable) {
+          ignoreReason = 'Sem estoque';
+          recStatus = 'Sem estoque';
+        } else if (res.stStatus === 'SEM_ST') {
+          ignoreReason = 'Sem ST';
+          recStatus = 'Ignorado — sem ST';
+        } else if (res.stStatus === 'ST_DESCONHECIDO') {
+          ignoreReason = 'Precisa revisar ST';
+          recStatus = 'Precisa revisar ST';
+        } else if (stValid && isAvailable && isApproved) {
+          isValidOption = true;
+          if (res.stStatus === 'ST_SEPARADO') {
+            recStatus = 'ST separado — conferir custo final';
+          } else {
+            recStatus = 'Válido com ST';
+          }
+        }
+
+        return {
+          ...res,
+          isValidOption,
+          ignoreReason,
+          recommendationStatus: recStatus
+        };
+      });
+
+      const getSTPriority = (st) => {
+        if (st === 'COM_ST' || st === 'ST_INCLUSO') return 1;
+        if (st === 'ST_SEPARADO') return 2;
+        return 3;
+      };
+
+      const validSorted = processed
+        .filter(r => r.isValidOption)
+        .sort((a, b) => {
+          const priorityA = getSTPriority(a.stStatus);
+          const priorityB = getSTPriority(b.stStatus);
+          if (priorityA !== priorityB) {
+            return priorityA - priorityB;
+          }
+          return a.price - b.price;
+        });
+
+      if (validSorted.length > 0) {
+        validSorted[0].recommendationStatus = 'Melhor preço com ST';
+        if (validSorted.length > 1) {
+          validSorted[1].recommendationStatus = 'Segunda opção com ST';
+        }
+      }
+
+      targetItem.results = processed.map(res => {
+        if (res.isValidOption) {
+          const match = validSorted.find(vo => vo.id === res.id);
+          if (match) {
+            res.recommendationStatus = match.recommendationStatus;
+          }
+        }
+        return res;
+      });
+
+      localStorage.setItem('quote_history', JSON.stringify(history));
+    }
+
+    return targetQuote;
+  },
   exportExcel: async (quoteId) => {
-    alert(`[MOCK EXPORT] Exportando cotação #${quoteId} para planilha Excel.`);
-    return { success: true, path: 'c:/mock_path/cotacao.xlsx' };
+    alert(`Planilha exportada com sucesso! (Simulado fora do Electron)`);
+    return { success: true, path: 'c:/mock_path/cotacao_tabulada.xlsx' };
   },
   ping: async () => 'pong'
 };
@@ -201,20 +341,31 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [selectedQuoteId, setSelectedQuoteId] = useState(null);
   
-  // Active suppliers selection
+  // Suppliers toggle selection
   const [selectedSuppliers, setSelectedSuppliers] = useState({
     ANB: true,
     Profarma: true,
     'Santa Cruz': true
   });
 
-  // Table filters state
+  // Table filters
   const [filterOnlyST, setFilterOnlyST] = useState(true);
   const [filterShowIgnored, setFilterShowIgnored] = useState(false);
   const [filterShowUnknown, setFilterShowUnknown] = useState(false);
   const [filterSupplier, setFilterSupplier] = useState('All');
 
-  // Load history on mount
+  // Search History Filters
+  const [historySearchTerm, setHistorySearchTerm] = useState('');
+  const [historyFilterType, setHistoryFilterType] = useState('All');
+
+  // Edit / Manual Review Modal State
+  const [editingResult, setEditingResult] = useState(null);
+  const [editPrice, setEditPrice] = useState(0);
+  const [editSTStatus, setEditSTStatus] = useState('COM_ST');
+  const [editAvailability, setEditAvailability] = useState('disponível');
+  const [editReviewStatus, setEditReviewStatus] = useState('PENDENTE');
+  const [editNotes, setEditNotes] = useState('');
+
   useEffect(() => {
     loadHistory();
   }, []);
@@ -250,7 +401,7 @@ function App() {
       loadHistory();
     } catch (e) {
       console.error(e);
-      alert('Erro ao realizar a cotação. Verifique o console.');
+      alert('Erro ao realizar a cotação. Verifique o console ou logs.');
     } finally {
       setLoading(false);
     }
@@ -275,12 +426,22 @@ function App() {
     setSelectedQuoteId(null);
   };
 
+  const handleClearInput = () => {
+    setInputText('');
+  };
+
+  const handleUseExample = () => {
+    setInputText(
+      `dipirona comprimido 500mg\nomeprazol 20mg capsula\nnimesulida 100mg cp\nparacetamol 750mg comprimido`
+    );
+  };
+
   const handleExportExcel = async () => {
     if (!activeQuote) return;
     try {
       const res = await api.exportExcel(activeQuote.id);
       if (res.success) {
-        alert(`Planilha exportada com sucesso!\nSalva em: ${res.path}`);
+        alert(`Planilha com abas exportada com sucesso!\nSalva em: ${res.path}`);
       } else if (res.reason !== 'cancelled') {
         alert(`Erro ao exportar planilha: ${res.error || res.reason}`);
       }
@@ -288,6 +449,78 @@ function App() {
       console.error(e);
       alert('Erro na exportação.');
     }
+  };
+
+  // Open Edit / Manual Review Modal
+  const openEditModal = (result) => {
+    setEditingResult(result);
+    setEditPrice(result.price);
+    setEditSTStatus(result.stStatus);
+    setEditAvailability(result.availability);
+    setEditReviewStatus(result.reviewStatus || 'PENDENTE');
+    setEditNotes(result.notes || '');
+  };
+
+  // Save manual review edits
+  const saveManualReview = async () => {
+    if (!editingResult) return;
+    setLoading(true);
+    try {
+      const updatedQuote = await api.updateResult(editingResult.id, {
+        price: parseFloat(editPrice) || 0,
+        stStatus: editSTStatus,
+        availability: editAvailability,
+        reviewStatus: editReviewStatus,
+        notes: editNotes
+      });
+      setActiveQuote(updatedQuote);
+      setEditingResult(null);
+      // Reload history in background
+      loadHistory();
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao salvar alteração.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Calculate Summary Metrics
+  const getSummaryMetrics = () => {
+    if (!activeQuote || !activeQuote.items) {
+      return { total: 0, withST: 0, withoutST: 0, needsReview: 0, savings: 0 };
+    }
+
+    const items = activeQuote.items;
+    const total = items.length;
+    let withST = 0;
+    let withoutST = 0;
+    let needsReview = 0;
+    let savings = 0;
+
+    items.forEach(item => {
+      const results = item.results || [];
+      const hasValid = results.some(r => r.isValidOption && r.stStatus !== 'ST_DESCONHECIDO');
+      const hasReview = results.some(r => r.stStatus === 'ST_DESCONHECIDO' || r.recommendationStatus === 'Produto parecido — revisar' || r.reviewStatus === 'PRECISA_REVISAR');
+
+      if (hasValid) {
+        withST++;
+      } else {
+        withoutST++;
+      }
+
+      if (hasReview) {
+        needsReview++;
+      }
+
+      // Economy Savings: Difference between best valid price and second best valid price
+      const validSorted = results.filter(r => r.isValidOption).sort((a, b) => a.price - b.price);
+      if (validSorted.length > 1) {
+        savings += (validSorted[1].price - validSorted[0].price);
+      }
+    });
+
+    return { total, withST, withoutST, needsReview, savings };
   };
 
   // Process rows for displaying with active filters
@@ -303,7 +536,7 @@ function App() {
         if (filterSupplier !== 'All' && res.source !== filterSupplier) return;
 
         // Apply ST-specific filters
-        if (filterOnlyST && res.stStatus !== 'COM_ST') return;
+        if (filterOnlyST && !(res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_SEPARADO')) return;
         if (!filterShowIgnored && res.stStatus === 'SEM_ST') return;
         if (!filterShowUnknown && res.stStatus === 'ST_DESCONHECIDO') return;
 
@@ -318,7 +551,7 @@ function App() {
     return rows;
   };
 
-  // Find overall best choices with ST across all items to show in cards
+  // Top Recommendation Cards
   const getTopRecommendations = () => {
     if (!activeQuote || !activeQuote.items) return [];
 
@@ -345,12 +578,23 @@ function App() {
       }
     });
 
-    // Sort by source/price or keep as is
     return recs;
+  };
+
+  // Filter history listing by search input
+  const getFilteredHistory = () => {
+    return history.filter(item => {
+      const matchText = historySearchTerm.trim() === '' || 
+        String(item.id).includes(historySearchTerm) ||
+        item.items?.some(i => i.rawText.toLowerCase().includes(historySearchTerm.toLowerCase()));
+      return matchText;
+    });
   };
 
   const filteredRows = getFilteredRows();
   const topRecs = getTopRecommendations();
+  const metrics = getSummaryMetrics();
+  const filteredHistory = getFilteredHistory();
 
   return (
     <div className="app-container">
@@ -363,13 +607,23 @@ function App() {
 
         <h3 className="sidebar-title">Minhas Cotações</h3>
         
-        {history.length === 0 ? (
+        {/* History Search */}
+        <input
+          type="text"
+          placeholder="Filtrar histórico..."
+          value={historySearchTerm}
+          onChange={(e) => setHistorySearchTerm(e.target.value)}
+          className="search-textarea"
+          style={{ height: '36px', fontSize: '0.8rem', padding: '0.5rem', marginBottom: '1rem' }}
+        />
+
+        {filteredHistory.length === 0 ? (
           <div style={{ fontSize: '0.8rem', color: '#64748b', textAlign: 'center', marginTop: '1rem' }}>
-            Nenhuma cotação realizada.
+            Nenhuma cotação encontrada.
           </div>
         ) : (
           <ul className="history-list">
-            {history.map(item => (
+            {filteredHistory.map(item => (
               <li 
                 key={item.id} 
                 className={`history-item ${selectedQuoteId === item.id ? 'active' : ''}`}
@@ -405,7 +659,7 @@ function App() {
             <div className="spinner"></div>
             <h3 style={{ fontWeight: '500' }}>Processando Cotação...</h3>
             <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
-              Pesquisando produtos e aplicando regras tributárias de ST.
+              Pesquisando e aplicando regras tributárias da Fase 2.
             </p>
           </div>
         ) : !activeQuote ? (
@@ -413,7 +667,7 @@ function App() {
           <div className="search-card">
             <h2 className="search-title">Pesquisa de Preços ST</h2>
             <p className="search-subtitle">
-              Insira a lista de medicamentos. O sistema analisará apenas ofertas com Substituição Tributária (ST).
+              Digite um produto por linha. O sistema recomenda apenas opções com ST.
             </p>
 
             <div className="textarea-container">
@@ -425,12 +679,20 @@ function App() {
               />
             </div>
 
-            <div className="example-box">
-              <div className="example-title">Exemplo de buscas suportadas:</div>
-              <div className="example-text">
-                dipirona comprimido 500mg<br />
-                omeprazol 20mg capsula<br />
-                nimesulida 100mg comprimido
+            <div className="example-box" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div className="example-title">Exemplo de buscas suportadas:</div>
+                <div className="example-text">
+                  dipirona comprimido 500mg | omeprazol 20 caps | nimesulida 100 cp
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={handleUseExample}>
+                  Usar exemplo
+                </button>
+                <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={handleClearInput}>
+                  Limpar
+                </button>
               </div>
             </div>
 
@@ -458,7 +720,7 @@ function App() {
           <>
             <div className="results-header">
               <div className="results-title-group">
-                <h2>Detalhamento da Cotação #{activeQuote.id}</h2>
+                <h2>Cotação #{activeQuote.id}</h2>
                 <div className="results-meta">
                   Realizada em: {new Date(activeQuote.createdAt).toLocaleString('pt-BR')}
                 </div>
@@ -466,7 +728,7 @@ function App() {
 
               <div className="results-actions">
                 <button className="btn btn-secondary" onClick={handleNewQuoteClick}>
-                  Voltar
+                  Nova Cotação
                 </button>
                 <button className="btn" onClick={handleExportExcel}>
                   📥 Exportar Excel (XLSX)
@@ -474,7 +736,33 @@ function App() {
               </div>
             </div>
 
-            {/* Recommendations Highlight Dashboard */}
+            {/* Metrics Dashboard Cards */}
+            <div className="recommendations-deck" style={{ gridTemplateColumns: 'repeat(5, 1fr)', marginBottom: '1.5rem' }}>
+              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.02)' }}>
+                <div style={{ color: '#64748b', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Total Cotados</div>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#fff', marginTop: '0.25rem' }}>{metrics.total}</div>
+              </div>
+              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(16, 185, 129, 0.2)', background: 'rgba(16, 185, 129, 0.05)' }}>
+                <div style={{ color: '#10b981', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Com Opção ST</div>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#10b981', marginTop: '0.25rem' }}>{metrics.withST}</div>
+              </div>
+              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(239, 68, 68, 0.15)', background: 'rgba(239, 68, 68, 0.04)' }}>
+                <div style={{ color: '#f87171', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Sem Opção ST</div>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#f87171', marginTop: '0.25rem' }}>{metrics.withoutST}</div>
+              </div>
+              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(245, 158, 11, 0.2)', background: 'rgba(245, 158, 11, 0.05)' }}>
+                <div style={{ color: '#f59e0b', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Precisa Revisar</div>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#f59e0b', marginTop: '0.25rem' }}>{metrics.needsReview}</div>
+              </div>
+              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(6, 182, 212, 0.2)', background: 'rgba(6, 182, 212, 0.05)' }}>
+                <div style={{ color: '#06b6d4', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Economia</div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#06b6d4', marginTop: '0.25rem' }}>
+                  R$ {metrics.savings.toFixed(2).replace('.', ',')}
+                </div>
+              </div>
+            </div>
+
+            {/* Recommendations Highlight */}
             {topRecs.length > 0 && (
               <div className="recommendations-deck">
                 {topRecs.slice(0, 3).map((rec, i) => (
@@ -584,18 +872,19 @@ function App() {
                       <th>Laboratório</th>
                       <th>Preço</th>
                       <th>ST</th>
-                      <th>Disponibilidade</th>
-                      <th>Status Recomendação</th>
+                      <th>Estoque</th>
+                      <th>Recomendação</th>
+                      <th>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredRows.map((row, index) => (
-                      <tr key={index}>
+                      <tr key={index} style={{ opacity: row.reviewStatus === 'REJEITADO' ? 0.45 : 1 }}>
                         <td className="searched-query-cell">"{row.rawText}"</td>
                         <td>
                           <div className="product-name-cell">{row.supplierProductName}</div>
                           <div style={{ color: '#64748b', fontSize: '0.75rem', marginTop: '0.15rem' }}>
-                            {row.presentation} | {row.dosage}
+                            {row.presentation} | {row.dosage} {row.notes && <span style={{ color: '#06b6d4' }}>• Obs: "{row.notes}"</span>}
                           </div>
                         </td>
                         <td>
@@ -609,10 +898,11 @@ function App() {
                         </td>
                         <td>
                           <span className={`badge ${
-                            row.stStatus === 'COM_ST' ? 'badge-st-com' : 
+                            row.stStatus === 'COM_ST' || row.stStatus === 'ST_INCLUSO' ? 'badge-st-com' : 
+                            row.stStatus === 'ST_SEPARADO' ? 'badge-status-second' :
                             row.stStatus === 'SEM_ST' ? 'badge-st-sem' : 'badge-st-unknown'
                           }`}>
-                            {row.stStatus}
+                            {row.stStatus === 'ST_SEPARADO' ? 'ST SEPARADO' : row.stStatus}
                           </span>
                         </td>
                         <td>
@@ -629,11 +919,17 @@ function App() {
                             row.recommendationStatus === 'Melhor preço com ST' ? 'badge-status-best' :
                             row.recommendationStatus === 'Segunda opção com ST' ? 'badge-status-second' :
                             row.recommendationStatus === 'Ignorado — sem ST' ? 'badge-status-ignored' :
+                            row.recommendationStatus === 'ST separado — conferir custo final' ? 'badge-status-second' :
                             row.recommendationStatus === 'Produto parecido — revisar' ? 'badge-status-similar' :
                             'badge-status-review'
                           }`}>
-                            {row.recommendationStatus || 'Válido com ST'}
+                            {row.recommendationStatus}
                           </span>
+                        </td>
+                        <td>
+                          <button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => openEditModal(row)}>
+                            ✏️ Revisar
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -644,6 +940,136 @@ function App() {
           </>
         )}
       </main>
+
+      {/* Manual Review Overlay Modal */}
+      {editingResult && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999
+        }}>
+          <div style={{
+            background: '#0f172a',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '12px',
+            padding: '2rem',
+            maxWidth: '500px',
+            width: '100%',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)'
+          }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1rem', color: '#fff' }}>
+              Revisão Manual de Item
+            </h3>
+            <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '1.5rem' }}>
+              Ajuste as propriedades capturadas de <strong>{editingResult.supplierProductName}</strong> ({editingResult.source}).
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
+              <div>
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Preço (R$)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={editPrice}
+                  onChange={(e) => setEditPrice(e.target.value)}
+                  className="search-textarea"
+                  style={{ height: '38px', padding: '0.5rem', fontSize: '0.9rem', color: '#fff' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Classificação ST</label>
+                <select
+                  value={editSTStatus}
+                  onChange={(e) => setEditSTStatus(e.target.value)}
+                  style={{
+                    background: '#1e293b',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#fff',
+                    padding: '0.5rem',
+                    borderRadius: '6px',
+                    width: '100%',
+                    fontSize: '0.9rem'
+                  }}
+                >
+                  <option value="COM_ST">COM_ST (Substituição Tributária)</option>
+                  <option value="ST_INCLUSO">ST_INCLUSO (ST já inclusa na nota)</option>
+                  <option value="ST_SEPARADO">ST_SEPARADO (ST em boleto separado)</option>
+                  <option value="SEM_ST">SEM_ST (Sem Substituição Tributária)</option>
+                  <option value="ST_DESCONHECIDO">ST_DESCONHECIDO (Necessita análise)</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Disponibilidade</label>
+                <select
+                  value={editAvailability}
+                  onChange={(e) => setEditAvailability(e.target.value)}
+                  style={{
+                    background: '#1e293b',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#fff',
+                    padding: '0.5rem',
+                    borderRadius: '6px',
+                    width: '100%',
+                    fontSize: '0.9rem'
+                  }}
+                >
+                  <option value="disponível">Disponível</option>
+                  <option value="sem estoque">Sem Estoque</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Status de Revisão</label>
+                <select
+                  value={editReviewStatus}
+                  onChange={(e) => setEditReviewStatus(e.target.value)}
+                  style={{
+                    background: '#1e293b',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#fff',
+                    padding: '0.5rem',
+                    borderRadius: '6px',
+                    width: '100%',
+                    fontSize: '0.9rem'
+                  }}
+                >
+                  <option value="PENDENTE">PENDENTE</option>
+                  <option value="APROVADO">APROVADO</option>
+                  <option value="REJEITADO">REJEITADO (Exclui da recomendação)</option>
+                  <option value="PRECISA_REVISAR">PRECISA REVISAR</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.25rem' }}>Observações</label>
+                <textarea
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  className="search-textarea"
+                  placeholder="Escreva anotações ou justificativas..."
+                  style={{ height: '70px', padding: '0.5rem', fontSize: '0.85rem' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button className="btn btn-secondary" onClick={() => setEditingResult(null)}>
+                Cancelar
+              </button>
+              <button className="btn" onClick={saveManualReview}>
+                Salvar Alterações
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
