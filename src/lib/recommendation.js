@@ -1,17 +1,10 @@
 import dotenv from 'dotenv';
 import { parseSearchQuery } from './parser.js';
 import { isValidST, getVisualStatusLabel, getSTPriority } from './st-rules.js';
-import { ANBConnector } from '../connectors/mock/anb.js';
-import { ProfarmaConnector } from '../connectors/mock/profarma.js';
-import { SantaCruzConnector } from '../connectors/mock/santacruz.js';
+import { getActiveConnectors } from '../connectors/connector-registry.js';
 import { logger } from './logger.js';
 
 dotenv.config();
-
-// Standard connectors loading
-const anbMock = new ANBConnector();
-const profarmaMock = new ProfarmaConnector();
-const santaCruzMock = new SantaCruzConnector();
 
 export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Profarma', 'Santa Cruz']) {
   logger.info(`Processing search query: "${rawText}" with suppliers: ${activeSuppliers.join(', ')}`);
@@ -22,32 +15,25 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
   const enableMock = process.env.ENABLE_MOCK_CONNECTORS !== 'false'; // default true
   const enableReal = process.env.ENABLE_REAL_CONNECTORS === 'true'; // default false
 
-  const connectorMap = {
-    'ANB': anbMock,
-    'Profarma': profarmaMock,
-    'Santa Cruz': santaCruzMock
-  };
-
+  const activeConnectors = getActiveConnectors(activeSuppliers);
   const searchPromises = [];
 
-  for (const name of activeSuppliers) {
-    const connector = connectorMap[name];
+  for (const connector of activeConnectors) {
     if (connector) {
-      // Future-proof guard: if we try to activate real connectors but they are disabled
       if (enableReal) {
-        logger.warn(`Real connectors requested but not yet implemented. Falling back to Mock for ${name}.`);
+        logger.warn(`Real connectors requested but not yet implemented. Falling back to Mock for ${connector.supplierName}.`);
       }
       
       if (enableMock) {
-        logger.debug(`Calling Mock connector for ${name}...`);
+        logger.debug(`Calling Mock connector for ${connector.supplierName}...`);
         searchPromises.push(
           connector.searchProduct(parsed).catch(err => {
-            logger.error(`Error in connector ${name}: ${err.message}`);
+            logger.error(`Error in connector ${connector.supplierName}: ${err.message}`);
             return [];
           })
         );
       } else {
-        logger.warn(`Mock connectors are disabled and Real connectors are false. No search performed for ${name}.`);
+        logger.warn(`Mock connectors are disabled and Real connectors are false. No search performed for ${connector.supplierName}.`);
       }
     }
   }

@@ -1,6 +1,6 @@
 {
-  "appId": "com.cotador.inteligente.st",
-  "productName": "Cotador Inteligente ST",
+  "appId": "com.wimifarma.cotacao",
+  "productName": "Wimifarma Cotação",
   "directories": {
     "output": "dist-electron"
   },
@@ -8,11 +8,7 @@
     "dist/**/*",
     "main.js",
     "preload.js",
-    "database.js",
-    "parser.js",
-    "recommendation.js",
-    "exporter.js",
-    "connectors/**/*",
+    "src/**/*",
     "package.json",
     "node_modules/**/*"
   ],

@@ -36,14 +36,40 @@ function sanitize(message) {
     .replace(/bearer\s+([^"'\s&]+)/gi, 'Bearer ***REDACTED***');
 }
 
+async function logToDb(level, msg) {
+  try {
+    const { saveLogToDb } = await import('./database.js');
+    await saveLogToDb(level, msg);
+  } catch (err) {
+    // ignore to prevent loops
+  }
+}
+
 function writeToFile(level, sanitizedMsg) {
   const timestamp = new Date().toISOString();
   const logLine = `[${timestamp}] [${level.toUpperCase()}] ${sanitizedMsg}\n`;
   try {
+    // 2MB size-based rotation checks
+    if (fs.existsSync(logFilePath) && fs.statSync(logFilePath).size > 2 * 1024 * 1024) {
+      try {
+        const content = fs.readFileSync(logFilePath, 'utf8');
+        const lines = content.split('\n');
+        if (lines.length > 500) {
+          fs.writeFileSync(logFilePath, lines.slice(-500).join('\n'));
+        } else {
+          fs.writeFileSync(logFilePath, '');
+        }
+      } catch (rotErr) {
+        // ignore
+      }
+    }
     fs.appendFileSync(logFilePath, logLine);
   } catch (err) {
     console.error('Failed to write to log file:', err);
   }
+  
+  // Write log to DB dynamically
+  logToDb(level, sanitizedMsg);
 }
 
 export const logger = {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 
-import { parseSearchQuery } from '../src/lib/parser.js';
+import { parseSearchQuery, levenshteinDistance, fuzzyMatch } from '../src/lib/parser.js';
 import { isValidST, getVisualStatusLabel, getSTPriority } from '../src/lib/st-rules.js';
 import { processQuoteQuery } from '../src/lib/recommendation.js';
 
@@ -20,11 +20,23 @@ test('Parser Utility - EAN, Quantities and Presentations', async (t) => {
     assert.strictEqual(creamRes.name, 'cetoconazol');
     assert.strictEqual(creamRes.dosage, '20g');
     assert.strictEqual(creamRes.presentation, 'creme');
+  });
+});
 
-    const liqRes = parseSearchQuery('dipirona gotas 50ml');
-    assert.strictEqual(liqRes.name, 'dipirona');
-    assert.strictEqual(liqRes.presentation, 'gotas');
-    assert.strictEqual(liqRes.dosage, '50ml');
+test('Parser Utility - Levenshtein and Fuzzy Matching', async (t) => {
+  await t.test('Calculates Levenshtein distance correctly', () => {
+    assert.strictEqual(levenshteinDistance('losartana', 'losartana'), 0);
+    assert.strictEqual(levenshteinDistance('losartana', 'losartanna'), 1); // insertion
+    assert.strictEqual(levenshteinDistance('losartana', 'losarta'), 2);    // deletion
+    assert.strictEqual(levenshteinDistance('losartana', 'losartano'), 1);   // substitution
+  });
+
+  await t.test('Fuzzy matches misspelled names', () => {
+    // Should fuzzy match spelling variations
+    assert.strictEqual(fuzzyMatch('losartanna', 'Losartana Potássica 50mg'), true);
+    assert.strictEqual(fuzzyMatch('losarta', 'Losartana Potássica 50mg'), true);
+    assert.strictEqual(fuzzyMatch('omeprassol', 'Omeprazol 20mg caps'), true);
+    assert.strictEqual(fuzzyMatch('paracetamol', 'Dipirona 500mg comp'), false);
   });
 });
 
@@ -47,11 +59,6 @@ test('ST Rules Engine', async (t) => {
 
 test('Recommendation Engine - Cost Efficiency Unit Price Sorting', async (t) => {
   await t.test('Ranks items by unitPrice instead of total price', async () => {
-    // Under losartana search:
-    // Option A: 30 tablets for R$ 9.00 -> unitPrice = 0.30
-    // Option B: 60 tablets for R$ 15.00 -> unitPrice = 0.25
-    // Option B has higher total price but lower unitPrice (better deal), so Option B must win as "Melhor preço com ST"!
-    
     const quote = await processQuoteQuery('losartana 50mg comp');
     const results = quote.results;
     

@@ -7,7 +7,7 @@ import { exec } from 'child_process';
 
 dotenv.config();
 
-import { initDatabase, createQuote, updateQuoteStatus, createQuoteItem, saveQuoteResult, getQuotes, getQuoteDetails, saveSearch, updateQuoteResult, getDb } from './src/lib/database.js';
+import { initDatabase, createQuote, updateQuoteStatus, createQuoteItem, saveQuoteResult, getQuotes, getQuoteDetails, saveSearch, updateQuoteResult, getDb, getPopularSearches } from './src/lib/database.js';
 import { processQuoteQuery } from './src/lib/recommendation.js';
 import { generateExcelBuffer } from './src/lib/exporter.js';
 import { logger } from './src/lib/logger.js';
@@ -54,7 +54,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: 'Cotador Inteligente ST',
+    title: 'Wimifarma Cotação',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -65,7 +65,6 @@ function createWindow() {
   const isDev = !app.isPackaged;
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
-    // Clean startup: Only open DevTools if explicitly configured in .env
     if (process.env.OPEN_DEVTOOLS === 'true') {
       mainWindow.webContents.openDevTools();
     }
@@ -83,7 +82,6 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  // Initialize Database (handles local vs AppData paths)
   const userDataPath = app.getPath('userData');
   console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
   await initDatabase(userDataPath);
@@ -130,6 +128,9 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     for (const rawText of rawTextList) {
       const quote = await processQuoteQuery(rawText, activeSuppliers);
       const itemId = await createQuoteItem(quoteId, rawText, quote.parsed, 'completed');
+
+      // Save search term for self-learning metrics
+      await saveSearch(rawText, quote.parsed);
 
       for (const res of quote.results) {
         await saveQuoteResult({
@@ -193,8 +194,8 @@ ipcMain.handle('export-excel', async (event, quoteId) => {
     const buffer = generateExcelBuffer(quoteData);
 
     const { filePath } = await dialog.showSaveDialog(mainWindow, {
-      title: 'Salvar Cotação Inteligente ST',
-      defaultPath: `cotacao_st_${quoteId}_${new Date().toISOString().split('T')[0]}.xlsx`,
+      title: 'Salvar Cotação Wimifarma',
+      defaultPath: `cotacao_wimifarma_${quoteId}_${new Date().toISOString().split('T')[0]}.xlsx`,
       filters: [
         { name: 'Planilha Excel (*.xlsx)', extensions: ['xlsx'] }
       ]
@@ -209,6 +210,16 @@ ipcMain.handle('export-excel', async (event, quoteId) => {
   } catch (error) {
     console.error('Error exporting excel:', error);
     return { success: false, error: error.message };
+  }
+});
+
+// IPC Handler: Get Popular Searches
+ipcMain.handle('get-popular-searches', async () => {
+  try {
+    return await getPopularSearches();
+  } catch (error) {
+    console.error('Error getting popular searches:', error);
+    throw error;
   }
 });
 

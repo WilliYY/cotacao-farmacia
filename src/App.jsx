@@ -144,7 +144,7 @@ const mockApi = {
             unitPrice: 0.416
           }
         );
-      } else if (cleaned.includes('losartana') || cleaned.includes('7896004719047') || cleaned.includes('7896004719054')) {
+      } else if (cleaned.includes('losartana') || cleaned.includes('losarta') || cleaned.includes('losartanna') || cleaned.includes('7896004719047') || cleaned.includes('7896004719054')) {
         results.push(
           {
             id: idx * 10 + 1,
@@ -388,9 +388,17 @@ const mockApi = {
 
     return targetQuote;
   },
+  getPopularSearches: async () => {
+    return [
+      { query: 'losartana 50mg 30 comp', searchCount: 18 },
+      { query: 'omeprazol 20mg 30 caps', searchCount: 14 },
+      { query: 'dipirona gotas 50ml', searchCount: 9 },
+      { query: 'cetoconazol creme 20g', searchCount: 6 }
+    ];
+  },
   exportExcel: async (quoteId) => {
     alert(`Planilha exportada com sucesso! (Simulado fora do Electron)`);
-    return { success: true, path: 'c:/mock_path/cotacao_tabulada.xlsx' };
+    return { success: true, path: 'c:/mock_path/cotacao_wimifarma.xlsx' };
   },
   ping: async () => 'pong'
 };
@@ -407,6 +415,9 @@ function App() {
   // Git updates state
   const [updateAvailable, setUpdateAvailable] = useState(null);
   const [updating, setUpdating] = useState(false);
+
+  // Popular searches self-learning list
+  const [popularSearches, setPopularSearches] = useState([]);
 
   // Suppliers selection
   const [selectedSuppliers, setSelectedSuppliers] = useState({
@@ -437,6 +448,8 @@ function App() {
 
   useEffect(() => {
     loadHistory();
+    loadPopularSearches();
+    
     // Register Git update callback
     if (api.onGitUpdateAvailable) {
       api.onGitUpdateAvailable((data) => {
@@ -444,6 +457,13 @@ function App() {
       });
     }
   }, []);
+
+  // Reload history and popularity metrics on quote updates
+  useEffect(() => {
+    if (activeQuote) {
+      loadPopularSearches();
+    }
+  }, [activeQuote]);
 
   const loadHistory = async () => {
     try {
@@ -454,9 +474,20 @@ function App() {
     }
   };
 
+  const loadPopularSearches = async () => {
+    try {
+      if (api.getPopularSearches) {
+        const data = await api.getPopularSearches();
+        setPopularSearches(data || []);
+      }
+    } catch (e) {
+      console.error('Failed to load popular searches:', e);
+    }
+  };
+
   const handleInstallUpdate = async () => {
     if (!api.installUpdate) {
-      alert('Atualização automática via Git não suportada neste ambiente.');
+      alert('Atualização automática via Git não disponível neste ambiente.');
       return;
     }
     setUpdating(true);
@@ -467,7 +498,7 @@ function App() {
         setUpdating(false);
       }
     } catch (err) {
-      alert(`Falha no processo de pull/update: ${err.message}`);
+      alert(`Falha no processo: ${err.message}`);
       setUpdating(false);
     }
   };
@@ -527,7 +558,6 @@ function App() {
     setInputText(prev => {
       const trimmed = prev.trim();
       if (!trimmed) return query;
-      // Check if already in text to avoid duplicates
       if (trimmed.includes(query)) return prev;
       return `${trimmed}\n${query}`;
     });
@@ -538,9 +568,9 @@ function App() {
     try {
       const res = await api.exportExcel(activeQuote.id);
       if (res.success) {
-        alert(`Planilha com abas exportada com sucesso!\nSalva em: ${res.path}`);
+        alert(`Planilha exportada com sucesso!\nSalva em: ${res.path}`);
       } else if (res.reason !== 'cancelled') {
-        alert(`Erro ao exportar planilha: ${res.error || res.reason}`);
+        alert(`Erro ao exportar: ${res.error || res.reason}`);
       }
     } catch (e) {
       console.error(e);
@@ -615,7 +645,6 @@ function App() {
         needsReview++;
       }
 
-      // Savings based on unit price difference
       const validSorted = results.filter(r => r.isValidOption).sort((a, b) => a.unitPrice - b.unitPrice);
       if (validSorted.length > 1) {
         const savingPerUnit = validSorted[1].unitPrice - validSorted[0].unitPrice;
@@ -703,7 +732,7 @@ function App() {
       {/* Top update notification banner */}
       {updateAvailable && (
         <div style={{
-          background: '#0284c7',
+          background: 'linear-gradient(90deg, #0284c7, #0369a1)',
           color: '#fff',
           padding: '0.6rem 1.25rem',
           textAlign: 'center',
@@ -716,21 +745,22 @@ function App() {
           position: 'fixed',
           top: 0, left: 0, right: 0,
           zIndex: 10000,
-          boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'
+          boxShadow: '0 4px 15px rgba(0,0,0,0.25)'
         }}>
-          <span>🚀 Atualização disponível no repositório ({updateAvailable.count} novos commits na branch {updateAvailable.branch})!</span>
+          <span>🚀 Atualização do Wimifarma Cotação disponível ({updateAvailable.count} commits na branch {updateAvailable.branch})!</span>
           <button 
             onClick={handleInstallUpdate} 
             disabled={updating}
             className="btn" 
             style={{ 
-              padding: '0.25rem 0.75rem', 
+              padding: '0.3rem 0.85rem', 
               fontSize: '0.75rem', 
               background: '#0f172a',
               color: '#fff',
               border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer'
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 700
             }}
           >
             {updating ? 'Instalando e reiniciando...' : 'Atualizar Agora'}
@@ -739,10 +769,10 @@ function App() {
       )}
 
       {/* Sidebar: Logo + History */}
-      <aside className="sidebar" style={{ paddingTop: updateAvailable ? '3.5rem' : '1.5rem' }}>
+      <aside className="sidebar" style={{ paddingTop: updateAvailable ? '3.75rem' : '1.5rem' }}>
         <div className="logo-container">
-          <div className="logo-icon">ST</div>
-          <div className="logo-text">Cotador Inteligente ST</div>
+          <div className="logo-icon" style={{ background: 'linear-gradient(135deg, #06b6d4, #3b82f6)' }}>WF</div>
+          <div className="logo-text">Wimifarma Cotação</div>
         </div>
 
         <h3 className="sidebar-title">Minhas Cotações</h3>
@@ -754,7 +784,7 @@ function App() {
           value={historySearchTerm}
           onChange={(e) => setHistorySearchTerm(e.target.value)}
           className="search-textarea"
-          style={{ height: '36px', fontSize: '0.8rem', padding: '0.5rem', marginBottom: '1rem', background: 'rgba(255,255,255,0.03)' }}
+          style={{ height: '36px', fontSize: '0.8rem', padding: '0.5rem', marginBottom: '1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}
         />
 
         {filteredHistory.length === 0 ? (
@@ -781,10 +811,49 @@ function App() {
           </ul>
         )}
 
+        {/* Self-Learning Popular Searches Panel inside Sidebar */}
+        {popularSearches.length > 0 && (
+          <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+            <h4 style={{ color: '#06b6d4', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.5rem', letterSpacing: '0.05em' }}>
+              ⭐ Mais Buscados (Aprende Só)
+            </h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              {popularSearches.slice(0, 5).map((item, index) => (
+                <button
+                  key={index}
+                  onClick={() => handleExampleClick(item.query)}
+                  style={{
+                    textAlign: 'left',
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#94a3b8',
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    padding: '0.2rem 0',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.color = '#06b6d4'}
+                  onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                >
+                  <span>{item.query}</span>
+                  <span style={{ fontSize: '0.65rem', opacity: 0.6, background: 'rgba(6,182,212,0.1)', color: '#06b6d4', padding: '0.05rem 0.25rem', borderRadius: '4px' }}>
+                    {item.searchCount}x
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {activeQuote && (
           <button 
             className="btn btn-secondary" 
-            style={{ marginTop: 'auto', width: '100%' }}
+            style={{ marginTop: '1rem', width: '100%' }}
             onClick={handleNewQuoteClick}
           >
             + Nova Cotação
@@ -793,43 +862,45 @@ function App() {
       </aside>
 
       {/* Main Panel */}
-      <main className="main-content" style={{ paddingTop: updateAvailable ? '4.5rem' : '1.5rem' }}>
+      <main className="main-content" style={{ paddingTop: updateAvailable ? '4.75rem' : '1.5rem' }}>
         {loading ? (
-          <div className="loading-overlay">
-            <div className="spinner"></div>
-            <h3 style={{ fontWeight: '500' }}>Processando Cotação...</h3>
-            <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
+          <div className="loading-overlay" style={{ background: 'rgba(11,15,25,0.85)', backdropFilter: 'blur(8px)' }}>
+            <div className="spinner" style={{ borderTopColor: '#06b6d4' }}></div>
+            <h3 style={{ fontWeight: '600', color: '#fff', fontSize: '1.25rem', letterSpacing: '-0.025em' }}>Processando Cotação...</h3>
+            <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '0.25rem' }}>
               Pesquisando e calculando melhor preço por unidade de comprimido/embalagem.
             </p>
           </div>
         ) : !activeQuote ? (
-          /* Search Input View - Premium Centered Layout */
-          <div className="search-card" style={{ maxWidth: '850px', width: '100%', margin: '2rem auto' }}>
-            <h2 className="search-title">Pesquisa de Preços ST</h2>
-            <p className="search-subtitle">
-              Digite os itens a serem cotados (um por linha). O sistema fará a busca nas distribuidoras e ordenará pelo preço unitário mais vantajoso com ST.
+          /* Search Input View - Premium Glassmorphic Layout */
+          <div className="search-card animate-fade-in" style={{ maxWidth: '900px', width: '100%', margin: '2rem auto', background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(20px)', boxShadow: '0 20px 40px rgba(0,0,0,0.3)', padding: '2.5rem', borderRadius: '16px' }}>
+            <h2 className="search-title" style={{ fontSize: '1.85rem', fontWeight: 800, background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.03em' }}>
+              Pesquisa de Preços Wimifarma
+            </h2>
+            <p className="search-subtitle" style={{ fontSize: '0.9rem', color: '#64748b', marginBottom: '1.5rem' }}>
+              Digite os medicamentos (um por linha) ou cole códigos EAN. O motor inteligente calcula e seleciona o menor preço unitário com ST.
             </p>
 
-            <div className="textarea-container">
+            <div className="textarea-container" style={{ marginBottom: '1.25rem' }}>
               <textarea
                 className="search-textarea"
-                placeholder="Insira os produtos (Ex: losartana 50mg 30 comp)..."
+                placeholder="Exemplo:&#10;losartana 50mg 30 comp&#10;omeprazol 20mg capsula 30&#10;7896004719078"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                style={{ minHeight: '220px' }}
+                style={{ minHeight: '220px', fontSize: '0.9rem', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '1rem' }}
               />
             </div>
 
             {/* Clickable example queries */}
-            <div className="example-box" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem' }}>
-              <div style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.65rem', display: 'flex', justifyContent: 'space-between' }}>
-                <span>💡 EXEMPLOS DE BUSCA (Clique para adicionar ao terminal)</span>
-                <span style={{ color: '#06b6d4', textTransform: 'none' }}>Portátil (Pendrive) • Auto-Update Git</span>
+            <div className="example-box" style={{ background: 'rgba(15,23,42,0.3)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '10px', padding: '1.25rem', marginBottom: '1.75rem' }}>
+              <div style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', letterSpacing: '0.05em' }}>
+                <span>💡 EXEMPLOS CLICÁVEIS (Adiciona ao terminal)</span>
+                <span style={{ color: '#06b6d4', textTransform: 'none' }}>Fuzzy Search Ativo (Entende erros de grafia)</span>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                 {[
                   'losartana 50mg 30 comp',
-                  'losartana 50mg 60 cpr',
+                  'losartanna 50mg 60 cpr', // Spelling typo (double n) to test Fuzzy Search!
                   '7896004719016 losartana 50mg 30cp',
                   'cetoconazol creme 20g',
                   'dipirona gotas 50ml'
@@ -839,13 +910,24 @@ function App() {
                     onClick={() => handleExampleClick(ex)}
                     className="btn btn-secondary"
                     style={{
-                      padding: '0.35rem 0.65rem',
+                      padding: '0.4rem 0.75rem',
                       fontSize: '0.75rem',
                       borderRadius: '6px',
-                      background: 'rgba(255,255,255,0.04)',
-                      border: '1px solid rgba(255,255,255,0.08)',
+                      background: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.06)',
                       cursor: 'pointer',
-                      color: '#cbd5e1'
+                      color: '#94a3b8',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(6,182,212,0.06)';
+                      e.currentTarget.style.borderColor = 'rgba(6,182,212,0.2)';
+                      e.currentTarget.style.color = '#06b6d4';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+                      e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)';
+                      e.currentTarget.style.color = '#94a3b8';
                     }}
                   >
                     {ex}
@@ -854,10 +936,10 @@ function App() {
               </div>
             </div>
 
-            <div className="action-row">
+            <div className="action-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div className="suppliers-checkboxes">
                 {['ANB', 'Profarma', 'Santa Cruz'].map(sup => (
-                  <label key={sup} className="supplier-label">
+                  <label key={sup} className="supplier-label" style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
                     <input
                       type="checkbox"
                       checked={selectedSuppliers[sup]}
@@ -872,18 +954,18 @@ function App() {
                 <button className="btn btn-secondary" onClick={handleClearInput}>
                   Limpar
                 </button>
-                <button className="btn" onClick={handleRunQuote} disabled={!inputText.trim()}>
+                <button className="btn" onClick={handleRunQuote} disabled={!inputText.trim()} style={{ background: 'linear-gradient(135deg, #06b6d4, #2563eb)', boxShadow: '0 4px 15px rgba(6,182,212,0.25)', fontWeight: 700 }}>
                   🔍 Iniciar Cotação
                 </button>
               </div>
             </div>
           </div>
         ) : (
-          /* Results Dashboard View */
-          <>
-            <div className="results-header">
+          /* Results Dashboard View - Premium Glassmorphic */
+          <div className="animate-fade-in">
+            <div className="results-header" style={{ marginBottom: '2rem' }}>
               <div className="results-title-group">
-                <h2>Cotação #{activeQuote.id}</h2>
+                <h2 style={{ fontSize: '1.75rem', fontWeight: 800, background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.025em' }}>Cotação #{activeQuote.id}</h2>
                 <div className="results-meta">
                   Realizada em: {new Date(activeQuote.createdAt).toLocaleString('pt-BR')}
                 </div>
@@ -893,33 +975,33 @@ function App() {
                 <button className="btn btn-secondary" onClick={handleNewQuoteClick}>
                   Nova Cotação
                 </button>
-                <button className="btn" onClick={handleExportExcel}>
-                  📥 Exportar Excel (XLSX)
+                <button className="btn" onClick={handleExportExcel} style={{ background: 'linear-gradient(135deg, #059669, #10b981)' }}>
+                  📥 Exportar Planilha (XLSX)
                 </button>
               </div>
             </div>
 
             {/* Metrics Dashboard Cards */}
-            <div className="recommendations-deck" style={{ gridTemplateColumns: 'repeat(5, 1fr)', marginBottom: '1.5rem' }}>
-              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.02)' }}>
-                <div style={{ color: '#64748b', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Total Cotados</div>
-                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#fff', marginTop: '0.25rem' }}>{metrics.total}</div>
+            <div className="recommendations-deck" style={{ gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
+              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.02)', borderRadius: '12px' }}>
+                <div style={{ color: '#64748b', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Total Cotados</div>
+                <div style={{ fontSize: '1.85rem', fontWeight: 850, color: '#fff', marginTop: '0.25rem' }}>{metrics.total}</div>
               </div>
-              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(16, 185, 129, 0.2)', background: 'rgba(16, 185, 129, 0.05)' }}>
-                <div style={{ color: '#10b981', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Com Opção ST</div>
-                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#10b981', marginTop: '0.25rem' }}>{metrics.withST}</div>
+              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(16, 185, 129, 0.15)', background: 'rgba(16, 185, 129, 0.03)', borderRadius: '12px' }}>
+                <div style={{ color: '#10b981', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Com Opção ST</div>
+                <div style={{ fontSize: '1.85rem', fontWeight: 850, color: '#10b981', marginTop: '0.25rem' }}>{metrics.withST}</div>
               </div>
-              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(239, 68, 68, 0.15)', background: 'rgba(239, 68, 68, 0.04)' }}>
-                <div style={{ color: '#f87171', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Sem Opção ST</div>
-                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#f87171', marginTop: '0.25rem' }}>{metrics.withoutST}</div>
+              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(239, 68, 68, 0.12)', background: 'rgba(239, 68, 68, 0.02)', borderRadius: '12px' }}>
+                <div style={{ color: '#f87171', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Sem Opção ST</div>
+                <div style={{ fontSize: '1.85rem', fontWeight: 850, color: '#f87171', marginTop: '0.25rem' }}>{metrics.withoutST}</div>
               </div>
-              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(245, 158, 11, 0.2)', background: 'rgba(245, 158, 11, 0.05)' }}>
-                <div style={{ color: '#f59e0b', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Precisa Revisar</div>
-                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#f59e0b', marginTop: '0.25rem' }}>{metrics.needsReview}</div>
+              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(245, 158, 11, 0.15)', background: 'rgba(245, 158, 11, 0.03)', borderRadius: '12px' }}>
+                <div style={{ color: '#f59e0b', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Precisa Revisar</div>
+                <div style={{ fontSize: '1.85rem', fontWeight: 850, color: '#f59e0b', marginTop: '0.25rem' }}>{metrics.needsReview}</div>
               </div>
-              <div className="recommendation-card" style={{ padding: '1rem', border: '1px solid rgba(6, 182, 212, 0.2)', background: 'rgba(6, 182, 212, 0.05)' }}>
-                <div style={{ color: '#06b6d4', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Economia Est.</div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#06b6d4', marginTop: '0.25rem' }}>
+              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(6, 182, 212, 0.18)', background: 'rgba(6, 182, 212, 0.03)', borderRadius: '12px' }}>
+                <div style={{ color: '#06b6d4', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Economia Est.</div>
+                <div style={{ fontSize: '1.65rem', fontWeight: 850, color: '#06b6d4', marginTop: '0.25rem' }}>
                   R$ {metrics.savings.toFixed(2).replace('.', ',')}
                 </div>
               </div>
@@ -927,17 +1009,17 @@ function App() {
 
             {/* Recommendations Highlight */}
             {topRecs.length > 0 && (
-              <div className="recommendations-deck">
+              <div className="recommendations-deck" style={{ gap: '1rem', marginBottom: '2rem' }}>
                 {topRecs.slice(0, 3).map((rec, i) => (
-                  <div key={i} className={`recommendation-card ${rec.type === 'second' ? 'secondary' : ''}`}>
-                    <div className="recommendation-badge">
+                  <div key={i} className={`recommendation-card ${rec.type === 'second' ? 'secondary' : ''}`} style={{ borderRadius: '12px', padding: '1.5rem' }}>
+                    <div className="recommendation-badge" style={{ background: rec.type === 'best' ? 'linear-gradient(135deg, #06b6d4, #3b82f6)' : 'rgba(255,255,255,0.06)' }}>
                       {rec.type === 'best' ? 'Melhor Preço com ST' : 'Segunda Opção com ST'}
                     </div>
                     <div className="rec-search-name">Busca: "{rec.rawText}"</div>
-                    <div className="rec-product-title">{rec.supplierProductName}</div>
+                    <div className="rec-product-title" style={{ fontSize: '1.05rem', fontWeight: 750, color: '#fff', marginBottom: '1rem' }}>{rec.supplierProductName}</div>
                     
                     <div className="rec-detail-row">
-                      <span>Fornecedor:</span>
+                      <span>Distribuidora:</span>
                       <strong style={{ color: '#fff' }}>{rec.source}</strong>
                     </div>
                     <div className="rec-detail-row">
@@ -948,9 +1030,9 @@ function App() {
                       <span>Embalagem:</span>
                       <span>{rec.packaging}</span>
                     </div>
-                    <div className="rec-detail-row" style={{ marginTop: '0.75rem', alignItems: 'center' }}>
-                      <span>Preço Total / Unitário:</span>
-                      <span className="rec-price" style={{ fontSize: '1.15rem' }}>
+                    <div className="rec-detail-row" style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.05)', alignItems: 'center' }}>
+                      <span>Preço Caixa / Unitário:</span>
+                      <span className="rec-price" style={{ fontSize: '1.25rem', color: '#06b6d4', fontWeight: 800 }}>
                         R$ {rec.price.toFixed(2).replace('.', ',')} <span style={{ fontSize: '0.8rem', fontWeight: 'normal', color: '#64748b' }}>(R$ {rec.unitPrice.toFixed(3).replace('.', ',')}/un)</span>
                       </span>
                     </div>
@@ -960,10 +1042,10 @@ function App() {
             )}
 
             {/* Filters panel */}
-            <div className="filters-bar">
+            <div className="filters-bar" style={{ borderRadius: '10px', padding: '1rem', marginBottom: '1.25rem', border: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.01)' }}>
               <div className="filter-group">
                 <span className="filter-label">Filtros ST:</span>
-                <label className="supplier-label">
+                <label className="supplier-label" style={{ fontSize: '0.8rem' }}>
                   <input
                     type="checkbox"
                     checked={filterOnlyST}
@@ -980,7 +1062,7 @@ function App() {
                 
                 {!filterOnlyST && (
                   <>
-                    <label className="supplier-label">
+                    <label className="supplier-label" style={{ fontSize: '0.8rem' }}>
                       <input
                         type="checkbox"
                         checked={filterShowIgnored}
@@ -989,7 +1071,7 @@ function App() {
                       Mostrar sem ST
                     </label>
 
-                    <label className="supplier-label">
+                    <label className="supplier-label" style={{ fontSize: '0.8rem' }}>
                       <input
                         type="checkbox"
                         checked={filterShowUnknown}
@@ -1025,11 +1107,11 @@ function App() {
 
             {/* Results Table */}
             {filteredRows.length === 0 ? (
-              <div className="alert-empty">
+              <div className="alert-empty" style={{ borderRadius: '10px' }}>
                 Nenhum produto correspondente aos filtros de visualização ativos.
               </div>
             ) : (
-              <div className="table-container">
+              <div className="table-container" style={{ borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
                 <table className="quote-table" style={{ fontSize: '0.8rem' }}>
                   <thead>
                     <tr>
@@ -1067,7 +1149,7 @@ function App() {
                           </span>
                         </td>
                         <td>
-                          <span style={{ color: '#06b6d4', fontWeight: 600 }}>
+                          <span style={{ color: '#06b6d4', fontWeight: 650 }}>
                             R$ {row.unitPrice.toFixed(3).replace('.', ',')}
                           </span>
                         </td>
@@ -1112,7 +1194,7 @@ function App() {
                 </table>
               </div>
             )}
-          </>
+          </div>
         )}
       </main>
 

@@ -1,4 +1,5 @@
 import { SupplierConnector } from '../supplier-connector.js';
+import { fuzzyMatch } from '../../lib/parser.js';
 
 export class ProfarmaConnector extends SupplierConnector {
   constructor() {
@@ -111,7 +112,7 @@ export class ProfarmaConnector extends SupplierConnector {
     ];
 
     for (const prod of mockCatalog) {
-      const matchName = prod.supplierProductName.toLowerCase().includes(lowerName) || (ean && prod.ean === ean);
+      const matchName = fuzzyMatch(name, prod.supplierProductName) || (ean && prod.ean === ean);
       if (matchName) {
         results.push({
           ...prod,

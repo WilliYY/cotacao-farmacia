@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld('api', {
   onGitUpdateAvailable: (callback) => {
     ipcRenderer.on('git-update-available', (event, data) => callback(data));
   },
+  getPopularSearches: () => ipcRenderer.invoke('get-popular-searches'),
   ping: () => ipcRenderer.invoke('ping')
 });
