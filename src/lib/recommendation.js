@@ -12,29 +12,20 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
   const parsed = parseSearchQuery(rawText);
   logger.debug(`Parsed query details: ${JSON.stringify(parsed)}`);
 
-  const enableMock = process.env.ENABLE_MOCK_CONNECTORS !== 'false'; // default true
-  const enableReal = process.env.ENABLE_REAL_CONNECTORS === 'true'; // default false
+
 
   const activeConnectors = getActiveConnectors(activeSuppliers);
   const searchPromises = [];
 
   for (const connector of activeConnectors) {
     if (connector) {
-      if (enableReal) {
-        logger.warn(`Real connectors requested but not yet implemented. Falling back to Mock for ${connector.supplierName}.`);
-      }
-      
-      if (enableMock) {
-        logger.debug(`Calling Mock connector for ${connector.supplierName}...`);
-        searchPromises.push(
-          connector.searchProduct(parsed).catch(err => {
-            logger.error(`Error in connector ${connector.supplierName}: ${err.message}`);
-            return [];
-          })
-        );
-      } else {
-        logger.warn(`Mock connectors are disabled and Real connectors are false. No search performed for ${connector.supplierName}.`);
-      }
+      logger.debug(`Calling connector for ${connector.supplierName}...`);
+      searchPromises.push(
+        connector.searchProduct(parsed).catch(err => {
+          logger.error(`Error in connector ${connector.supplierName}: ${err.message}`);
+          return [];
+        })
+      );
     }
   }
 

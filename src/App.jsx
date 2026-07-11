@@ -396,6 +396,20 @@ const mockApi = {
       { query: 'cetoconazol creme 20g', searchCount: 6 }
     ];
   },
+  saveSupplierCredentials: async (supplierId, url, username, password, clientCode) => {
+    const creds = JSON.parse(localStorage.getItem('supplier_creds') || '{}');
+    creds[supplierId] = { url, username, password, clientCode };
+    localStorage.setItem('supplier_creds', JSON.stringify(creds));
+    return { success: true };
+  },
+  getSupplierCredentials: async (supplierId) => {
+    const creds = JSON.parse(localStorage.getItem('supplier_creds') || '{}');
+    return creds[supplierId] || null;
+  },
+  getAllSupplierCredentials: async () => {
+    const creds = JSON.parse(localStorage.getItem('supplier_creds') || '{}');
+    return Object.keys(creds).map(k => ({ supplierId: parseInt(k, 10), ...creds[k] }));
+  },
   exportExcel: async (quoteId) => {
     alert(`Planilha exportada com sucesso! (Simulado fora do Electron)`);
     return { success: true, path: 'c:/mock_path/cotacao_wimifarma.xlsx' };
@@ -418,6 +432,16 @@ function App() {
 
   // Popular searches self-learning list
   const [popularSearches, setPopularSearches] = useState([]);
+
+  // Settings Panel States
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [selectedSettingSupplier, setSelectedSettingSupplier] = useState(1); // 1: ANB, 2: Profarma, 3: Santa Cruz
+  const [settingsUrl, setSettingsUrl] = useState('');
+  const [settingsUsername, setSettingsUsername] = useState('');
+  const [settingsPassword, setSettingsPassword] = useState('');
+  const [settingsClientCode, setSettingsClientCode] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [configuredSuppliers, setConfiguredSuppliers] = useState({});
 
   // Suppliers selection
   const [selectedSuppliers, setSelectedSuppliers] = useState({
@@ -449,6 +473,7 @@ function App() {
   useEffect(() => {
     loadHistory();
     loadPopularSearches();
+    loadAllConfiguredSuppliers();
     
     // Register Git update callback
     if (api.onGitUpdateAvailable) {
@@ -464,6 +489,13 @@ function App() {
       loadPopularSearches();
     }
   }, [activeQuote]);
+
+  // Load configured supplier credentials when active supplier changes on settings screen
+  useEffect(() => {
+    if (isSettingsOpen) {
+      loadCredentials(selectedSettingSupplier);
+    }
+  }, [isSettingsOpen, selectedSettingSupplier]);
 
   const loadHistory = async () => {
     try {
@@ -482,6 +514,72 @@ function App() {
       }
     } catch (e) {
       console.error('Failed to load popular searches:', e);
+    }
+  };
+
+  const loadCredentials = async (supplierId) => {
+    try {
+      if (api.getSupplierCredentials) {
+        const creds = await api.getSupplierCredentials(supplierId);
+        if (creds) {
+          setSettingsUrl(creds.url || '');
+          setSettingsUsername(creds.username || '');
+          setSettingsPassword(creds.password || '');
+          setSettingsClientCode(creds.clientCode || '');
+        } else {
+          // Pre-populate default URLs for safety
+          const defaultUrls = {
+            1: 'https://portal.anbfarma.com.br/login',
+            2: 'https://site.profarma.com.br/login',
+            3: 'https://www.santacruz.com.br/login'
+          };
+          setSettingsUrl(defaultUrls[supplierId] || '');
+          setSettingsUsername('');
+          setSettingsPassword('');
+          setSettingsClientCode('');
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load credentials for supplier:', supplierId, e);
+    }
+  };
+
+  const loadAllConfiguredSuppliers = async () => {
+    try {
+      if (api.getAllSupplierCredentials) {
+        const allCreds = await api.getAllSupplierCredentials();
+        const configMap = {};
+        allCreds.forEach(c => {
+          if (c.username && c.password) {
+            configMap[c.supplierId] = true;
+          }
+        });
+        setConfiguredSuppliers(configMap);
+      }
+    } catch (e) {
+      console.error('Failed to load all credentials status:', e);
+    }
+  };
+
+  const handleSaveCredentials = async () => {
+    setLoading(true);
+    try {
+      if (api.saveSupplierCredentials) {
+        await api.saveSupplierCredentials(
+          selectedSettingSupplier,
+          settingsUrl,
+          settingsUsername,
+          settingsPassword,
+          settingsClientCode
+        );
+        alert('Credenciais salvas com sucesso localmente!');
+        loadAllConfiguredSuppliers();
+      }
+    } catch (e) {
+      console.error('Failed to save credentials:', e);
+      alert('Erro ao salvar credenciais.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -533,6 +631,7 @@ function App() {
 
   const handleSelectQuote = async (id) => {
     setLoading(true);
+    setIsSettingsOpen(false);
     try {
       const details = await api.getQuoteDetails(id);
       setActiveQuote(details);
@@ -548,6 +647,7 @@ function App() {
   const handleNewQuoteClick = () => {
     setActiveQuote(null);
     setSelectedQuoteId(null);
+    setIsSettingsOpen(false);
   };
 
   const handleClearInput = () => {
@@ -555,6 +655,7 @@ function App() {
   };
 
   const handleExampleClick = (query) => {
+    setIsSettingsOpen(false);
     setInputText(prev => {
       const trimmed = prev.trim();
       if (!trimmed) return query;
@@ -796,7 +897,7 @@ function App() {
             {filteredHistory.map(item => (
               <li 
                 key={item.id} 
-                className={`history-item ${selectedQuoteId === item.id ? 'active' : ''}`}
+                className={`history-item ${selectedQuoteId === item.id && !isSettingsOpen ? 'active' : ''}`}
                 onClick={() => handleSelectQuote(item.id)}
               >
                 <div>Cotação #{item.id}</div>
@@ -850,15 +951,31 @@ function App() {
           </div>
         )}
 
-        {activeQuote && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
           <button 
             className="btn btn-secondary" 
-            style={{ marginTop: '1rem', width: '100%' }}
+            style={{ width: '100%' }}
             onClick={handleNewQuoteClick}
           >
             + Nova Cotação
           </button>
-        )}
+          
+          <button 
+            className="btn btn-secondary" 
+            style={{ 
+              width: '100%', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center', 
+              gap: '0.4rem', 
+              border: isSettingsOpen ? '1px solid #06b6d4' : '1px dashed rgba(255,255,255,0.1)',
+              color: isSettingsOpen ? '#06b6d4' : '#94a3b8'
+            }}
+            onClick={() => setIsSettingsOpen(prev => !prev)}
+          >
+            ⚙️ {isSettingsOpen ? 'Voltar ao Painel' : 'Configurar Logins'}
+          </button>
+        </div>
       </aside>
 
       {/* Main Panel */}
@@ -870,6 +987,148 @@ function App() {
             <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '0.25rem' }}>
               Pesquisando e calculando melhor preço por unidade de comprimido/embalagem.
             </p>
+          </div>
+        ) : isSettingsOpen ? (
+          /* Distributor Settings Panel */
+          <div className="search-card animate-fade-in" style={{ maxWidth: '800px', width: '100%', margin: '2rem auto', background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(20px)', boxShadow: '0 20px 40px rgba(0,0,0,0.3)', padding: '2.5rem', borderRadius: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h2 className="search-title" style={{ fontSize: '1.65rem', fontWeight: 800, background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.03em', margin: 0 }}>
+                ⚙️ Configurar Logins das Distribuidoras
+              </h2>
+              <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={() => setIsSettingsOpen(false)}>
+                Voltar
+              </button>
+            </div>
+            <p className="search-subtitle" style={{ fontSize: '0.9rem', color: '#64748b', marginBottom: '2rem' }}>
+              Cadastre suas credenciais de acesso para permitir que o robô faça pesquisas de medicamentos diretamente nos portais oficiais de cada distribuidora de forma segura e autônoma.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '2rem' }}>
+              {/* Left panel: supplier selectors */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', borderRight: '1px solid rgba(255,255,255,0.05)', paddingRight: '1.5rem' }}>
+                <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: '#64748b', fontWeight: 700, marginBottom: '0.5rem' }}>Distribuidoras</h4>
+                {[
+                  { id: 1, name: 'ANB Farma' },
+                  { id: 2, name: 'Profarma' },
+                  { id: 3, name: 'Santa Cruz' }
+                ].map(sup => (
+                  <button
+                    key={sup.id}
+                    onClick={() => setSelectedSettingSupplier(sup.id)}
+                    style={{
+                      textAlign: 'left',
+                      padding: '0.6rem 0.8rem',
+                      background: selectedSettingSupplier === sup.id ? 'rgba(6, 182, 212, 0.12)' : 'rgba(255,255,255,0.01)',
+                      border: selectedSettingSupplier === sup.id ? '1px solid #06b6d4' : '1px solid rgba(255,255,255,0.05)',
+                      borderRadius: '8px',
+                      color: selectedSettingSupplier === sup.id ? '#06b6d4' : '#cbd5e1',
+                      fontSize: '0.85rem',
+                      fontWeight: selectedSettingSupplier === sup.id ? 700 : 'normal',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <span>{sup.name}</span>
+                    {configuredSuppliers[sup.id] ? (
+                      <span title="Configurado" style={{ color: '#10b981', fontSize: '0.8rem' }}>●</span>
+                    ) : (
+                      <span title="Não Configurado" style={{ color: '#64748b', fontSize: '0.8rem' }}>○</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {/* Right panel: Form inputs */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.4rem', fontWeight: 600 }}>
+                    URL do Portal de Login
+                  </label>
+                  <input
+                    type="text"
+                    value={settingsUrl}
+                    onChange={(e) => setSettingsUrl(e.target.value)}
+                    className="search-textarea"
+                    placeholder="https://..."
+                    style={{ height: '38px', padding: '0.6rem', fontSize: '0.85rem', color: '#fff', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', width: '100%' }}
+                  />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.4rem', fontWeight: 600 }}>
+                      Usuário / CNPJ
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsUsername}
+                      onChange={(e) => setSettingsUsername(e.target.value)}
+                      className="search-textarea"
+                      placeholder="CNPJ ou nome de usuário"
+                      style={{ height: '38px', padding: '0.6rem', fontSize: '0.85rem', color: '#fff', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', width: '100%' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.4rem', fontWeight: 600 }}>
+                      Código do Cliente (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsClientCode}
+                      onChange={(e) => setSettingsClientCode(e.target.value)}
+                      className="search-textarea"
+                      placeholder="Código de cadastro"
+                      style={{ height: '38px', padding: '0.6rem', fontSize: '0.85rem', color: '#fff', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', width: '100%' }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.4rem', fontWeight: 600 }}>
+                    Senha de Acesso
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={settingsPassword}
+                      onChange={(e) => setSettingsPassword(e.target.value)}
+                      className="search-textarea"
+                      placeholder="Senha do portal"
+                      style={{ height: '38px', padding: '0.6rem', paddingRight: '2.5rem', fontSize: '0.85rem', color: '#fff', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', width: '100%' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(prev => !prev)}
+                      style={{
+                        position: 'absolute',
+                        right: '10px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#64748b',
+                        cursor: 'pointer',
+                        fontSize: '0.9rem'
+                      }}
+                    >
+                      {showPassword ? '👁️' : '🙈'}
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1.25rem', justifyContent: 'flex-end' }}>
+                  <button className="btn btn-secondary" style={{ padding: '0.5rem 1rem' }} onClick={() => loadCredentials(selectedSettingSupplier)}>
+                    Descartar
+                  </button>
+                  <button className="btn" style={{ padding: '0.5rem 1rem', background: 'linear-gradient(135deg, #06b6d4, #2563eb)' }} onClick={handleSaveCredentials}>
+                    💾 Salvar Credenciais
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         ) : !activeQuote ? (
           /* Search Input View - Premium Glassmorphic Layout */

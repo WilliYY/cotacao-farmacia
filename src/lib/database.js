@@ -188,6 +188,16 @@ export async function initDatabase(userDataPath) {
         searchCount INTEGER DEFAULT 1,
         lastSearchedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS SupplierCredentials (
+        id SERIAL PRIMARY KEY,
+        supplierId INTEGER UNIQUE,
+        url TEXT,
+        username TEXT,
+        password TEXT,
+        clientCode TEXT,
+        updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
     `);
   } else {
     await dbInstance.exec(`
@@ -265,6 +275,16 @@ export async function initDatabase(userDataPath) {
         query TEXT UNIQUE,
         searchCount INTEGER DEFAULT 1,
         lastSearchedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS SupplierCredentials (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        supplierId INTEGER UNIQUE,
+        url TEXT,
+        username TEXT,
+        password TEXT,
+        clientCode TEXT,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
       );
     `);
   }
@@ -609,4 +629,30 @@ export async function getSystemLogs(limit = 100) {
   } catch (err) {
     return [];
   }
+}
+
+// Supplier credentials storage operations
+export async function saveSupplierCredentials(supplierId, url, username, password, clientCode) {
+  if (!dbInstance) return;
+  await dbInstance.run(
+    `INSERT INTO SupplierCredentials (supplierId, url, username, password, clientCode) 
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(supplierId) DO UPDATE SET 
+       url=excluded.url,
+       username=excluded.username,
+       password=excluded.password,
+       clientCode=excluded.clientCode,
+       updatedAt=CURRENT_TIMESTAMP`,
+    supplierId, url, username, password, clientCode
+  );
+}
+
+export async function getSupplierCredentials(supplierId) {
+  if (!dbInstance) return null;
+  return await dbInstance.get('SELECT * FROM SupplierCredentials WHERE supplierId = ?', supplierId);
+}
+
+export async function getAllSupplierCredentials() {
+  if (!dbInstance) return [];
+  return await dbInstance.all('SELECT * FROM SupplierCredentials');
 }

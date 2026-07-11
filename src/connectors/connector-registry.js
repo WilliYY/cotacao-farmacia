@@ -1,35 +1,39 @@
 import { ANBConnector } from './mock/anb.js';
 import { ProfarmaConnector } from './mock/profarma.js';
 import { SantaCruzConnector } from './mock/santacruz.js';
+
+import { ANBRealConnector } from './real/anb-real.js';
+import { ProfarmaRealConnector } from './real/profarma-real.js';
+import { SantaCruzRealConnector } from './real/santacruz-real.js';
+
 import { logger } from '../lib/logger.js';
 
-// Central registry list of instantiated connectors
-const registry = [
+// Mock registry
+const mockRegistry = [
   new ANBConnector(),
   new ProfarmaConnector(),
   new SantaCruzConnector()
 ];
 
-logger.info(`Connector Registry initialized with ${registry.length} suppliers: ${registry.map(c => c.supplierName).join(', ')}`);
+// Real scraping registry
+const realRegistry = [
+  new ANBRealConnector(),
+  new ProfarmaRealConnector(),
+  new SantaCruzRealConnector()
+];
+
+logger.info(`Connector Registry loaded. Mock: ${mockRegistry.length} suppliers. Real: ${realRegistry.length} suppliers.`);
 
 /**
  * Returns instantiated connectors matching active supplier selections.
- * If supplierNames is not specified, returns all registered connectors.
+ * Automatically chooses between Real Scraping or Mock connectors based on environment configuration.
  */
 export function getActiveConnectors(supplierNames) {
-  if (!supplierNames || supplierNames.length === 0) {
-    return registry;
-  }
-  return registry.filter(conn => supplierNames.includes(conn.supplierName));
-}
+  const enableReal = process.env.ENABLE_REAL_CONNECTORS === 'true';
+  const selectedRegistry = enableReal ? realRegistry : mockRegistry;
 
-/**
- * Programmatic registration for new connectors (allows dynamic plugins).
- */
-export function registerConnector(connectorInstance) {
-  const exists = registry.some(c => c.supplierName === connectorInstance.supplierName);
-  if (!exists) {
-    registry.push(connectorInstance);
-    logger.info(`Registered new connector: ${connectorInstance.supplierName}`);
+  if (!supplierNames || supplierNames.length === 0) {
+    return selectedRegistry;
   }
+  return selectedRegistry.filter(conn => supplierNames.includes(conn.supplierName));
 }

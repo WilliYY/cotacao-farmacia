@@ -1,8 +1,8 @@
 {
   "appId": "com.wimifarma.cotacao",
-  "productName": "Wimifarma Cotação",
+  "productName": "Wimifarma Cotacao",
   "directories": {
-    "output": "dist-electron"
+    "output": "C:/dist-wimifarma"
   },
   "files": [
     "dist/**/*",
@@ -13,10 +13,6 @@
     "node_modules/**/*"
   ],
   "win": {
-    "target": "nsis"
-  },
-  "nsis": {
-    "oneClick": false,
-    "allowToChangeInstallationDirectory": true
+    "target": ["portable", "zip"]
   }
 }

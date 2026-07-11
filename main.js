@@ -7,7 +7,22 @@ import { exec } from 'child_process';
 
 dotenv.config();
 
-import { initDatabase, createQuote, updateQuoteStatus, createQuoteItem, saveQuoteResult, getQuotes, getQuoteDetails, saveSearch, updateQuoteResult, getDb, getPopularSearches } from './src/lib/database.js';
+import { 
+  initDatabase, 
+  createQuote, 
+  updateQuoteStatus, 
+  createQuoteItem, 
+  saveQuoteResult, 
+  getQuotes, 
+  getQuoteDetails, 
+  saveSearch, 
+  updateQuoteResult, 
+  getDb, 
+  getPopularSearches,
+  saveSupplierCredentials,
+  getSupplierCredentials,
+  getAllSupplierCredentials
+} from './src/lib/database.js';
 import { processQuoteQuery } from './src/lib/recommendation.js';
 import { generateExcelBuffer } from './src/lib/exporter.js';
 import { logger } from './src/lib/logger.js';
@@ -219,6 +234,36 @@ ipcMain.handle('get-popular-searches', async () => {
     return await getPopularSearches();
   } catch (error) {
     console.error('Error getting popular searches:', error);
+    throw error;
+  }
+});
+
+// IPC Handlers for Supplier Credentials
+ipcMain.handle('save-supplier-credentials', async (event, supplierId, url, username, password, clientCode) => {
+  try {
+    logger.info(`Saving supplier credentials for supplierId: ${supplierId}`);
+    await saveSupplierCredentials(supplierId, url, username, password, clientCode);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Failed to save supplier credentials: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-supplier-credentials', async (event, supplierId) => {
+  try {
+    return await getSupplierCredentials(supplierId);
+  } catch (error) {
+    logger.error(`Failed to get supplier credentials for supplierId: ${supplierId}: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-all-supplier-credentials', async () => {
+  try {
+    return await getAllSupplierCredentials();
+  } catch (error) {
+    logger.error(`Failed to get all supplier credentials: ${error.message}`);
     throw error;
   }
 });
