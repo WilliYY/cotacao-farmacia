@@ -1,5 +1,6 @@
 import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
+import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
 
 export class ProfarmaRealConnector extends SupplierConnector {
@@ -8,7 +9,8 @@ export class ProfarmaRealConnector extends SupplierConnector {
   }
 
   async isAvailable() {
-    return true;
+    const creds = await getSupplierCredentials(2);
+    return !!(creds && creds.username && creds.password);
   }
 
   /**
@@ -21,17 +23,24 @@ export class ProfarmaRealConnector extends SupplierConnector {
       return [];
     }
 
-    logger.info(`Initiating autonomous portal search on Profarma for: "${parsedQuery.name}" with username: ${creds.username}`);
+    const searchTerm = parsedQuery.ean || parsedQuery.name;
+    logger.info(`Initiating autonomous portal search on Profarma for: "${searchTerm}"`);
 
     try {
-      // Scraper implementation template (to be fully integrated with user URLs)
-      // 
-      // const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-      // const page = await browser.newPage();
-      // await page.goto(creds.url || 'https://site.profarma.com.br/login');
-      // ...
+      const results = await scrapePortal(
+        2, 
+        creds.url || 'https://site.profarma.com.br/login', 
+        creds.username, 
+        creds.password, 
+        creds.clientCode, 
+        searchTerm
+      );
       
-      return [];
+      return results.map(res => ({
+        ...res,
+        source: 'Profarma',
+        capturedAt: new Date().toISOString()
+      }));
     } catch (error) {
       logger.error(`Profarma Portal search failed: ${error.message}`);
       return [];
