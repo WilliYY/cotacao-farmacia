@@ -1290,13 +1290,200 @@ function App() {
                       <span>{rec.packaging}</span>
                     </div>
                     <div className="rec-detail-row" style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.05)', alignItems: 'center' }}>
-                      <span>Preço Caixa / Unitário:</span>
+                      <span>Preço Caixa:</span>
                       <span className="rec-price" style={{ fontSize: '1.25rem', color: '#06b6d4', fontWeight: 800 }}>
-                        R$ {rec.price.toFixed(2).replace('.', ',')} <span style={{ fontSize: '0.8rem', fontWeight: 'normal', color: '#64748b' }}>(R$ {rec.unitPrice.toFixed(3).replace('.', ',')}/un)</span>
+                        R$ {rec.price.toFixed(2).replace('.', ',')}
                       </span>
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Intelligent Comparison & Validation Panel */}
+            {activeQuote.items && activeQuote.items.length > 0 && (
+              <div className="comparison-panel" style={{
+                marginBottom: '2rem',
+                padding: '1.5rem',
+                background: 'rgba(30, 41, 59, 0.4)',
+                border: '1px solid rgba(255, 255, 255, 0.06)',
+                borderRadius: '16px',
+                backdropFilter: 'blur(20px)'
+              }}>
+                <h3 style={{
+                  fontSize: '1.1rem',
+                  fontWeight: 800,
+                  marginBottom: '1.25rem',
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  <span>🤖</span> Comparativo & Validação de Embalagens (30, 60, 90 cp)
+                </h3>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {activeQuote.items.map((item, idx) => {
+                    const valid = (item.results || []).filter(r => r.isValidOption && r.price > 0 && (r.stStatus === 'COM_ST' || r.stStatus === 'ST_INCLUSO'));
+                    if (valid.length === 0) return null;
+
+                    // Group by quantity sizes
+                    const g30 = valid.filter(r => r.quantity >= 20 && r.quantity <= 40);
+                    const g60 = valid.filter(r => r.quantity >= 45 && r.quantity <= 75);
+                    const g90 = valid.filter(r => r.quantity >= 80 && r.quantity <= 120);
+
+                    // Best in each group by overall package price
+                    const best30 = g30.sort((a, b) => a.price - b.price)[0];
+                    const best60 = g60.sort((a, b) => a.price - b.price)[0];
+                    const best90 = g90.sort((a, b) => a.price - b.price)[0];
+
+                    // Absolute best by unit price (most cost-effective)
+                    const absBest = [...valid].sort((a, b) => a.unitPrice - b.unitPrice)[0];
+
+                    return (
+                      <div key={idx} style={{
+                        padding: '1rem',
+                        background: 'rgba(255, 255, 255, 0.02)',
+                        border: '1px solid rgba(255, 255, 255, 0.04)',
+                        borderRadius: '12px'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '0.9rem', fontWeight: 750, color: '#f8fafc' }}>
+                            Busca: <span style={{ color: '#06b6d4' }}>"{item.rawText}"</span>
+                          </span>
+                           {absBest && (
+                            <span style={{
+                              fontSize: '0.75rem',
+                              padding: '0.25rem 0.5rem',
+                              borderRadius: '6px',
+                              background: 'rgba(16, 185, 129, 0.15)',
+                              color: '#10b981',
+                              fontWeight: 650,
+                              border: '1px solid rgba(16, 185, 129, 0.25)'
+                            }}>
+                              🏆 Melhor Preço: R$ {absBest.price.toFixed(2).replace('.', ',')} ({absBest.source})
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                          gap: '1rem'
+                        }}>
+                          {/* 30 Comp Card */}
+                          <div style={{
+                            padding: '0.75rem',
+                            background: 'rgba(15, 23, 42, 0.5)',
+                            borderRadius: '8px',
+                            border: '1px solid ' + (absBest && best30 && absBest.ean === best30.ean ? 'rgba(6, 182, 212, 0.3)' : 'rgba(255, 255, 255, 0.02)')
+                          }}>
+                            <div style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Embalagem c/ 30 (20-40 cp)</div>
+                            {best30 ? (
+                              <div style={{ marginTop: '0.25rem' }}>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 650, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={best30.supplierProductName}>
+                                  {best30.supplierProductName}
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem', fontSize: '0.75rem', alignItems: 'center' }}>
+                                  <span style={{ color: '#10b981', fontWeight: 700 }}>R$ {best30.price.toFixed(2).replace('.', ',')}</span>
+                                  <span style={{ color: '#64748b', fontSize: '0.7rem' }}>({best30.source})</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem' }}>Não encontrado</div>
+                            )}
+                          </div>
+
+                          {/* 60 Comp Card */}
+                          <div style={{
+                            padding: '0.75rem',
+                            background: 'rgba(15, 23, 42, 0.5)',
+                            borderRadius: '8px',
+                            border: '1px solid ' + (absBest && best60 && absBest.ean === best60.ean ? 'rgba(6, 182, 212, 0.3)' : 'rgba(255, 255, 255, 0.02)')
+                          }}>
+                            <div style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Embalagem c/ 60 (45-75 cp)</div>
+                            {best60 ? (
+                              <div style={{ marginTop: '0.25rem' }}>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 650, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={best60.supplierProductName}>
+                                  {best60.supplierProductName}
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem', fontSize: '0.75rem', alignItems: 'center' }}>
+                                  <span style={{ color: '#10b981', fontWeight: 700 }}>R$ {best60.price.toFixed(2).replace('.', ',')}</span>
+                                  <span style={{ color: '#64748b', fontSize: '0.7rem' }}>({best60.source})</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem' }}>Não encontrado</div>
+                            )}
+                          </div>
+
+                          {/* 90 Comp Card */}
+                          <div style={{
+                            padding: '0.75rem',
+                            background: 'rgba(15, 23, 42, 0.5)',
+                            borderRadius: '8px',
+                            border: '1px solid ' + (absBest && best90 && absBest.ean === best90.ean ? 'rgba(6, 182, 212, 0.3)' : 'rgba(255, 255, 255, 0.02)')
+                          }}>
+                            <div style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Embalagem c/ 90 (80-120 cp)</div>
+                            {best90 ? (
+                              <div style={{ marginTop: '0.25rem' }}>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 650, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={best90.supplierProductName}>
+                                  {best90.supplierProductName}
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem', fontSize: '0.75rem', alignItems: 'center' }}>
+                                  <span style={{ color: '#10b981', fontWeight: 700 }}>R$ {best90.price.toFixed(2).replace('.', ',')}</span>
+                                  <span style={{ color: '#64748b', fontSize: '0.7rem' }}>({best90.source})</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem' }}>Não encontrado</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Vague Description warnings block */}
+            {activeQuote.items && activeQuote.items.some(item => item.confidenceStatus === 'DESCRICAO_INSUFICIENTE') && (
+              <div className="vague-warnings-panel" style={{
+                marginBottom: '2rem',
+                padding: '1.25rem',
+                background: 'rgba(217, 119, 6, 0.08)',
+                border: '1px solid rgba(217, 119, 6, 0.25)',
+                borderRadius: '12px'
+              }}>
+                <h4 style={{
+                  color: '#fbbf24',
+                  fontSize: '0.95rem',
+                  fontWeight: 800,
+                  margin: 0,
+                  marginBottom: '0.75rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  <span>⚠️</span> Itens com Descrição Insuficiente (Apenas estes não foram cotados)
+                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {activeQuote.items
+                    .filter(item => item.confidenceStatus === 'DESCRICAO_INSUFICIENTE')
+                    .map((item, idx) => (
+                      <div key={idx} style={{
+                        fontSize: '0.8rem',
+                        color: '#f8fafc',
+                        padding: '0.5rem 0.75rem',
+                        background: 'rgba(0, 0, 0, 0.2)',
+                        borderRadius: '6px',
+                        borderLeft: '4px solid #d97706'
+                      }}>
+                        <strong>"{item.rawText}"</strong>: <span style={{ color: '#cbd5e1' }}>{item.refinementSuggestion || 'Especifique melhor a descrição do produto (marca, dosagem, etc.) para cotar.'}</span>
+                      </div>
+                    ))}
+                </div>
               </div>
             )}
 
@@ -1380,7 +1567,6 @@ function App() {
                       <th>Embalagem</th>
                       <th>Distribuidora</th>
                       <th>Preço Caixa</th>
-                      <th>Preço Unit.</th>
                       <th>ST</th>
                       <th>Estoque</th>
                       <th>Recomendação</th>
@@ -1405,11 +1591,6 @@ function App() {
                         <td>
                           <span className={`text-price ${row.isValidOption ? 'highlight' : ''}`}>
                             R$ {row.price.toFixed(2).replace('.', ',')}
-                          </span>
-                        </td>
-                        <td>
-                          <span style={{ color: '#06b6d4', fontWeight: 650 }}>
-                            R$ {row.unitPrice.toFixed(3).replace('.', ',')}
                           </span>
                         </td>
                         <td>

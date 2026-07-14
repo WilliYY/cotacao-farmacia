@@ -144,6 +144,8 @@ export async function initDatabase(userDataPath) {
         ean TEXT,
         quantity INTEGER DEFAULT 1,
         status TEXT,
+        confidenceStatus TEXT,
+        refinementSuggestion TEXT,
         FOREIGN KEY(quoteId) REFERENCES Quote(id) ON DELETE CASCADE
       );
 
@@ -232,6 +234,8 @@ export async function initDatabase(userDataPath) {
         ean TEXT,
         quantity INTEGER DEFAULT 1,
         status TEXT,
+        confidenceStatus TEXT,
+        refinementSuggestion TEXT,
         FOREIGN KEY(quoteId) REFERENCES Quote(id) ON DELETE CASCADE
       );
 
@@ -340,6 +344,28 @@ export async function initDatabase(userDataPath) {
       `);
       logger.info('Granular database migration completed successfully.');
     }
+
+    let hasConfidenceStatus = true;
+    if (isPostgres) {
+      const colCheck = await dbInstance.all(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name='quoteitem' AND column_name='confidencestatus'
+      `);
+      hasConfidenceStatus = colCheck.length > 0;
+    } else {
+      const resColumns = await dbInstance.all("PRAGMA table_info(QuoteItem)");
+      hasConfidenceStatus = resColumns.some(c => c.name === 'confidenceStatus');
+    }
+
+    if (!hasConfidenceStatus) {
+      logger.info('Migrating tables to vague description refinement schema...');
+      await dbInstance.exec(`
+        ALTER TABLE QuoteItem ADD COLUMN confidenceStatus TEXT;
+        ALTER TABLE QuoteItem ADD COLUMN refinementSuggestion TEXT;
+      `);
+      logger.info('Vague description database migration completed successfully.');
+    }
   } catch (err) {
     logger.error(`Database migration checking failed: ${err.message}`);
   }
@@ -420,7 +446,7 @@ export async function updateQuoteStatus(quoteId, status) {
 
 export async function createQuoteItem(quoteId, rawText, parsed, status = 'pending') {
   const result = await dbInstance.run(
-    'INSERT INTO QuoteItem (quoteId, rawText, normalizedName, dosage, presentation, ean, quantity, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO QuoteItem (quoteId, rawText, normalizedName, dosage, presentation, ean, quantity, status, confidenceStatus, refinementSuggestion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     quoteId,
     rawText,
     parsed.name,
@@ -428,7 +454,9 @@ export async function createQuoteItem(quoteId, rawText, parsed, status = 'pendin
     parsed.presentation,
     parsed.ean || null,
     parsed.quantity || 1,
-    status
+    status,
+    parsed.confidenceStatus || 'ALTA',
+    parsed.refinementSuggestion || ''
   );
   return result.lastID;
 }
@@ -631,9 +659,33 @@ export async function getSystemLogs(limit = 100) {
   }
 }
 
-// Supplier credentials storage operations
+// Supplier credentials storage operations with safeStorage encryption helper
+let safeStorageInstance = null;
+async function getSafeStorage() {
+  if (safeStorageInstance !== null) return safeStorageInstance;
+  if (process.versions && process.versions.electron) {
+    try {
+      const electron = await import('electron');
+      if (electron.safeStorage && electron.safeStorage.isEncryptionAvailable()) {
+        safeStorageInstance = electron.safeStorage;
+      }
+    } catch (e) {
+      // Bypassed (e.g. running in terminal testing context)
+    }
+  }
+  if (!safeStorageInstance) {
+    safeStorageInstance = {
+      encryptString: (str) => Buffer.from(str, 'utf8'),
+      decryptString: (buf) => buf.toString('utf8')
+    };
+  }
+  return safeStorageInstance;
+}
+
 export async function saveSupplierCredentials(supplierId, url, username, password, clientCode) {
   if (!dbInstance) return;
+  const storage = await getSafeStorage();
+  const encryptedPassword = storage.encryptString(password).toString('base64');
   await dbInstance.run(
     `INSERT INTO SupplierCredentials (supplierId, url, username, password, clientCode) 
      VALUES (?, ?, ?, ?, ?)
@@ -643,16 +695,50 @@ export async function saveSupplierCredentials(supplierId, url, username, passwor
        password=excluded.password,
        clientCode=excluded.clientCode,
        updatedAt=CURRENT_TIMESTAMP`,
-    supplierId, url, username, password, clientCode
+    supplierId, url, username, encryptedPassword, clientCode
   );
 }
 
 export async function getSupplierCredentials(supplierId) {
   if (!dbInstance) return null;
-  return await dbInstance.get('SELECT * FROM SupplierCredentials WHERE supplierId = ?', supplierId);
+  const row = await dbInstance.get('SELECT * FROM SupplierCredentials WHERE supplierId = ?', supplierId);
+  if (!row) return null;
+  if (row.password) {
+    try {
+      const storage = await getSafeStorage();
+      const encryptedBuffer = Buffer.from(row.password, 'base64');
+      row.password = storage.decryptString(encryptedBuffer);
+    } catch (err) {
+      // Bypassed if key changed or incompatible context
+    }
+  }
+  return row;
 }
 
 export async function getAllSupplierCredentials() {
   if (!dbInstance) return [];
-  return await dbInstance.all('SELECT * FROM SupplierCredentials');
+  const rows = await dbInstance.all('SELECT * FROM SupplierCredentials');
+  const storage = await getSafeStorage();
+  for (const row of rows) {
+    if (row.password) {
+      try {
+        const encryptedBuffer = Buffer.from(row.password, 'base64');
+        row.password = storage.decryptString(encryptedBuffer);
+      } catch (err) {
+        // Bypassed
+      }
+    }
+  }
+  return rows;
+}
+
+export async function closeDatabase() {
+  if (isPostgres && pgPool) {
+    await pgPool.end();
+    pgPool = null;
+  } else if (sqliteDb) {
+    await sqliteDb.close();
+    sqliteDb = null;
+  }
+  dbInstance = null;
 }

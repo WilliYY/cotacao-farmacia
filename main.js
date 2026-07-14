@@ -101,6 +101,30 @@ app.whenReady().then(async () => {
   console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
   await initDatabase(userDataPath);
 
+  // Clean up temporary debug/scratch files older than 24 hours on startup
+  try {
+    const scratchDir = 'C:/Users/Williany/.gemini/antigravity/brain/23cc081b-d3e4-4dfc-89c1-1197113f0a2c/scratch';
+    if (fs.existsSync(scratchDir)) {
+      const files = fs.readdirSync(scratchDir);
+      const now = Date.now();
+      const cutoff = 24 * 60 * 60 * 1000;
+      let deletedCount = 0;
+      for (const file of files) {
+        const filePath = path.join(scratchDir, file);
+        const stats = fs.statSync(filePath);
+        if (now - stats.mtimeMs > cutoff) {
+          fs.unlinkSync(filePath);
+          deletedCount++;
+        }
+      }
+      if (deletedCount > 0) {
+        logger.info(`Cleaned up ${deletedCount} temporary debug/scratch files older than 24h.`);
+      }
+    }
+  } catch (cleanErr) {
+    logger.warn(`Temp cleanup bypassed: ${cleanErr.message}`);
+  }
+
   createWindow();
 
   app.on('activate', () => {
