@@ -116,9 +116,8 @@ erDiagram
 
 ### 1. Normalization Parser (`parser.js`)
 Extracts structured terms from unstructured text lines using regular expressions and dictionary matching:
-- **EAN Matching:** Checks for 13-digit sequence patterns `/\b(\d{13})\b/`.
-- **Dosage Extraction:** Extracts dosage units (mg, mcg, g, ml, ui) using:
-  `/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i`.
+- **EAN-13 Check Digit Verification:** Extracts 13-digit sequence candidates `/\b(\d{13})\b/` and validates them using EAN-13 check digit formula (summing odd positions and even positions $\times 3$, mod 10 subtraction). This prevents invalid numbers (like CNPJs or phone numbers) from triggering barcode lookups.
+- **Dosage Extraction & Negative Lookahead:** Extracts dosage units (mg, mcg, g, ml, ui) with optional spaces. Standardizes standalone dosage numbers (e.g. "50" -> "50mg"), but utilizes a negative lookahead `(?!\s*(?:capsulas|comp...))` to ignore pack counts (e.g. "30" in "losartana 30 cp") preventing them from polluting dosage attributes.
 - **Presentation Matching:** Converts abbreviations (`comp`, `cp`, `caps`, `gts`) to standard forms (`comprimido`, `capsula`, `gotas`) using the `SYNONYMS` table.
 - **Quantity Capture:** Extracts package size/count (e.g., "30 comp" $\rightarrow$ quantity `30`).
 - **Confidence Rating:** Emits `ALTA` status if both dosage and presentation are verified; otherwise emits `PRODUTO_PARECIDO_REVISAR`.
@@ -134,15 +133,19 @@ Classifies tax conditions into four operational categories:
 | **`ST_DESCONHECIDO`** | Unrecognized tax code | **Flagged:** Excludes recommendation, requires manual revision |
 
 ### 3. Recommendation & Ranking Engine (`recommendation.js`)
-Ranks matching supplier results by analyzing **unit cost efficiency**:
+Ranks matching supplier results:
 1. Filter out unavailable options (`availability !== 'disponível'`) and rejected reviews.
 2. Group options that pass the valid ST test.
-3. Compute the unit price:
-   $$\text{unitPrice} = \frac{\text{price}}{\text{quantity}}$$
+3. **Exact Numerical Dosage Check:** Extracts the raw numeric value of dosages (e.g. `"50mg"` $\rightarrow$ `50.0`, `"5mg"` $\rightarrow$ `5.0`) and requires exact mathematical equality (`queryDosage === resultDosage`). This avoids false positive substring matches (like matching "50mg" with "5mg" or "25mg" with "250mg") to prevent costly purchase mistakes.
 4. Sort by:
    - **Priority 1:** ST Priority (prefer `COM_ST` over `ST_SEPARADO`).
-   - **Priority 2:** Lowest `unitPrice`.
+   - **Priority 2:** Lowest `price` of box.
 5. Annotate the cheapest result as `Melhor preço com ST` and the runner-up as `Segunda opção com ST`.
+
+### 4. Credentials Security Vault (`database.js`)
+- Enters supplier credentials using Electron's native `safeStorage` API.
+- Criptographs passwords at operating system level using **Windows DPAPI** before saving them as Base64 strings in SQLite.
+- Seamlessly falls back to transparent UTF-8 conversion in testing/terminal contexts where Electron bindings are unavailable.
 
 ---
 

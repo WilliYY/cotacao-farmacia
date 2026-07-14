@@ -33,8 +33,52 @@ const SYNONYMS = {
   inalador: 'inalador',
   adesivo: 'adesivo',
   shampoo: 'shampoo',
-  shamp: 'shampoo'
+  shamp: 'shampoo',
+  condicionador: 'condicionador',
+  cond: 'condicionador',
+  desodorante: 'desodorante',
+  desod: 'desodorante',
+  absorvente: 'absorvente',
+  abs: 'absorvente',
+  fralda: 'fralda',
+  fraldas: 'fralda',
+  tintura: 'tintura',
+  tinta: 'tintura',
+  shampooing: 'shampoo',
+  shampoos: 'shampoo'
 };
+
+const VAGUE_SUGGESTIONS = {
+  shampoo: 'Especifique a marca (ex: Clear, Elseve, Seda) e o volume/tamanho (ex: 200ml, 400ml).',
+  shampoos: 'Especifique a marca e o volume/tamanho.',
+  condicionador: 'Especifique a marca (ex: Pantene, Elseve) e o volume/tamanho.',
+  condicionadores: 'Especifique a marca e o volume/tamanho.',
+  xarope: 'Especifique o princípio ativo ou marca (ex: Ambroxol, Viks) e dosagem (ex: 30mg/5ml, 120ml).',
+  xaropes: 'Especifique o princípio ativo ou marca e dosagem.',
+  tinta: 'Especifique a marca (ex: Cor&Ton, Koleston) e a numeração/cor (ex: 5.0 Castanho, 8.0 Louro).',
+  tintura: 'Especifique a marca e a numeração/cor (ex: 5.0 Castanho, 8.0 Louro).',
+  desodorante: 'Especifique a marca (ex: Rexona, Nivea), tipo (Aerosol, Roll-on) e fragrância.',
+  desodorantes: 'Especifique a marca, tipo e fragrância.',
+  absorvente: 'Especifique a marca (ex: Always, Intimus), tipo (Com abas, Noturno) e quantidade.',
+  absorventes: 'Especifique a marca, tipo e quantidade.',
+  fralda: 'Especifique a marca (ex: Pampers, Huggies) e o tamanho (ex: M, G, XG).',
+  fraldas: 'Especifique a marca e o tamanho.',
+  dipirona: 'Especifique a dosagem (ex: 500mg, 1g, gotas) e apresentação (ex: 10 comp, gotas 20ml).',
+  losartana: 'Especifique a dosagem (ex: 50mg, 100mg) e quantidade (ex: 30 comp, 60 comp).'
+};
+
+const COSMETIC_KEYWORDS = ['shampoo', 'condicionador', 'desodorante', 'absorvente', 'fralda', 'fraldas', 'tintura', 'tinta', 'shamp', 'cond'];
+
+export function isValidEAN13(ean) {
+  if (!/^\d{13}$/.test(ean)) return false;
+  let sum = 0;
+  for (let i = 0; i < 12; i++) {
+    const digit = parseInt(ean[i], 10);
+    sum += i % 2 === 0 ? digit : digit * 3;
+  }
+  const checkDigit = (10 - (sum % 10)) % 10;
+  return checkDigit === parseInt(ean[12], 10);
+}
 
 export function parseSearchQuery(rawText) {
   if (!rawText) {
@@ -46,18 +90,21 @@ export function parseSearchQuery(rawText) {
       quantity: 1,
       ean: '',
       confidence: 0,
-      confidenceStatus: 'PRODUTO_PARECIDO_REVISAR'
+      confidenceStatus: 'PRODUTO_PARECIDO_REVISAR',
+      refinementSuggestion: ''
     };
   }
 
   const cleaned = rawText.trim().toLowerCase();
   
-  // 1. Extract EAN (usually 13 digits)
+  // 1. Extract EAN (usually 13 digits) and validate check digit
   const eanMatch = cleaned.match(/\b(\d{13})\b/);
-  const ean = eanMatch ? eanMatch[1] : '';
+  const matchedEan = eanMatch ? eanMatch[1] : '';
+  const ean = isValidEAN13(matchedEan) ? matchedEan : '';
 
   // 2. Extract dosage (e.g. 500mg, 20mg, 10ml, 50g, etc.)
-  const dosageMatch = cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) || cleaned.match(/\b(\d{2,4})\b/);
+  const dosageMatch = cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) || 
+                      cleaned.match(/\b(\d{1,4})\b(?!\s*(?:capsulas?|caps?|comprimidos?|comp?s?|cprs?|cps?|gotas?|gts|unidades?|unds?|envelopes?|env?s?|tablets?|tbls?|flaconetes?|flac?s?))/i);
   let dosage = '';
   if (dosageMatch) {
     dosage = dosageMatch[0].trim();
@@ -70,8 +117,6 @@ export function parseSearchQuery(rawText) {
   let quantity = 1;
   let presentation = '';
 
-  // Check if there is an explicit count followed by unit
-  // Units: caps, cap, comp, cpr, cp, cps, gotas, gts, ml, g, tabletes, etc.
   const qtyRegex = /\b(\d{1,3})\s*(capsulas?|caps?|comprimidos?|comp?s?|cprs?|cps?|gotas?|gts|unidades?|unds?|envelopes?|env?s?|tablets?|tbls?|flaconetes?|flac?s?)\b/i;
   const qtyMatch = cleaned.match(qtyRegex);
   
@@ -82,7 +127,6 @@ export function parseSearchQuery(rawText) {
       presentation = SYNONYMS[matchedUnit];
     }
   } else {
-    // Check if there is a trailing number at the end
     const trailingQtyMatch = cleaned.match(/\b(?:comp|cp|caps|gotas|gts|ml|g)\s+(\d{1,3})\b/i) || cleaned.match(/\s+(\d{1,3})$/);
     if (trailingQtyMatch) {
       const val = parseInt(trailingQtyMatch[1], 10);
@@ -116,12 +160,10 @@ export function parseSearchQuery(rawText) {
     const isEan = ean && word.includes(ean);
     const isDosageWord = (dosageStr && (word.includes(dosageStr) || word.includes(dosageNum)));
     
-    // Check if word contains the quantity token or the quantity number itself
     const isQtyWord = qtyToken && word.includes(qtyToken) || 
                        (qtyMatch && word.includes(qtyMatch[1])) || 
                        (quantity > 1 && word === String(quantity));
     
-    // Check if word matches presentation word
     const isPresentationWord = SYNONYMS[cleanWord] !== undefined || (presentation && cleanWord.endsWith(presentation));
 
     if (!isPresentationWord && !isDosageWord && !isEan && !isQtyWord && 
@@ -136,24 +178,44 @@ export function parseSearchQuery(rawText) {
     name = words[0];
   }
 
-  // Calculate confidence status
+  // Calculate confidence and refinement suggestions
   let confidence = 1.0;
   let confidenceStatus = 'ALTA';
+  let refinementSuggestion = '';
 
-  if (!dosage || !presentation) {
+  const isCosmeticOrHygiene = COSMETIC_KEYWORDS.some(kw => cleaned.includes(kw));
+
+  // Determine if search query is extremely vague (single word matching category)
+  const isVague = Object.keys(VAGUE_SUGGESTIONS).some(key => cleaned === key || cleaned === key + 's');
+  
+  if (isVague) {
+    confidence = 0.1;
+    confidenceStatus = 'DESCRICAO_INSUFICIENTE';
+    const key = Object.keys(VAGUE_SUGGESTIONS).find(k => cleaned === k || cleaned === k + 's');
+    refinementSuggestion = VAGUE_SUGGESTIONS[key];
+  } else if (!isCosmeticOrHygiene && (!dosage || !presentation)) {
+    // Medicines require dosage/presentation
     confidence = 0.5;
     confidenceStatus = 'PRODUTO_PARECIDO_REVISAR';
+  } else if (isCosmeticOrHygiene && !dosage && !presentation) {
+    // Cosmetics don't necessarily have mg dosage, but if extremely short, flag it
+    if (words.length <= 1) {
+      confidence = 0.3;
+      confidenceStatus = 'DESCRICAO_INSUFICIENTE';
+      refinementSuggestion = 'Especifique a marca, modelo ou fragrância para uma busca precisa.';
+    }
   }
 
   return {
     name,
     dosage,
-    presentation,
+    presentation: presentation || (isCosmeticOrHygiene ? 'cosmético' : ''),
     quantity,
     ean,
     originalTerms: rawText,
     confidence,
-    confidenceStatus
+    confidenceStatus,
+    refinementSuggestion
   };
 }
 

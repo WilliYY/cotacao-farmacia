@@ -1,7 +1,12 @@
 import { SupplierConnector } from '../supplier-connector.js';
-import { getSupplierCredentials } from '../../lib/database.js';
-import { scrapePortal } from '../../lib/electron-scraper.js';
+import { readSantaCruzCache } from '../../lib/santacruz-h2-reader.js';
 import { logger } from '../../lib/logger.js';
+import { execFile } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export class SantaCruzRealConnector extends SupplierConnector {
   constructor() {
@@ -9,41 +14,81 @@ export class SantaCruzRealConnector extends SupplierConnector {
   }
 
   async isAvailable() {
-    const creds = await getSupplierCredentials(3);
-    return !!(creds && creds.username && creds.password);
+    return true;
   }
 
   /**
-   * Performs autonomous browser-based search on Santa Cruz portal.
+   * Performs autonomous lookup on Santa Cruz (Real-time GUI automation or H2 database fallback).
    */
   async searchProduct(parsedQuery) {
-    const creds = await getSupplierCredentials(3); // Santa Cruz supplierId = 3
-    if (!creds || !creds.username || !creds.password) {
-      logger.warn('Real credentials not configured for Santa Cruz. Skipping search.');
-      return [];
-    }
-
     const searchTerm = parsedQuery.ean || parsedQuery.name;
-    logger.info(`Initiating autonomous portal search on Santa Cruz for: "${searchTerm}"`);
+    if (!searchTerm) return [];
 
-    try {
-      const results = await scrapePortal(
-        3, 
-        creds.url || 'https://www.santacruz.com.br/login', 
-        creds.username, 
-        creds.password, 
-        creds.clientCode, 
-        searchTerm
-      );
+    logger.info(`Searching Santa Cruz for: "${searchTerm}"...`);
+
+    // 1. Try real-time GUI automation if the app is currently open
+    const guiResults = await new Promise((resolve) => {
+      // Resolve path to the powershell script
+      const scriptPath = path.join(__dirname, '..', '..', 'lib', 'santacruz-search.ps1');
       
-      return results.map(res => ({
-        ...res,
+      logger.info(`Attempting real-time GUI search on Santa Cruz window...`);
+      execFile('powershell', [
+        '-ExecutionPolicy', 'Bypass',
+        '-File', scriptPath,
+        searchTerm
+      ], (err, stdout, stderr) => {
+        if (err) {
+          logger.warn(`GUI search failed or timed out: ${err.message}`);
+          return resolve([]);
+        }
+
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            logger.info(`GUI search returned ${parsed.length} items from Santa Cruz.`);
+            return resolve(parsed);
+          }
+        } catch (parseErr) {
+          logger.debug(`Could not parse GUI search JSON response: ${parseErr.message}`);
+        }
+        resolve([]);
+      });
+    });
+
+    const rawResults = guiResults.length > 0 ? guiResults : await (async () => {
+      logger.info(`Santa Cruz GUI search empty or unavailable. Falling back to local H2 cache database...`);
+      try {
+        return await readSantaCruzCache(searchTerm);
+      } catch (error) {
+        logger.error(`Santa Cruz local search failed: ${error.message}`);
+        return [];
+      }
+    })();
+
+    return rawResults.map(res => {
+      let parsedQty = 1;
+      const qtyMatch = res.name.match(/c\/\s*(\d+)/i) || res.name.match(/(\d+)\s*(?:comp|caps|cp|cps|cpr|tabletes|unidades)/i);
+      if (qtyMatch) {
+        parsedQty = parseInt(qtyMatch[1], 10);
+      }
+
+      const hasST = res.st > 0;
+      return {
+        ean: res.ean || '',
+        supplierProductName: res.name || '',
+        laboratory: res.laboratory || 'Santa Cruz',
+        dosage: parsedQuery.dosage || '',
+        presentation: parsedQuery.presentation || '',
+        price: res.unitCostWithSt || res.price || 0,
+        stStatus: hasST ? 'COM_ST' : 'SEM_ST',
+        availability: 'disponível',
+        quantity: parsedQty,
+        unitPrice: (res.unitCostWithSt || res.price || 0) / parsedQty,
         source: 'Santa Cruz',
         capturedAt: new Date().toISOString()
-      }));
-    } catch (error) {
-      logger.error(`Santa Cruz Portal search failed: ${error.message}`);
-      return [];
-    }
+      };
+    });
   }
 }
+
+

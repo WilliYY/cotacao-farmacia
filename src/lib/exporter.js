@@ -82,7 +82,6 @@ export function generateExcelBuffer(quoteData) {
       'Dosagem': res.dosage || '-',
       'Apresentação': res.presentation || '-',
       'Preço Caixa': res.price ? `R$ ${res.price.toFixed(2).replace('.', ',')}` : 'R$ 0,00',
-      'Preço Unitário': res.unitPrice ? `R$ ${res.unitPrice.toFixed(3).replace('.', ',')}` : 'R$ 0,00',
       'ST': res.stStatus || '-',
       'Disponibilidade': res.availability || '-',
       'Status Recomendação': res.recommendationStatus || '-',
@@ -111,7 +110,6 @@ export function generateExcelBuffer(quoteData) {
             'Embalagem': excelRow['Embalagem'],
             'Fornecedor': excelRow['Fornecedor'],
             'Preço Caixa': excelRow['Preço Caixa'],
-            'Preço Unitário': excelRow['Preço Unitário'],
             'ST': excelRow['ST'],
             'Disponibilidade': excelRow['Disponibilidade'],
             'Classificação': excelRow['Status Recomendação'],
@@ -143,14 +141,14 @@ export function generateExcelBuffer(quoteData) {
   // Tab 2: Melhores Opções com ST
   const wsBest = XLSX.utils.json_to_sheet(bestSTRows);
   wsBest['!cols'] = [
-    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 15 }, { wch: 18 }, { wch: 25 }, { wch: 45 }
+    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 25 }, { wch: 45 }
   ];
   XLSX.utils.book_append_sheet(workbook, wsBest, 'Melhores ST');
 
   // Tab 3: Todos os Resultados
   const wsAll = XLSX.utils.json_to_sheet(allResultsRows);
   const fullColsWidths = [
-    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 18 }, { wch: 25 }, { wch: 45 }, { wch: 30 }, { wch: 20 }, { wch: 20 }
+    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 18 }, { wch: 25 }, { wch: 45 }, { wch: 30 }, { wch: 20 }, { wch: 20 }
   ];
   wsAll['!cols'] = fullColsWidths;
   XLSX.utils.book_append_sheet(workbook, wsAll, 'Todos Resultados');
