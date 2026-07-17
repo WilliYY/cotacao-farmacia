@@ -1,4 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  ArrowLeft,
+  CheckCircle2,
+  CircleAlert,
+  CircleX,
+  Eye,
+  EyeOff,
+  FileSpreadsheet,
+  History,
+  PackageSearch,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Save,
+  Search,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  TrendingDown
+} from 'lucide-react';
 
 // Browser mocks are available only through an explicit development opt-in.
 const mockApi = {
@@ -488,6 +509,8 @@ function App() {
   const [editEan, setEditEan] = useState('');
   const [editPackaging, setEditPackaging] = useState('');
   const [editQuantity, setEditQuantity] = useState(1);
+  const reviewModalRef = useRef(null);
+  const previousFocusRef = useRef(null);
 
   useEffect(() => {
     loadHistory();
@@ -515,6 +538,48 @@ function App() {
       loadCredentials(selectedSettingSupplier);
     }
   }, [isSettingsOpen, selectedSettingSupplier]);
+
+  useEffect(() => {
+    if (!editingResult || !reviewModalRef.current) return undefined;
+
+    const modal = reviewModalRef.current;
+    const focusableSelector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const getFocusableElements = () => Array.from(modal.querySelectorAll(focusableSelector));
+    const firstFocusable = getFocusableElements()[0];
+    (firstFocusable || modal).focus();
+
+    const handleModalKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setEditingResult(null);
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+      const focusableElements = getFocusableElements();
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        modal.focus();
+        return;
+      }
+
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleModalKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleModalKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [editingResult]);
 
   const loadHistory = async () => {
     try {
@@ -683,6 +748,7 @@ function App() {
 
   // Open Edit / Manual Review Modal
   const openEditModal = (result) => {
+    previousFocusRef.current = document.activeElement;
     setEditingResult(result);
     setEditPrice(result.price);
     setEditSTStatus(result.stStatus);
@@ -725,6 +791,14 @@ function App() {
     if (!hasAuditIssue(row)) return 'badge-status-best';
     if (row.auditStatus === 'ATENCAO') return 'badge-status-second';
     return 'badge-status-review';
+  };
+  const getPriceSourceLabel = (row) => {
+    if (row.priceSourceLabel) return row.priceSourceLabel;
+    if (row.source === 'ANB') return 'Unit c/ST';
+    if (row.source === 'Santa Cruz') return 'Preço NF';
+    if (row.source === 'Profarma') return 'Preço Final';
+    if (row.source === 'DM Paraná') return 'Preço final: R$';
+    return 'Preço capturado';
   };
 
   // Calculate Summary Metrics
@@ -836,52 +910,48 @@ function App() {
   const topRecs = getTopRecommendations();
   const metrics = getSummaryMetrics();
   const filteredHistory = getFilteredHistory();
+  const inputItemCount = inputText.split('\n').filter(line => line.trim()).length;
+  const selectedSupplierCount = Object.values(selectedSuppliers).filter(Boolean).length;
 
   return (
     <div className="app-container">
       {/* Top update notification banner */}
       {updateAvailable && (
-        <div style={{
-          background: 'linear-gradient(90deg, #0284c7, #0369a1)',
-          color: '#fff',
-          padding: '0.6rem 1.25rem',
-          textAlign: 'center',
-          fontSize: '0.85rem',
-          fontWeight: 600,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '1rem',
-          position: 'fixed',
-          top: 0, left: 0, right: 0,
-          zIndex: 10000,
-          boxShadow: '0 4px 15px rgba(0,0,0,0.25)'
-        }}>
+        <div className="update-banner">
+          <ShieldCheck size={16} aria-hidden="true" />
           <span>Atualização disponível ({updateAvailable.count} commits). Ela será verificada e aplicada com segurança na próxima abertura.</span>
         </div>
       )}
 
       {/* Sidebar: Logo + History */}
-      <aside className="sidebar" style={{ paddingTop: updateAvailable ? '3.75rem' : '1.5rem' }}>
+      <aside className="sidebar">
         <div className="logo-container">
-          <div className="logo-icon" style={{ background: 'linear-gradient(135deg, #06b6d4, #3b82f6)' }}>WF</div>
-          <div className="logo-text">Wimifarma Cotação</div>
+          <div className="logo-icon" aria-hidden="true"><PackageSearch size={20} /></div>
+          <div>
+            <div className="logo-text">Wimifarma</div>
+            <div className="logo-caption">Cotação inteligente</div>
+          </div>
         </div>
 
-        <h3 className="sidebar-title">Minhas Cotações</h3>
+        <div className="sidebar-section-heading">
+          <History size={14} aria-hidden="true" />
+          <h3 className="sidebar-title">Minhas Cotações</h3>
+        </div>
         
         {/* History Search */}
-        <input
-          type="text"
-          placeholder="Filtrar histórico..."
-          value={historySearchTerm}
-          onChange={(e) => setHistorySearchTerm(e.target.value)}
-          className="search-textarea"
-          style={{ height: '36px', fontSize: '0.8rem', padding: '0.5rem', marginBottom: '1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}
-        />
+        <div className="history-search">
+          <Search size={14} aria-hidden="true" />
+          <input
+            type="text"
+            aria-label="Filtrar histórico"
+            placeholder="Filtrar histórico..."
+            value={historySearchTerm}
+            onChange={(e) => setHistorySearchTerm(e.target.value)}
+          />
+        </div>
 
         {filteredHistory.length === 0 ? (
-          <div style={{ fontSize: '0.8rem', color: '#64748b', textAlign: 'center', marginTop: '1rem' }}>
+          <div className="history-empty">
             Nenhuma cotação encontrada.
           </div>
         ) : (
@@ -906,35 +976,19 @@ function App() {
 
         {/* Self-Learning Popular Searches Panel inside Sidebar */}
         {popularSearches.length > 0 && (
-          <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-            <h4 style={{ color: '#06b6d4', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.5rem', letterSpacing: '0.05em' }}>
-              ⭐ Mais Buscados (Aprende Só)
+          <div className="popular-section">
+            <h4 className="popular-title">
+              <Sparkles size={13} aria-hidden="true" /> Mais buscados
             </h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+            <div className="popular-list">
               {popularSearches.slice(0, 5).map((item, index) => (
                 <button
                   key={index}
                   onClick={() => handleExampleClick(item.query)}
-                  style={{
-                    textAlign: 'left',
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#94a3b8',
-                    fontSize: '0.75rem',
-                    cursor: 'pointer',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    padding: '0.2rem 0',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.color = '#06b6d4'}
-                  onMouseLeave={(e) => e.currentTarget.style.color = '#94a3b8'}
+                  className="popular-item"
                 >
                   <span>{item.query}</span>
-                  <span style={{ fontSize: '0.65rem', opacity: 0.6, background: 'rgba(6,182,212,0.1)', color: '#06b6d4', padding: '0.05rem 0.25rem', borderRadius: '4px' }}>
+                  <span className="popular-count">
                     {item.searchCount}x
                   </span>
                 </button>
@@ -943,55 +997,46 @@ function App() {
           </div>
         )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
+        <div className="sidebar-actions">
           <button 
-            className="btn btn-secondary" 
-            style={{ width: '100%' }}
+            className="btn btn-primary btn-block"
             onClick={handleNewQuoteClick}
           >
-            + Nova Cotação
+            <Plus size={16} aria-hidden="true" /> Nova Cotação
           </button>
           
           <button 
-            className="btn btn-secondary" 
-            style={{ 
-              width: '100%', 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              gap: '0.4rem', 
-              border: isSettingsOpen ? '1px solid #06b6d4' : '1px dashed rgba(255,255,255,0.1)',
-              color: isSettingsOpen ? '#06b6d4' : '#94a3b8'
-            }}
+            className={`btn btn-secondary btn-block ${isSettingsOpen ? 'is-active' : ''}`}
             onClick={() => setIsSettingsOpen(prev => !prev)}
           >
-            ⚙️ {isSettingsOpen ? 'Voltar ao Painel' : 'Configurar Logins'}
+            {isSettingsOpen ? <ArrowLeft size={16} aria-hidden="true" /> : <Settings size={16} aria-hidden="true" />}
+            {isSettingsOpen ? 'Voltar ao Painel' : 'Configurar Logins'}
           </button>
         </div>
       </aside>
 
       {/* Main Panel */}
-      <main className="main-content" style={{ paddingTop: updateAvailable ? '4.75rem' : '1.5rem' }}>
+      <main className="main-content">
         {loading ? (
-          <div className="loading-overlay" style={{ background: 'rgba(11,15,25,0.85)', backdropFilter: 'blur(8px)' }}>
-            <div className="spinner" style={{ borderTopColor: '#06b6d4' }}></div>
-            <h3 style={{ fontWeight: '600', color: '#fff', fontSize: '1.25rem', letterSpacing: '-0.025em' }}>Processando Cotação...</h3>
-            <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '0.25rem' }}>
+          <div className="loading-overlay">
+            <div className="spinner"></div>
+            <h3>Processando Cotação...</h3>
+            <p>
               Pesquisando e calculando melhor preço por unidade de comprimido/embalagem.
             </p>
           </div>
         ) : isSettingsOpen ? (
           /* Distributor Settings Panel */
-          <div className="search-card animate-fade-in" style={{ maxWidth: '800px', width: '100%', margin: '2rem auto', background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(20px)', boxShadow: '0 20px 40px rgba(0,0,0,0.3)', padding: '2.5rem', borderRadius: '16px' }}>
-            <div className="settings-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 className="search-title" style={{ fontSize: '1.65rem', fontWeight: 800, background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.03em', margin: 0 }}>
-                ⚙️ Configurar Logins das Distribuidoras
+          <div className="search-card settings-card animate-fade-in">
+            <div className="settings-header">
+              <h2 className="search-title">
+                <Settings size={21} aria-hidden="true" /> Configurar logins
               </h2>
-              <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={() => setIsSettingsOpen(false)}>
-                Voltar
+              <button className="btn btn-secondary btn-compact" onClick={() => setIsSettingsOpen(false)}>
+                <ArrowLeft size={15} aria-hidden="true" /> Voltar
               </button>
             </div>
-            <p className="search-subtitle" style={{ fontSize: '0.9rem', color: '#64748b', marginBottom: '2rem' }}>
+            <p className="search-subtitle">
               Cadastre suas credenciais de acesso para permitir que o robô faça pesquisas de medicamentos diretamente nos portais oficiais de cada distribuidora de forma segura e autônoma.
             </p>
 
@@ -1008,27 +1053,13 @@ function App() {
                   <button
                     key={sup.id}
                     onClick={() => setSelectedSettingSupplier(sup.id)}
-                    style={{
-                      textAlign: 'left',
-                      padding: '0.6rem 0.8rem',
-                      background: selectedSettingSupplier === sup.id ? 'rgba(6, 182, 212, 0.12)' : 'rgba(255,255,255,0.01)',
-                      border: selectedSettingSupplier === sup.id ? '1px solid #06b6d4' : '1px solid rgba(255,255,255,0.05)',
-                      borderRadius: '8px',
-                      color: selectedSettingSupplier === sup.id ? '#06b6d4' : '#cbd5e1',
-                      fontSize: '0.85rem',
-                      fontWeight: selectedSettingSupplier === sup.id ? 700 : 'normal',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      transition: 'all 0.2s'
-                    }}
+                    className={`settings-supplier-button ${selectedSettingSupplier === sup.id ? 'is-active' : ''}`}
                   >
                     <span>{sup.name}</span>
                     {configuredSuppliers[sup.id] ? (
-                      <span title="Configurado" style={{ color: '#10b981', fontSize: '0.8rem' }}>●</span>
+                      <span title="Configurado" className="configuration-status is-configured"><CheckCircle2 size={14} /></span>
                     ) : (
-                      <span title="Não Configurado" style={{ color: '#64748b', fontSize: '0.8rem' }}>○</span>
+                      <span title="Não configurado" className="configuration-status"><CircleAlert size={14} /></span>
                     )}
                   </button>
                 ))}
@@ -1094,6 +1125,8 @@ function App() {
                     />
                     <button
                       type="button"
+                      aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                      title={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
                       onClick={() => setShowPassword(prev => !prev)}
                       style={{
                         position: 'absolute',
@@ -1107,49 +1140,62 @@ function App() {
                         fontSize: '0.9rem'
                       }}
                     >
-                      {showPassword ? '👁️' : '🙈'}
+                      {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                     </button>
                   </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1.25rem', justifyContent: 'flex-end' }}>
                   <button className="btn btn-secondary" style={{ padding: '0.5rem 1rem' }} onClick={() => loadCredentials(selectedSettingSupplier)}>
-                    Descartar
+                    <RotateCcw size={15} aria-hidden="true" /> Descartar
                   </button>
-                  <button className="btn" style={{ padding: '0.5rem 1rem', background: 'linear-gradient(135deg, #06b6d4, #2563eb)' }} onClick={handleSaveCredentials}>
-                    💾 Salvar Credenciais
+                  <button className="btn btn-primary" style={{ padding: '0.5rem 1rem' }} onClick={handleSaveCredentials}>
+                    <Save size={15} aria-hidden="true" /> Salvar credenciais
                   </button>
                 </div>
               </div>
             </div>
           </div>
         ) : !activeQuote ? (
-          /* Search Input View - Premium Glassmorphic Layout */
-          <div className="search-card animate-fade-in" style={{ maxWidth: '900px', width: '100%', margin: '2rem auto', background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(20px)', boxShadow: '0 20px 40px rgba(0,0,0,0.3)', padding: '2.5rem', borderRadius: '16px' }}>
-            <h2 className="search-title" style={{ fontSize: '1.85rem', fontWeight: 800, background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.03em' }}>
-              Pesquisa de Preços Wimifarma
-            </h2>
-            <p className="search-subtitle" style={{ fontSize: '0.9rem', color: '#64748b', marginBottom: '1.5rem' }}>
-              Digite os medicamentos (um por linha) ou cole códigos EAN. O motor inteligente calcula e seleciona o menor preço unitário com ST.
+          <section className="search-card quote-workspace animate-fade-in">
+            <header className="workspace-header">
+              <div className="workspace-title-row">
+                <div className="workspace-icon" aria-hidden="true"><PackageSearch size={22} /></div>
+                <div>
+                  <span className="eyebrow">Nova cotação</span>
+                  <h2 className="search-title">Pesquisa de preços</h2>
+                </div>
+              </div>
+              <div className="workspace-stats" aria-label="Resumo da pesquisa">
+                <span>{inputItemCount} {inputItemCount === 1 ? 'item' : 'itens'}</span>
+                <span>{selectedSupplierCount} de 4 distribuidoras</span>
+              </div>
+            </header>
+
+            <p className="search-subtitle">
+              Informe um medicamento por linha ou cole códigos EAN para comparar os valores finais com ST.
             </p>
 
-            <div className="textarea-container" style={{ marginBottom: '1.25rem' }}>
+            <div className="textarea-container">
+              <div className="field-heading">
+                <label htmlFor="quote-input">Medicamentos para cotar</label>
+                <span>Um item por linha</span>
+              </div>
               <textarea
+                id="quote-input"
                 className="search-textarea"
                 placeholder="Exemplo:&#10;losartana 50mg 30 comp&#10;omeprazol 20mg capsula 30&#10;7896004719078"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                style={{ minHeight: '220px', fontSize: '0.9rem', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '1rem' }}
               />
             </div>
 
             {/* Clickable example queries */}
-            <div className="example-box" style={{ background: 'rgba(15,23,42,0.3)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '10px', padding: '1.25rem', marginBottom: '1.75rem' }}>
-              <div style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', letterSpacing: '0.05em' }}>
-                <span>💡 EXEMPLOS CLICÁVEIS (Adiciona ao terminal)</span>
-                <span style={{ color: '#06b6d4', textTransform: 'none' }}>Fuzzy Search Ativo (Entende erros de grafia)</span>
+            <div className="example-box">
+              <div className="example-title">
+                <Sparkles size={14} aria-hidden="true" /> Preencher com um exemplo
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div className="example-list">
                 {[
                   'losartana 50mg 30 comp',
                   'losartanna 50mg 60 cpr', // Spelling typo (double n) to test Fuzzy Search!
@@ -1160,64 +1206,51 @@ function App() {
                   <button
                     key={ex}
                     onClick={() => handleExampleClick(ex)}
-                    className="btn btn-secondary"
-                    style={{
-                      padding: '0.4rem 0.75rem',
-                      fontSize: '0.75rem',
-                      borderRadius: '6px',
-                      background: 'rgba(255,255,255,0.03)',
-                      border: '1px solid rgba(255,255,255,0.06)',
-                      cursor: 'pointer',
-                      color: '#94a3b8',
-                      transition: 'all 0.2s'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'rgba(6,182,212,0.06)';
-                      e.currentTarget.style.borderColor = 'rgba(6,182,212,0.2)';
-                      e.currentTarget.style.color = '#06b6d4';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
-                      e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)';
-                      e.currentTarget.style.color = '#94a3b8';
-                    }}
+                    className="example-chip"
                   >
+                    <Plus size={13} aria-hidden="true" />
                     {ex}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="action-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div className="suppliers-checkboxes">
+            <div className="supplier-section">
+              <div className="field-heading">
+                <span>Distribuidoras consultadas</span>
+                <span>Selecione as fontes desta cotação</span>
+              </div>
+              <div className="suppliers-checkboxes" role="group" aria-label="Distribuidoras consultadas">
                 {['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'].map(sup => (
-                  <label key={sup} className="supplier-label" style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
+                  <label key={sup} className="supplier-label">
                     <input
                       type="checkbox"
                       checked={selectedSuppliers[sup]}
                       onChange={() => handleSupplierCheckboxChange(sup)}
                     />
-                    {sup}
+                    <span className="supplier-check"><CheckCircle2 size={15} aria-hidden="true" /></span>
+                    <span>{sup}</span>
                   </label>
                 ))}
               </div>
-
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button className="btn btn-secondary" onClick={handleClearInput}>
-                  Limpar
-                </button>
-                <button className="btn" onClick={handleRunQuote} disabled={!inputText.trim()} style={{ background: 'linear-gradient(135deg, #06b6d4, #2563eb)', boxShadow: '0 4px 15px rgba(6,182,212,0.25)', fontWeight: 700 }}>
-                  🔍 Iniciar Cotação
-                </button>
-              </div>
             </div>
-          </div>
+
+            <div className="action-row">
+              <button className="btn btn-secondary" onClick={handleClearInput} disabled={!inputText}>
+                <Trash2 size={16} aria-hidden="true" /> Limpar
+              </button>
+              <button className="btn btn-primary" onClick={handleRunQuote} disabled={!inputText.trim()}>
+                <Search size={17} aria-hidden="true" /> Pesquisar preços
+              </button>
+            </div>
+          </section>
         ) : (
-          /* Results Dashboard View - Premium Glassmorphic */
-          <div className="animate-fade-in">
-            <div className="results-header" style={{ marginBottom: '2rem' }}>
+          /* Results Dashboard View */
+          <div className="results-view animate-fade-in">
+            <div className="results-header">
               <div className="results-title-group">
-                <h2 style={{ fontSize: '1.75rem', fontWeight: 800, background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.025em' }}>Cotação #{activeQuote.id}</h2>
+                <span className="eyebrow">Resultado consolidado</span>
+                <h2>Cotação #{activeQuote.id}</h2>
                 <div className="results-meta">
                   Realizada em: {new Date(activeQuote.createdAt).toLocaleString('pt-BR')}
                 </div>
@@ -1225,37 +1258,35 @@ function App() {
 
               <div className="results-actions">
                 <button className="btn btn-secondary" onClick={handleNewQuoteClick}>
-                  Nova Cotação
+                  <Plus size={16} aria-hidden="true" /> Nova Cotação
                 </button>
-                <button className="btn" onClick={handleExportExcel} style={{ background: 'linear-gradient(135deg, #059669, #10b981)' }}>
-                  📥 Exportar Planilha (XLSX)
+                <button className="btn btn-success" onClick={handleExportExcel}>
+                  <FileSpreadsheet size={17} aria-hidden="true" /> Exportar XLSX
                 </button>
               </div>
             </div>
 
             {/* Metrics Dashboard Cards */}
-            <div className="recommendations-deck" style={{ gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
-              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.02)', borderRadius: '12px' }}>
-                <div style={{ color: '#64748b', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Total Cotados</div>
-                <div style={{ fontSize: '1.85rem', fontWeight: 850, color: '#fff', marginTop: '0.25rem' }}>{metrics.total}</div>
+            <div className="metrics-grid">
+              <div className="metric-card">
+                <div className="metric-icon"><PackageSearch size={17} aria-hidden="true" /></div>
+                <div><span>Total cotados</span><strong>{metrics.total}</strong></div>
               </div>
-              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(16, 185, 129, 0.15)', background: 'rgba(16, 185, 129, 0.03)', borderRadius: '12px' }}>
-                <div style={{ color: '#10b981', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Com Opção ST</div>
-                <div style={{ fontSize: '1.85rem', fontWeight: 850, color: '#10b981', marginTop: '0.25rem' }}>{metrics.withST}</div>
+              <div className="metric-card metric-success">
+                <div className="metric-icon"><CheckCircle2 size={17} aria-hidden="true" /></div>
+                <div><span>Com opção ST</span><strong>{metrics.withST}</strong></div>
               </div>
-              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(239, 68, 68, 0.12)', background: 'rgba(239, 68, 68, 0.02)', borderRadius: '12px' }}>
-                <div style={{ color: '#f87171', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Sem Opção ST</div>
-                <div style={{ fontSize: '1.85rem', fontWeight: 850, color: '#f87171', marginTop: '0.25rem' }}>{metrics.withoutST}</div>
+              <div className="metric-card metric-danger">
+                <div className="metric-icon"><CircleX size={17} aria-hidden="true" /></div>
+                <div><span>Sem opção ST</span><strong>{metrics.withoutST}</strong></div>
               </div>
-              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(245, 158, 11, 0.15)', background: 'rgba(245, 158, 11, 0.03)', borderRadius: '12px' }}>
-                <div style={{ color: '#f59e0b', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Precisa Revisar</div>
-                <div style={{ fontSize: '1.85rem', fontWeight: 850, color: '#f59e0b', marginTop: '0.25rem' }}>{metrics.needsReview}</div>
+              <div className="metric-card metric-warning">
+                <div className="metric-icon"><CircleAlert size={17} aria-hidden="true" /></div>
+                <div><span>Precisa revisar</span><strong>{metrics.needsReview}</strong></div>
               </div>
-              <div className="recommendation-card" style={{ padding: '1.25rem', border: '1px solid rgba(6, 182, 212, 0.18)', background: 'rgba(6, 182, 212, 0.03)', borderRadius: '12px' }}>
-                <div style={{ color: '#06b6d4', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>Economia Est.</div>
-                <div style={{ fontSize: '1.65rem', fontWeight: 850, color: '#06b6d4', marginTop: '0.25rem' }}>
-                  R$ {metrics.savings.toFixed(2).replace('.', ',')}
-                </div>
+              <div className="metric-card metric-info">
+                <div className="metric-icon"><TrendingDown size={17} aria-hidden="true" /></div>
+                <div><span>Economia estimada</span><strong>R$ {metrics.savings.toFixed(2).replace('.', ',')}</strong></div>
               </div>
             </div>
 
@@ -1263,12 +1294,12 @@ function App() {
             {topRecs.length > 0 && (
               <div className="recommendations-deck" style={{ gap: '1rem', marginBottom: '2rem' }}>
                 {topRecs.slice(0, 3).map((rec, i) => (
-                  <div key={i} className={`recommendation-card ${rec.type === 'second' ? 'secondary' : ''}`} style={{ borderRadius: '12px', padding: '1.5rem' }}>
-                    <div className="recommendation-badge" style={{ background: rec.type === 'best' ? 'linear-gradient(135deg, #06b6d4, #3b82f6)' : 'rgba(255,255,255,0.06)' }}>
+                  <div key={i} className={`recommendation-card ${rec.type === 'second' ? 'secondary' : ''}`}>
+                    <div className={`recommendation-badge ${rec.type === 'best' ? 'is-best' : ''}`}>
                       {rec.type === 'best' ? 'Melhor Preço com ST' : 'Segunda Opção com ST'}
                     </div>
                     <div className="rec-search-name">Busca: "{rec.rawText}"</div>
-                    <div className="rec-product-title" style={{ fontSize: '1.05rem', fontWeight: 750, color: '#fff', marginBottom: '1rem' }}>{rec.supplierProductName}</div>
+                    <div className="rec-product-title">{rec.supplierProductName}</div>
                     
                     <div className="rec-detail-row">
                       <span>Distribuidora:</span>
@@ -1282,9 +1313,9 @@ function App() {
                       <span>Embalagem:</span>
                       <span>{rec.packaging}</span>
                     </div>
-                    <div className="rec-detail-row" style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.05)', alignItems: 'center' }}>
-                      <span>Preço Caixa:</span>
-                      <span className="rec-price" style={{ fontSize: '1.25rem', color: '#06b6d4', fontWeight: 800 }}>
+                    <div className="rec-detail-row rec-price-row">
+                      <span>{getPriceSourceLabel(rec)}</span>
+                      <span className="rec-price">
                         R$ {rec.price.toFixed(2).replace('.', ',')}
                       </span>
                     </div>
@@ -1312,7 +1343,7 @@ function App() {
                   alignItems: 'center',
                   gap: '0.5rem'
                 }}>
-                  <span>🤖</span> Comparativo & Validação de Embalagens (30, 60, 90 cp)
+                  <ShieldCheck size={18} aria-hidden="true" /> Comparativo e validação de embalagens
                 </h3>
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -1354,7 +1385,7 @@ function App() {
                               fontWeight: 650,
                               border: '1px solid rgba(16, 185, 129, 0.25)'
                             }}>
-                              🏆 Melhor Preço: R$ {absBest.price.toFixed(2).replace('.', ',')} ({absBest.source})
+                              Melhor preço: R$ {absBest.price.toFixed(2).replace('.', ',')} ({absBest.source})
                             </span>
                           )}
                         </div>
@@ -1459,7 +1490,7 @@ function App() {
                   alignItems: 'center',
                   gap: '0.5rem'
                 }}>
-                  <span>⚠️</span> Itens com Descrição Insuficiente (Apenas estes não foram cotados)
+                  <CircleAlert size={18} aria-hidden="true" /> Itens com descrição insuficiente
                 </h4>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {activeQuote.items
@@ -1481,7 +1512,7 @@ function App() {
             )}
 
             {/* Filters panel */}
-            <div className="filters-bar" style={{ borderRadius: '10px', padding: '1rem', marginBottom: '1.25rem', border: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.01)' }}>
+            <div className="filters-bar">
               <div className="filter-group">
                 <span className="filter-label">Filtros ST:</span>
                 <label className="supplier-label" style={{ fontSize: '0.8rem' }}>
@@ -1525,6 +1556,7 @@ function App() {
               <div className="filter-group" style={{ marginLeft: 'auto' }}>
                 <span className="filter-label">Distribuidora:</span>
                 <select
+                  className="filter-select"
                   value={filterSupplier}
                   onChange={(e) => setFilterSupplier(e.target.value)}
                   style={{
@@ -1551,8 +1583,8 @@ function App() {
                 Nenhum produto correspondente aos filtros de visualização ativos.
               </div>
             ) : (
-              <div className="table-container" style={{ borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
-                <table className="quote-table" style={{ fontSize: '0.8rem' }}>
+              <div className="table-container">
+                <table className="quote-table">
                   <thead>
                     <tr>
                       <th>Busca</th>
@@ -1560,7 +1592,7 @@ function App() {
                       <th>Produto Encontrado</th>
                       <th>Embalagem</th>
                       <th>Distribuidora</th>
-                      <th>Preço Caixa</th>
+                      <th>Preço final</th>
                       <th>ST</th>
                       <th>Estoque</th>
                       <th>Auditoria</th>
@@ -1571,30 +1603,26 @@ function App() {
                   <tbody>
                     {filteredRows.map((row, index) => (
                       <tr key={index} style={{ opacity: row.reviewStatus === 'REJEITADO' ? 0.45 : 1 }}>
-                        <td className="searched-query-cell">"{row.rawText}"</td>
-                        <td style={{ fontFamily: 'monospace', color: '#94a3b8' }}>{row.ean || '-'}</td>
-                        <td>
+                        <td className="searched-query-cell" data-label="Busca">"{row.rawText}"</td>
+                        <td className="ean-cell" data-label="EAN">{row.ean || '-'}</td>
+                        <td data-label="Produto encontrado">
                           <div className="product-name-cell">{row.supplierProductName}</div>
                           <div style={{ color: '#64748b', fontSize: '0.7rem', marginTop: '0.15rem' }}>
                             {row.laboratory} | {row.presentation} | {row.dosage} {row.notes && <span style={{ color: '#06b6d4' }}>• Obs: "{row.notes}"</span>}
                             {row.auditSummary && <span style={{ color: '#f59e0b' }}> • Auditoria: "{row.auditSummary}"</span>}
                           </div>
                         </td>
-                        <td style={{ color: '#cbd5e1' }}>{row.packaging || `${row.quantity} cp`}</td>
-                        <td>
-                          <span style={{ fontWeight: '500', color: '#e2e8f0' }}>{row.source}</span>
+                        <td data-label="Embalagem">{row.packaging || `${row.quantity} cp`}</td>
+                        <td data-label="Distribuidora">
+                          <span className="supplier-name-cell">{row.source}</span>
                         </td>
-                        <td>
+                        <td data-label="Preço final">
                           <span className={`text-price ${row.isValidOption ? 'highlight' : ''}`}>
                             R$ {row.price.toFixed(2).replace('.', ',')}
                           </span>
-                          {row.source === 'DM Paraná' && (
-                            <div style={{ color: '#94a3b8', fontSize: '0.65rem', marginTop: '0.2rem' }}>
-                              Preço final: R$
-                            </div>
-                          )}
+                          <div className="price-source-label">{getPriceSourceLabel(row)}</div>
                         </td>
-                        <td>
+                        <td data-label="ST">
                           <span className={`badge ${
                             row.stStatus === 'COM_ST' || row.stStatus === 'ST_INCLUSO' || row.stStatus === 'ST_ISENTO' ? 'badge-st-com' :
                             row.stStatus === 'ST_SEPARADO' ? 'badge-status-second' :
@@ -1603,7 +1631,7 @@ function App() {
                             {row.stStatus === 'ST_SEPARADO' ? 'ST SEPARADO' : row.stStatus}
                           </span>
                         </td>
-                        <td>
+                        <td data-label="Estoque">
                           <span style={{
                             color: row.availability === 'disponível' ? '#10b981' : '#ef4444',
                             fontWeight: '600',
@@ -1612,12 +1640,12 @@ function App() {
                             {row.availability}
                           </span>
                         </td>
-                        <td>
+                        <td data-label="Auditoria">
                           <span className={`badge ${getAuditBadgeClass(row)}`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>
                             {row.auditStatus || 'OK'}
                           </span>
                         </td>
-                        <td>
+                        <td data-label="Recomendação">
                           <span className={`badge ${
                             row.recommendationStatus === 'Melhor preço com ST' ? 'badge-status-best' :
                             row.recommendationStatus === 'Segunda opção com ST' ? 'badge-status-second' :
@@ -1629,9 +1657,9 @@ function App() {
                             {row.recommendationStatus}
                           </span>
                         </td>
-                        <td>
-                          <button className="btn btn-secondary" style={{ padding: '0.2rem 0.4rem', fontSize: '0.7rem' }} onClick={() => openEditModal(row)}>
-                            ✏️ Revisar
+                        <td data-label="Ações">
+                          <button className="btn btn-secondary btn-compact" onClick={() => openEditModal(row)}>
+                            <Pencil size={13} aria-hidden="true" /> Revisar
                           </button>
                         </td>
                       </tr>
@@ -1646,29 +1674,10 @@ function App() {
 
       {/* Manual Review Overlay Modal */}
       {editingResult && (
-        <div style={{
-          position: 'fixed',
-          top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0, 0, 0, 0.75)',
-          backdropFilter: 'blur(4px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 99999
-        }}>
-          <div style={{
-            background: '#0f172a',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            borderRadius: '12px',
-            padding: '1.5rem',
-            maxWidth: '500px',
-            width: '100%',
-            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)',
-            maxHeight: '90vh',
-            overflowY: 'auto'
-          }}>
-            <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '0.5rem', color: '#fff' }}>
-              Revisão Manual de Item
+        <div className="modal-overlay" role="presentation">
+          <div ref={reviewModalRef} className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-modal-title" tabIndex={-1}>
+            <h3 id="review-modal-title" className="review-modal-title">
+              <Pencil size={18} aria-hidden="true" /> Revisão manual de item
             </h3>
             <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '1rem' }}>
               Ajuste as propriedades capturadas de <strong>{editingResult.supplierProductName}</strong> ({editingResult.source}).
@@ -1805,8 +1814,8 @@ function App() {
               <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={() => setEditingResult(null)}>
                 Cancelar
               </button>
-              <button className="btn" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={saveManualReview}>
-                Salvar
+              <button className="btn btn-primary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={saveManualReview}>
+                <Save size={14} aria-hidden="true" /> Salvar
               </button>
             </div>
           </div>

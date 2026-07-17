@@ -4,6 +4,22 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ---
 
+## [1.5.0] - 2026-07-17
+
+### Interface
+- **Área de trabalho modernizada:** navegação escura e conteúdo neutro de alto contraste, com hierarquia mais clara para pesquisa, resultados e configurações.
+- **Preço auditável na tela:** cartões e tabela exibem `Unit c/ST`, `Preço NF`, `Preço Final` ou `Preço final: R$` conforme a distribuidora.
+- **Responsividade operacional:** em telas menores, métricas, ações, filtros e distribuidores reorganizam sem rolagem horizontal; a tabela vira cartões rotulados.
+- **Controles consistentes:** comandos usam ícones Lucide, foco visível, estados desabilitados e textos acessíveis sem alterar os fluxos Electron existentes.
+- **Comparativo legível:** grupos de embalagens usam superfícies claras e contraste compatível com o restante do painel.
+
+### Inicialização
+- **Atalho oficial preservado:** `wimi cotacao.bat` continua encaminhando para `cotacao.bat`, que valida Node.js e executa o bootstrap de atualização/dependências.
+
+### Validação
+- Fluxos de pesquisa, configurações e resultados conferidos visualmente em desktop e celular, sem estouro horizontal ou erros no console.
+- `npm test`, `npm run build`, `npm run lint`, `git diff --check` e bootstrap em modo de preparação executados antes da entrega.
+
 ## [1.4.0] - 2026-07-17
 
 ### Adicionado

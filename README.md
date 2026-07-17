@@ -112,3 +112,11 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - Itens sem botão **Comprar** ativo, com `Sem estoque`, `Indisponível` ou `Avise-me`, são ignorados.
 - A paginação avança pelo botão **Próximo** enquanto estiver habilitado, com limite defensivo de dez páginas.
 - Medicamentos combinados são bloqueados quando a busca pede apenas um princípio ativo.
+
+### 6. Interface e conferência do preço
+
+- No uso diário, abra **`wimi cotacao.bat`**. Esse atalho chama `cotacao.bat`, que valida o Node.js e executa o bootstrap seguro de atualização e dependências antes de iniciar o Electron.
+- A pesquisa mostra quantos itens serão cotados e quais distribuidoras estão selecionadas antes de iniciar o robô.
+- Cada resultado exibe a origem exata do valor utilizado: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final` e DM Paraná `Preço final: R$`.
+- Os indicadores de ST, auditoria, estoque e recomendação permanecem visíveis tanto no painel quanto na tabela detalhada.
+- Em telas menores, a tabela vira uma sequência de cartões com os rótulos de cada coluna, sem esconder o preço final ou a origem.

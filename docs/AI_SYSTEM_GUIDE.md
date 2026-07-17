@@ -195,15 +195,14 @@ Operational notes added after the 2026-07-17 live tests:
 
 ## 🎨 UI Architecture & Frontend Flow
 
-The React frontend utilizes a modern dark interface with glassmorphic cards and dynamic transitions:
-- **`currentView` State Switcher:** Routes between three core views:
-  1. `'search'`: Textarea box to enter raw product queries.
-  2. `'results'`: Visual dashboard showing structured comparison tables and metrics.
-  3. `'logs'`: Diagnositc table displaying the database logs.
-- **"Melhor Condição Geral" Card:** Loops through all results to locate the absolute cost-efficient winner:
-  - Selects the option with the lowest `unitPrice` across all queries.
-  - Highlights EAN, packaging unit, total cost, cost per unit, and estimated savings.
-- **Manual Review Interactivity:** Clicking **✏️ Revisar** opens a modal to edit EAN, pricing, ST classification, availability, and notes. Saving triggers a call to `recalculateQuoteItemRecommendations` to re-run the ranking system.
+The React frontend is an operational workspace with a dark navigation rail and a neutral, high-contrast content surface:
+- **View state:** switches among medication search, consolidated results, and supplier credential settings without changing the Electron IPC contracts.
+- **Search workspace:** displays item and supplier counts, one-query-per-line input, quick examples, and explicit supplier selection before starting a live quote.
+- **Result traceability:** the recommendation cards and detail table show the exact accepted field for each supplier: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final`, and DM Paraná `Preço final: R$`.
+- **Responsive table:** below 900 px, every result row becomes a labeled card while preserving EAN, package, distributor, final price source, ST, stock, audit, recommendation, and review action.
+- **Status semantics:** green is reserved for valid ST/recommendations, red for blocked without ST, amber for review, and blue for informational/secondary states.
+- **Icons:** interface commands use `lucide-react`; buttons retain accessible text or labels and visible keyboard focus.
+- **Manual review:** opening `Revisar` keeps the existing edit and recalculation flow through `recalculateQuoteItemRecommendations`.
 
 ---
 
@@ -250,6 +249,7 @@ PG_DATABASE=cotador_st
 `ENABLE_REAL_CONNECTORS=false` is a deterministic mock mode and must be treated as business-rule testing only. It returns catalog fixtures instantly and does not represent live supplier pricing. For pharmacy price quotation, use `ENABLE_REAL_CONNECTORS=true` with saved supplier credentials. When `DATABASE_PATH=local`, SQLite is opened from `data/cotador-st.db`; this is the portable database used for local credentials and quote history.
 
 ### Running Commands
+- **Daily Windows launcher:** `wimi cotacao.bat` (delegates to `cotacao.bat` and the same bootstrap below)
 - **Prepare and Start:** `npm run dev` (Git seguro, dependências e aplicativo)
 - **Preparation Only:** `node scripts/bootstrap.mjs --prepare-only`
 - **Startup Diagnostics:** `node scripts/bootstrap.mjs --diagnose`
