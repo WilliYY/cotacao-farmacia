@@ -9,24 +9,28 @@ Sistema local de cotação de medicamentos em fornecedores com filtragem por Sub
 O sistema roda localmente no computador da farmácia. Certifique-se de possuir o Node.js instalado (Versão LTS sugerida).
 
 1. Clone o repositório ou baixe os arquivos da aplicação.
-2. Na pasta do projeto, instale as dependências executando:
-   ```bash
-   npm install
-   ```
-3. Copie o arquivo `.env.example` para `.env`:
+2. Copie o arquivo `.env.example` para `.env`:
    ```bash
    copy .env.example .env
    ```
+3. Abra `cotacao.bat`. O inicializador verifica uma versão remota segura, instala ou atualiza as dependências necessárias e então abre o aplicativo.
 
 ---
 
 ## 🚀 Como Rodar o Sistema
 
 ### 1. Ambiente de Desenvolvimento
-Para executar a interface do React (Vite) e o Electron concorrentemente com hot reload:
+Para preparar o projeto e executar React (Vite) e Electron concorrentemente:
 ```bash
 npm run dev
 ```
+
+Na abertura, `scripts/bootstrap.mjs`:
+- aplica atualizações Git somente quando a pasta está limpa e a branch rastreia um remoto ou corresponde à branch padrão de `origin`, sempre com `fast-forward`;
+- preserva a versão local quando existem alterações rastreadas, não há referência remota segura ou o remoto está indisponível;
+- executa `npm install` para reconciliar `package-lock.json` e dependências antes de abrir o Electron.
+
+Use `AUTO_UPDATE_ON_STARTUP=false` para desativar a atualização de código. `AUTO_UPDATE_BRANCH` pode indicar a branch remota esperada em uma instalação distribuída. O diagnóstico sem alterações é `node scripts/bootstrap.mjs --diagnose`.
 
 ### 2. Rodar Testes Unitários
 Para rodar a suite de testes unitários local (alimentada pelo runner nativo do Node):
@@ -74,6 +78,10 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - O sistema recalcula automaticamente as recomendações logo após salvar as alterações.
 
 ### 4. Conectores e Segurança dos Portais
-- **Mocks ativados:** Na Fase 2, os conectores de ANB, Profarma e Santa Cruz são simulados localmente para validação segura de regras de negócio.
-- **Toggles de Segurança:** O arquivo `.env` possui chaves de segurança `ENABLE_REAL_CONNECTORS=false` para impedir a execução acidental de scrapers em produção.
+- **Pesquisa operacional somente ao vivo:** Com `ENABLE_REAL_CONNECTORS=true`, toda nova cotação abre os portais/aplicativo, executa uma nova busca e captura preço, estoque e ST naquele momento. Não existe fallback de preço por histórico, H2 ou cache de indisponibilidade.
+- **Mocks somente em testes:** Dados simulados exigem `ENABLE_MOCK_CONNECTORS=true`. Sem uma das duas configurações explícitas, o sistema interrompe a cotação para não apresentar valores fictícios.
+- **Frescor obrigatório:** Resultados reais sem horário de captura ou com mais de cinco minutos são bloqueados e não participam do melhor preço.
+- **Banco local portátil:** Com `DATABASE_PATH=local`, o SQLite fica em `data/cotador-st.db`, junto do projeto, permitindo reaproveitar credenciais e histórico locais.
+- **Histórico não é fonte:** O SQLite serve para reabrir/exportar cotações anteriores e guardar credenciais protegidas; uma nova cotação nunca consulta preços desse banco.
+- **Janelas visíveis:** `SHOW_SCRAPER_WINDOW=true` mantém o navegador do robô visível para login/captcha e conferência visual.
 - **Privacidade Local:** O sistema grava histórico local em banco SQLite (`cotador-st.db`) na pasta de dados do usuário e gera logs limpos em `logs/app.log` sem armazenar dados de cookies, senhas, tokens ou contas de acesso.

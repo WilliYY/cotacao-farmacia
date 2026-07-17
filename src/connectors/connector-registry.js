@@ -24,13 +24,26 @@ const realRegistry = [
 
 logger.info(`Connector Registry loaded. Mock: ${mockRegistry.length} suppliers. Real: ${realRegistry.length} suppliers.`);
 
+export function resolveConnectorMode(environment = process.env) {
+  if (environment.ENABLE_REAL_CONNECTORS === 'true') return 'real';
+  if (environment.ENABLE_MOCK_CONNECTORS === 'true') return 'mock';
+  return 'disabled';
+}
+
+export function getConnectorMode() {
+  return resolveConnectorMode(process.env);
+}
+
 /**
  * Returns instantiated connectors matching active supplier selections.
  * Automatically chooses between Real Scraping or Mock connectors based on environment configuration.
  */
 export function getActiveConnectors(supplierNames) {
-  const enableReal = process.env.ENABLE_REAL_CONNECTORS === 'true';
-  const selectedRegistry = enableReal ? realRegistry : mockRegistry;
+  const mode = getConnectorMode();
+  if (mode === 'disabled') {
+    throw new Error('Conectores reais desativados. A cotacao foi interrompida para evitar precos simulados.');
+  }
+  const selectedRegistry = mode === 'real' ? realRegistry : mockRegistry;
 
   if (!supplierNames || supplierNames.length === 0) {
     return selectedRegistry;

@@ -2,6 +2,7 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
 import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
+import { createLiveUnavailableResult } from './live-result.js';
 
 export class ANBRealConnector extends SupplierConnector {
   constructor() {
@@ -19,11 +20,11 @@ export class ANBRealConnector extends SupplierConnector {
   async searchProduct(parsedQuery) {
     const creds = await getSupplierCredentials(1); // ANB supplierId = 1
     if (!creds || !creds.username || !creds.password) {
-      logger.warn('Real credentials not configured for ANB Farma. Skipping search.');
-      return [];
+      logger.warn('Real credentials not configured for ANB Farma.');
+      return [createLiveUnavailableResult('ANB', parsedQuery, 'credenciais nao configuradas')];
     }
 
-    const searchTerm = parsedQuery.ean || parsedQuery.name;
+    const searchTerm = parsedQuery.ean || [parsedQuery.name, parsedQuery.dosage, parsedQuery.presentation].filter(Boolean).join(' ');
     logger.info(`Initiating autonomous portal search on ANB Farma for: "${searchTerm}"`);
 
     try {
@@ -43,7 +44,7 @@ export class ANBRealConnector extends SupplierConnector {
       }));
     } catch (error) {
       logger.error(`ANB Portal search failed: ${error.message}`);
-      return [];
+      return [createLiveUnavailableResult('ANB', parsedQuery, 'consulta ao portal falhou')];
     }
   }
 }

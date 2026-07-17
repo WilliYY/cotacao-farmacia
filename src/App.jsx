@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-// Browser Mock fallback for window.api when running outside Electron
+// Browser mocks are available only through an explicit development opt-in.
 const mockApi = {
   runQuote: async (rawTextList, activeSuppliers) => {
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -417,7 +417,26 @@ const mockApi = {
   ping: async () => 'pong'
 };
 
-const api = window.api || mockApi;
+const integrationUnavailable = async () => {
+  throw new Error('Integracao Electron indisponivel. A cotacao real nao foi executada.');
+};
+
+const unavailableApi = {
+  runQuote: integrationUnavailable,
+  getQuoteDetails: integrationUnavailable,
+  updateResult: integrationUnavailable,
+  saveSupplierCredentials: integrationUnavailable,
+  exportExcel: integrationUnavailable,
+  getHistory: async () => [],
+  getPopularSearches: async () => [],
+  getSupplierCredentials: async () => null,
+  getAllSupplierCredentials: async () => [],
+  onGitUpdateAvailable: null,
+  ping: integrationUnavailable
+};
+
+const allowUiMocks = import.meta.env.VITE_ENABLE_UI_MOCKS === 'true';
+const api = window.api || (allowUiMocks ? mockApi : unavailableApi);
 
 function App() {
   const [history, setHistory] = useState([]);
@@ -428,7 +447,6 @@ function App() {
   
   // Git updates state
   const [updateAvailable, setUpdateAvailable] = useState(null);
-  const [updating, setUpdating] = useState(false);
 
   // Popular searches self-learning list
   const [popularSearches, setPopularSearches] = useState([]);
@@ -530,7 +548,7 @@ function App() {
           // Pre-populate default URLs for safety
           const defaultUrls = {
             1: 'https://portal.anbfarma.com.br/login',
-            2: 'https://site.profarma.com.br/login',
+            2: 'https://pedido.profarma.com.br/',
             3: 'https://www.santacruz.com.br/login'
           };
           setSettingsUrl(defaultUrls[supplierId] || '');
@@ -580,24 +598,6 @@ function App() {
       alert('Erro ao salvar credenciais.');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleInstallUpdate = async () => {
-    if (!api.installUpdate) {
-      alert('Atualização automática via Git não disponível neste ambiente.');
-      return;
-    }
-    setUpdating(true);
-    try {
-      const res = await api.installUpdate();
-      if (!res.success) {
-        alert(`Erro ao atualizar: ${res.error}`);
-        setUpdating(false);
-      }
-    } catch (err) {
-      alert(`Falha no processo: ${err.message}`);
-      setUpdating(false);
     }
   };
 
@@ -718,6 +718,13 @@ function App() {
     }
   };
 
+  const hasAuditIssue = (row) => row.auditStatus && row.auditStatus !== 'OK';
+  const getAuditBadgeClass = (row) => {
+    if (!hasAuditIssue(row)) return 'badge-status-best';
+    if (row.auditStatus === 'ATENCAO') return 'badge-status-second';
+    return 'badge-status-review';
+  };
+
   // Calculate Summary Metrics
   const getSummaryMetrics = () => {
     if (!activeQuote || !activeQuote.items) {
@@ -734,7 +741,7 @@ function App() {
     items.forEach(item => {
       const results = item.results || [];
       const hasValid = results.some(r => r.isValidOption && r.stStatus !== 'ST_DESCONHECIDO');
-      const hasReview = results.some(r => r.stStatus === 'ST_DESCONHECIDO' || r.recommendationStatus === 'Produto parecido — revisar' || r.reviewStatus === 'PRECISA_REVISAR');
+      const hasReview = results.some(r => r.stStatus === 'ST_DESCONHECIDO' || r.recommendationStatus === 'Produto parecido — revisar' || r.reviewStatus === 'PRECISA_REVISAR' || hasAuditIssue(r));
 
       if (hasValid) {
         withST++;
@@ -848,24 +855,7 @@ function App() {
           zIndex: 10000,
           boxShadow: '0 4px 15px rgba(0,0,0,0.25)'
         }}>
-          <span>🚀 Atualização do Wimifarma Cotação disponível ({updateAvailable.count} commits na branch {updateAvailable.branch})!</span>
-          <button 
-            onClick={handleInstallUpdate} 
-            disabled={updating}
-            className="btn" 
-            style={{ 
-              padding: '0.3rem 0.85rem', 
-              fontSize: '0.75rem', 
-              background: '#0f172a',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 700
-            }}
-          >
-            {updating ? 'Instalando e reiniciando...' : 'Atualizar Agora'}
-          </button>
+          <span>Atualização disponível ({updateAvailable.count} commits). Ela será verificada e aplicada com segurança na próxima abertura.</span>
         </div>
       )}
 
@@ -1569,6 +1559,7 @@ function App() {
                       <th>Preço Caixa</th>
                       <th>ST</th>
                       <th>Estoque</th>
+                      <th>Auditoria</th>
                       <th>Recomendação</th>
                       <th>Ações</th>
                     </tr>
@@ -1582,6 +1573,7 @@ function App() {
                           <div className="product-name-cell">{row.supplierProductName}</div>
                           <div style={{ color: '#64748b', fontSize: '0.7rem', marginTop: '0.15rem' }}>
                             {row.laboratory} | {row.presentation} | {row.dosage} {row.notes && <span style={{ color: '#06b6d4' }}>• Obs: "{row.notes}"</span>}
+                            {row.auditSummary && <span style={{ color: '#f59e0b' }}> • Auditoria: "{row.auditSummary}"</span>}
                           </div>
                         </td>
                         <td style={{ color: '#cbd5e1' }}>{row.packaging || `${row.quantity} cp`}</td>
@@ -1609,6 +1601,11 @@ function App() {
                             fontSize: '0.75rem'
                           }}>
                             {row.availability}
+                          </span>
+                        </td>
+                        <td>
+                          <span className={`badge ${getAuditBadgeClass(row)}`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>
+                            {row.auditStatus || 'OK'}
                           </span>
                         </td>
                         <td>

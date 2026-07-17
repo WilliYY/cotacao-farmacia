@@ -5,6 +5,13 @@ export function generateExcelBuffer(quoteData) {
   logger.info(`Generating Excel workbook for Quote #${quoteData.id}`);
 
   const dateStr = new Date(quoteData.createdAt || Date.now()).toLocaleString('pt-BR');
+  const hasAuditIssue = (res) => res.auditStatus && res.auditStatus !== 'OK';
+  const needsManualReview = (res) => (
+    res.stStatus === 'ST_DESCONHECIDO' ||
+    res.recommendationStatus === 'Produto parecido — revisar' ||
+    res.reviewStatus === 'PRECISA_REVISAR' ||
+    hasAuditIssue(res)
+  );
   
   // 1. Calculate Summary Metrics for the "Resumo" sheet
   let totalSearched = quoteData.items?.length || 0;
@@ -17,7 +24,7 @@ export function generateExcelBuffer(quoteData) {
     quoteData.items.forEach(item => {
       const results = item.results || [];
       const hasValid = results.some(r => r.isValidOption && r.stStatus !== 'ST_DESCONHECIDO');
-      const hasReview = results.some(r => r.stStatus === 'ST_DESCONHECIDO' || r.recommendationStatus === 'Produto parecido — revisar' || r.reviewStatus === 'PRECISA_REVISAR');
+      const hasReview = results.some(r => needsManualReview(r));
 
       if (hasValid) {
         withSTCount++;
@@ -56,7 +63,13 @@ export function generateExcelBuffer(quoteData) {
 
   const mapToExcelRow = (item, res) => {
     let recommendationText = '';
-    if (res.recommendationStatus === 'Melhor preço com ST') {
+    const reasonText = res.ignoreReason || res.auditSummary || res.notes || '-';
+
+    if (res.auditStatus === 'BLOQUEADO') {
+      recommendationText = `Bloqueado pela auditoria: ${res.auditSummary || res.ignoreReason || 'revisar cotação'}.`;
+    } else if (res.auditStatus === 'ATENCAO') {
+      recommendationText = `Alerta da auditoria: ${res.auditSummary || 'revisar cotação'}.`;
+    } else if (res.recommendationStatus === 'Melhor preço com ST') {
       recommendationText = `Comprar na ${res.supplierName || res.source}, menor preço com ST.`;
     } else if (res.recommendationStatus === 'Segunda opção com ST') {
       recommendationText = `Segunda melhor opção com ST.`;
@@ -84,9 +97,11 @@ export function generateExcelBuffer(quoteData) {
       'Preço Caixa': res.price ? `R$ ${res.price.toFixed(2).replace('.', ',')}` : 'R$ 0,00',
       'ST': res.stStatus || '-',
       'Disponibilidade': res.availability || '-',
+      'Auditoria': res.auditStatus || 'OK',
+      'Alertas Auditoria': res.auditSummary || '-',
       'Status Recomendação': res.recommendationStatus || '-',
       'Recomendação': recommendationText,
-      'Motivo/Notas': res.ignoreReason || res.notes || '-',
+      'Motivo/Notas': reasonText,
       'Data/Hora Captura': new Date(res.capturedAt || Date.now()).toLocaleString('pt-BR'),
       'Fonte': res.notes ? `${res.source} (Modificado)` : res.source
     };
@@ -112,6 +127,8 @@ export function generateExcelBuffer(quoteData) {
             'Preço Caixa': excelRow['Preço Caixa'],
             'ST': excelRow['ST'],
             'Disponibilidade': excelRow['Disponibilidade'],
+            'Auditoria': excelRow['Auditoria'],
+            'Alertas Auditoria': excelRow['Alertas Auditoria'],
             'Classificação': excelRow['Status Recomendação'],
             'Recomendação': excelRow['Recomendação']
           });
@@ -123,7 +140,7 @@ export function generateExcelBuffer(quoteData) {
         }
 
         // Precisa Revisar Sheet
-        if (res.stStatus === 'ST_DESCONHECIDO' || res.recommendationStatus === 'Produto parecido — revisar' || res.reviewStatus === 'PRECISA_REVISAR') {
+        if (needsManualReview(res)) {
           reviewRows.push(excelRow);
         }
       });
@@ -141,14 +158,14 @@ export function generateExcelBuffer(quoteData) {
   // Tab 2: Melhores Opções com ST
   const wsBest = XLSX.utils.json_to_sheet(bestSTRows);
   wsBest['!cols'] = [
-    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 25 }, { wch: 45 }
+    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 12 }, { wch: 35 }, { wch: 25 }, { wch: 45 }
   ];
   XLSX.utils.book_append_sheet(workbook, wsBest, 'Melhores ST');
 
   // Tab 3: Todos os Resultados
   const wsAll = XLSX.utils.json_to_sheet(allResultsRows);
   const fullColsWidths = [
-    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 18 }, { wch: 25 }, { wch: 45 }, { wch: 30 }, { wch: 20 }, { wch: 20 }
+    { wch: 25 }, { wch: 18 }, { wch: 35 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 18 }, { wch: 12 }, { wch: 35 }, { wch: 25 }, { wch: 45 }, { wch: 30 }, { wch: 20 }, { wch: 20 }
   ];
   wsAll['!cols'] = fullColsWidths;
   XLSX.utils.book_append_sheet(workbook, wsAll, 'Todos Resultados');

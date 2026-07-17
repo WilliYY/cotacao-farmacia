@@ -140,24 +140,6 @@ app.on('window-all-closed', () => {
   }
 });
 
-// IPC Handler: Install updates pull & npm install
-ipcMain.handle('install-update', async () => {
-  logger.info('Installing Git updates...');
-  return new Promise((resolve) => {
-    exec('git pull && npm install', (err, stdout, stderr) => {
-      if (err) {
-        logger.error(`Update failed: ${err.message}`);
-        resolve({ success: false, error: err.message });
-      } else {
-        logger.info('Update completed. Relaunching...');
-        resolve({ success: true });
-        app.relaunch();
-        app.exit(0);
-      }
-    });
-  });
-});
-
 // IPC Handler: Run Quote Process
 ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
   try {
@@ -298,6 +280,6 @@ function getSupplierIdByName(name) {
     case 'ANB': return 1;
     case 'Profarma': return 2;
     case 'Santa Cruz': return 3;
-    default: return 1;
+    default: return null;
   }
 }

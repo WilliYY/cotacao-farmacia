@@ -22,4 +22,11 @@ Sempre que uma alteração, correção ou melhoria for realizada em qualquer par
 
 Esta regra aplica-se a todos os agentes e assistentes de IA que operarem neste workspace futuramente.
 
+---
+
+## Regra Obrigatória de Entrega Git
+Ao concluir qualquer alteração no projeto, o agente deve tratar validação, documentação, commit e push da branch atual como parte padrão da entrega.
+
+Antes do commit, deve revisar o diff e impedir a inclusão de credenciais, arquivos `.env`, bancos, logs, caches, capturas, dependências binárias de fornecedores ou outros artefatos exclusivos da máquina local. Se o push não puder ser concluído por autenticação, rede ou rejeição do remoto, o agente deve manter o commit local e informar claramente o bloqueio.
+
 

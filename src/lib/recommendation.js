@@ -1,20 +1,20 @@
 import dotenv from 'dotenv';
 import { parseSearchQuery } from './parser.js';
-import { isValidST, getVisualStatusLabel, getSTPriority } from './st-rules.js';
-import { getActiveConnectors } from '../connectors/connector-registry.js';
+import { isValidST, getSTPriority } from './st-rules.js';
+import { AUDIT_STATUS, applyPriceOutlierAudit, auditQuoteResult, getDosageNumber } from './quote-auditor.js';
+import { getActiveConnectors, getConnectorMode } from '../connectors/connector-registry.js';
+import { createLiveUnavailableResult } from '../connectors/real/live-result.js';
 import { logger } from './logger.js';
 
 dotenv.config();
 
-// In-memory cache for queries that are completely unavailable across all suppliers
-const unavailabilityCache = new Map();
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache TTL
+const MAX_LIVE_CAPTURE_AGE_MS = 5 * 60 * 1000;
 
-function getDosageNumber(dosageStr) {
-  if (!dosageStr) return null;
-  // Match numerical value (e.g. 50mg -> 50, 12.5mg -> 12.5)
-  const match = dosageStr.match(/(\d+(?:[.,]\d+)?)/);
-  return match ? parseFloat(match[1].replace(',', '.')) : null;
+export function isFreshLiveCapture(result, now = Date.now(), maxAgeMs = MAX_LIVE_CAPTURE_AGE_MS) {
+  const capturedAt = Date.parse(result?.capturedAt || '');
+  if (!Number.isFinite(capturedAt)) return false;
+  const age = now - capturedAt;
+  return age >= -60_000 && age <= maxAgeMs;
 }
 
 const callWithRetry = async (connector, parsedQuery, retries = 2) => {
@@ -31,6 +31,9 @@ const callWithRetry = async (connector, parsedQuery, retries = 2) => {
     }
   }
   logger.error(`All ${retries + 1} attempts failed for connector ${connector.supplierName}: ${lastErr.message}`);
+  if (getConnectorMode() === 'real') {
+    return [createLiveUnavailableResult(connector.supplierName, parsedQuery, 'falha interna na consulta ao vivo')];
+  }
   return [];
 };
 
@@ -49,43 +52,8 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
     };
   }
 
-  // Check unavailability cache
-  const cacheKey = `${rawText.toLowerCase()}_${activeSuppliers.slice().sort().join(',')}`;
-  if (unavailabilityCache.has(cacheKey)) {
-    const cached = unavailabilityCache.get(cacheKey);
-    if (Date.now() - cached.timestamp < CACHE_TTL_MS) {
-      logger.info(`[CACHE HIT] "${rawText}" is cached as unavailable. Returning early.`);
-      return {
-        parsed: cached.parsed,
-        results: [{
-          supplierProductName: 'Produto indisponível nas distribuidoras pesquisadas (Cache)',
-          laboratory: 'N/A',
-          dosage: cached.parsed.dosage || 'N/A',
-          presentation: cached.parsed.presentation || 'N/A',
-          price: 0,
-          hasST: 0,
-          stStatus: 'SEM_ST',
-          availability: 'sem estoque',
-          isValidOption: false,
-          ignoreReason: 'Não disponível nas distribuidoras',
-          recommendationStatus: 'Não disponível',
-          reviewStatus: 'PENDENTE',
-          notes: 'Nenhum resultado retornado pelas distribuidoras (Cache de 10 min).',
-          confidence: cached.parsed.confidence,
-          capturedAt: new Date(cached.timestamp).toISOString(),
-          source: 'N/A',
-          ean: cached.parsed.ean || null,
-          packaging: 'N/A',
-          quantity: 1,
-          unitPrice: 0
-        }]
-      };
-    } else {
-      unavailabilityCache.delete(cacheKey);
-    }
-  }
-
   const activeConnectors = getActiveConnectors(activeSuppliers);
+  const connectorMode = getConnectorMode();
   const searchPromises = [];
 
   for (const connector of activeConnectors) {
@@ -98,18 +66,10 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
   const allResultsLists = await Promise.all(searchPromises);
   const rawResults = allResultsLists.flat();
 
-  // Populate unavailability cache if no results were found from all suppliers
-  if (rawResults.length === 0) {
-    unavailabilityCache.set(cacheKey, {
-      timestamp: Date.now(),
-      parsed
-    });
-  }
-
   logger.info(`Found ${rawResults.length} raw results across suppliers.`);
 
   // Process results
-  const processedResults = rawResults.map(res => {
+  let processedResults = rawResults.map(res => {
     let isValidOption = false;
     let ignoreReason = '';
     let recStatus = '';
@@ -147,26 +107,34 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
     }
     
     // Confidence overrides
-    const isSimilar = !(presentationMatches && dosageMatches) || parsed.confidenceStatus === 'PRODUTO_PARECIDO_REVISAR';
+    const isSimilar = !(presentationMatches && dosageMatches);
+    const freshCapture = connectorMode !== 'real' || isFreshLiveCapture(res);
 
-    if (!isAvailable) {
+    if (!freshCapture) {
+      ignoreReason = 'Cotação desatualizada ou sem horário de captura';
+      recStatus = 'Cotação desatualizada — consultar novamente';
+    } else if (!isAvailable) {
       ignoreReason = 'Sem estoque';
       recStatus = 'Sem estoque';
+    } else if (res.stStatus === 'SEM_ST') {
+      ignoreReason = 'Sem ST';
+      recStatus = 'Ignorado — sem ST';
     } else if (res.stStatus === 'ST_DESCONHECIDO') {
       ignoreReason = 'Precisa revisar ST';
       recStatus = 'Precisa revisar ST';
     } else if (isSimilar) {
       ignoreReason = 'Mapeamento impreciso — revisar similar';
       recStatus = 'Produto parecido — revisar';
-    } else if (isAvailable) {
+    } else if (stValid) {
       isValidOption = true;
-      if (res.stStatus === 'SEM_ST') {
-        recStatus = 'Sem ST';
-      } else if (res.stStatus === 'ST_SEPARADO') {
+      if (res.stStatus === 'ST_SEPARADO') {
         recStatus = 'ST separado — conferir custo final';
       } else {
         recStatus = 'Válido com ST';
       }
+    } else {
+      ignoreReason = 'Precisa revisar ST';
+      recStatus = 'Precisa revisar ST';
     }
 
     const qty = res.quantity || parsed.quantity || 1;
@@ -192,9 +160,63 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       ean: res.ean || parsed.ean || null,
       packaging: res.packaging || `${qty} ${res.presentation || parsed.presentation || 'unidades'}`,
       quantity: qty,
-      unitPrice: unitPrice
+      unitPrice: unitPrice,
+      debugColumns: res.debugColumns
     };
   });
+
+  processedResults = processedResults.map(res => {
+    const staleLiveCapture = connectorMode === 'real' && !isFreshLiveCapture(res);
+    const audit = staleLiveCapture
+      ? {
+          status: AUDIT_STATUS.BLOCKED,
+          summary: 'Cotação desatualizada ou sem horário de captura',
+          primaryReason: 'Cotação desatualizada',
+          score: 0
+        }
+      : auditQuoteResult(parsed, res);
+    let next = {
+      ...res,
+      auditStatus: audit.status,
+      auditSummary: audit.summary,
+      confidence: Math.min(Number(res.confidence ?? parsed.confidence ?? 1), audit.score)
+    };
+
+    if (audit.summary) {
+      next.notes = next.notes || `Auditoria: ${audit.summary}`;
+    }
+
+    if (audit.status === AUDIT_STATUS.BLOCKED) {
+      let recStatus = 'Precisa revisar cotação';
+      if (audit.primaryReason.includes('estoque')) recStatus = 'Sem estoque';
+      else if (audit.primaryReason.includes('sem ST')) recStatus = 'Ignorado — sem ST';
+      else if (audit.primaryReason.includes('ST')) recStatus = 'Precisa revisar ST';
+      else if (
+        audit.primaryReason.includes('Dosagem') ||
+        audit.primaryReason.includes('Apresentacao') ||
+        audit.primaryReason.includes('Produto encontrado') ||
+        audit.primaryReason.includes('EAN')
+      ) {
+        recStatus = 'Produto parecido — revisar';
+      } else if (audit.primaryReason.includes('Preco')) {
+        recStatus = 'Precisa revisar preço';
+      }
+
+      next = {
+        ...next,
+        isValidOption: false,
+        ignoreReason: audit.primaryReason,
+        recommendationStatus: recStatus,
+        reviewStatus: 'PRECISA_REVISAR'
+      };
+    } else if (audit.status === AUDIT_STATUS.WARNING && next.recommendationStatus === 'Válido com ST') {
+      next.recommendationStatus = 'Válido com alerta — revisar';
+    }
+
+    return next;
+  });
+
+  processedResults = applyPriceOutlierAudit(processedResults);
 
   if (processedResults.length === 0) {
     processedResults.push({
@@ -217,7 +239,9 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       ean: parsed.ean || null,
       packaging: 'N/A',
       quantity: 1,
-      unitPrice: 0
+      unitPrice: 0,
+      auditStatus: AUDIT_STATUS.BLOCKED,
+      auditSummary: 'Nenhum resultado retornado pelas distribuidoras'
     });
   }
 

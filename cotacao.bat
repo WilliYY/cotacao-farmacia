@@ -14,10 +14,15 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [1/2] Verificando e atualizando dependencias locais (npm install)...
-call npm install --no-audit --no-fund
+cd /d "%~dp0"
 
-echo.
-echo [2/2] Iniciando o aplicativo...
+echo Verificando versao, dependencias e iniciando o aplicativo...
 echo =======================================================
 call npm run dev
+
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERRO] Nao foi possivel iniciar o Wimifarma Cotacao.
+    pause
+    exit /b 1
+)

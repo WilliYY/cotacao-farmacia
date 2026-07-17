@@ -5,7 +5,9 @@ import { logger } from './logger.js';
  * Bypasses bot detection by using the app's native Chrome engine.
  */
 export async function scrapePortal(supplierId, loginUrl, username, password, clientCode, searchTerm) {
-  const showWindow = process.env.SHOW_SCRAPER_WINDOW === 'true' || true;
+  const showWindow = process.env.SHOW_SCRAPER_WINDOW !== 'false';
+  const includeDebugColumns = process.env.DEBUG_SCRAPER_COLUMNS === 'true';
+  const scraperTimeoutMs = Number.parseInt(process.env.SCRAPER_TIMEOUT_MS || '300000', 10);
   logger.info(`Launching BrowserWindow scraper for supplier ${supplierId} (${searchTerm})`);
 
   const { BrowserWindow } = await import('electron');
@@ -27,7 +29,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
     let hasResolved = false;
 
-    // Timeout safety guard (5 minutes max)
+    // Timeout safety guard (5 minutes max by default)
     const timeoutId = setTimeout(() => {
       if (!hasResolved) {
         hasResolved = true;
@@ -37,7 +39,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           reject(new Error('Scraping session timed out.'));
         });
       }
-    }, 300000);
+    }, Number.isFinite(scraperTimeoutMs) && scraperTimeoutMs > 0 ? scraperTimeoutMs : 300000);
 
     const saveDebugArtifacts = async (name) => {
       try {
@@ -66,7 +68,15 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
     const cleanup = () => {
       clearTimeout(timeoutId);
       if (win) {
-        win.destroy();
+        try {
+          win.webContents.removeAllListeners('console-message');
+          win.removeAllListeners();
+        } catch {
+          // Best effort cleanup.
+        }
+        if (!win.isDestroyed()) {
+          win.destroy();
+        }
         win = null;
       }
     };
@@ -119,25 +129,47 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           await win.webContents.executeJavaScript(`
             (async () => {
               const wait = ms => new Promise(r => setTimeout(r, ms));
+              const setInputValue = (input, value) => {
+                input.focus();
+                const nativeProto = window.HTMLInputElement && window.HTMLInputElement.prototype;
+                const setter = Object.getOwnPropertyDescriptor(input.constructor.prototype, 'value')?.set ||
+                               (nativeProto && Object.getOwnPropertyDescriptor(nativeProto, 'value')?.set);
+                if (setter) {
+                  setter.call(input, '');
+                  input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+                  setter.call(input, value);
+                } else {
+                  input.value = value;
+                }
+                input.setAttribute('value', value);
+                input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                input.blur();
+              };
               const userInp = document.querySelector('input[type="text"]') || 
                               document.querySelector('input[name*="user"]') || 
+                              document.querySelector('input[name*="login"]') ||
+                              document.querySelector('#email') ||
                               document.querySelector('input[placeholder*="Usuário"]') ||
                               document.querySelector('input[id*="txtUsuario"]') ||
                               document.querySelector('input[id*="Usuario"]');
               const passInp = document.querySelector('input[type="password"]') || 
                               document.querySelector('input[name*="pass"]') ||
+                              document.querySelector('#password') ||
                               document.querySelector('input[id*="txtSenha"]');
 
               if (userInp && passInp) {
-                userInp.value = ${JSON.stringify(username)};
-                userInp.dispatchEvent(new Event('input', { bubbles: true }));
-                userInp.dispatchEvent(new Event('change', { bubbles: true }));
+                setInputValue(userInp, ${JSON.stringify(username)});
 
                 await wait(200);
 
-                passInp.value = ${JSON.stringify(password)};
-                passInp.dispatchEvent(new Event('input', { bubbles: true }));
-                passInp.dispatchEvent(new Event('change', { bubbles: true }));
+                setInputValue(passInp, ${JSON.stringify(password)});
+
+                // Some MUI/Next login pages hydrate after the first fill and clear the field.
+                // A second pass confirms both controlled inputs still hold the intended value.
+                await wait(500);
+                if (!userInp.value) setInputValue(userInp, ${JSON.stringify(username)});
+                if (!passInp.value) setInputValue(passInp, ${JSON.stringify(password)});
 
                 await wait(300);
 
@@ -159,6 +191,89 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           return;
         }
 
+        const loginRejected = injectedLogin && (await win.webContents.executeJavaScript(`
+          (() => {
+            const text = (document.body && document.body.innerText || '')
+              .normalize('NFD')
+              .replace(/[\\u0300-\\u036f]/g, '')
+              .toLowerCase();
+            return text.includes('usuario ou senha invalid') ||
+              text.includes('senha invalida') ||
+              text.includes('login invalido') ||
+              text.includes('acesso negado');
+          })()
+        `).catch(() => false));
+
+        if (loginRejected) {
+          logger.warn('Supplier portal rejected the configured login credentials.');
+          hasResolved = true;
+          clearInterval(pollInterval);
+          saveDebugArtifacts(`login_rejected_supplier_${supplierId}`).finally(() => {
+            cleanup();
+            reject(new Error('Supplier portal rejected the configured login credentials.'));
+          });
+          return;
+        }
+
+        const closedBlockingOverlay = await win.webContents.executeJavaScript(`
+          (() => {
+            const isVisible = (el) => {
+              if (!el) return false;
+              const rect = el.getBoundingClientRect();
+              const style = window.getComputedStyle(el);
+              return rect.width > 0 &&
+                rect.height > 0 &&
+                style.visibility !== 'hidden' &&
+                style.display !== 'none' &&
+                Number(style.opacity || 1) !== 0;
+            };
+
+            const overlay = Array.from(document.querySelectorAll(
+              '[role="dialog"], .mat-dialog-container, .cdk-overlay-pane, .modal, .modal-content, .swal2-popup, .MuiDialog-root'
+            )).find(isVisible);
+
+            if (!overlay) return false;
+
+            const closeCandidates = Array.from(overlay.querySelectorAll(
+              'button, [role="button"], a, mat-icon, .mat-icon, .close, [aria-label], [title]'
+            ));
+
+            const closeEl = closeCandidates.find((el) => {
+              if (!isVisible(el)) return false;
+              const label = [
+                el.innerText,
+                el.textContent,
+                el.getAttribute('aria-label'),
+                el.getAttribute('title'),
+                el.className && String(el.className)
+              ].filter(Boolean).join(' ').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().trim();
+
+              return label === 'x' ||
+                label === '×' ||
+                label === 'close' ||
+                label === 'fechar' ||
+                label.includes(' close') ||
+                label.includes('fechar') ||
+                label.includes('times') ||
+                label.includes('mat-icon') && (label.includes('close') || label.includes('clear'));
+            });
+
+            if (closeEl) {
+              const clickTarget = closeEl.closest('button, [role="button"], a') || closeEl;
+              clickTarget.click();
+              return true;
+            }
+
+            document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape', code: 'Escape' }));
+            return false;
+          })()
+        `).catch(() => false);
+
+        if (closedBlockingOverlay) {
+          logger.info('Closed blocking overlay or modal before continuing search.');
+          return;
+        }
+
         // --- 2. SEARCH & EXTRACTION FLOW ---
         const isSearchPage = pathname.includes('/dashboard') || 
                              pathname.includes('/produtos') || 
@@ -169,16 +284,30 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           const promoState = await win.webContents.executeJavaScript(`
             (() => {
               const promoInp = document.querySelector('#Promo');
-              if (!promoInp) return 'NO_PROMO_FIELD';
-              
-              const valText = promoInp.querySelector('.mat-select-value-text') || promoInp.querySelector('.mat-select-value');
-              const hasValue = valText && valText.innerText.trim() !== '' && !valText.innerText.toLowerCase().includes('selecione');
-              if (hasValue || promoInp.value) return 'PROMO_SELECTED';
-              
-              const option = document.querySelector('mat-option') || document.querySelector('.mat-option');
-              if (option) return 'OVERLAY_OPEN';
-              
-              return 'OVERLAY_CLOSED';
+              if (promoInp) {
+                const valText = promoInp.querySelector('.mat-select-value-text') || promoInp.querySelector('.mat-select-value');
+                const label = [
+                  valText && valText.innerText,
+                  promoInp.value,
+                  promoInp.innerText
+                ].filter(Boolean).join(' ').toLowerCase();
+                const hasValue = label.trim() !== '' && !label.includes('selecione') && !label.includes('escolha');
+                if (hasValue) return 'PROMO_SELECTED';
+
+                const option = document.querySelector('mat-option') || document.querySelector('.mat-option');
+                if (option) return 'OVERLAY_OPEN';
+
+                return 'OVERLAY_CLOSED';
+              }
+
+              const searchInp = document.querySelector('#inputPP') ||
+                                document.querySelector('input[data-placeholder*="Pesquisar"]') ||
+                                document.querySelector('input[placeholder*="Pesquisar"]');
+              if (searchInp && !searchInp.disabled && searchInp.offsetParent !== null) {
+                return 'NO_PROMO_FIELD';
+              }
+
+              return 'NO_PROMO_FIELD';
             })()
           `);
 
@@ -315,12 +444,18 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       if (ean && visitedEans.has(ean)) continue;
                       if (ean) visitedEans.add(ean);
 
-                      const rawPrice = (cols[3] || '').replace('R$', '').replace('.', '').replace(',', '.').trim();
-                      const priceFloat = parseFloat(rawPrice) || 0;
-
-                      const rawUnitST = (cols[7] || '').replace(/R\\$/g, '').replace(/\\./g, '').replace(/,/g, '.').trim();
-                      const unitSTTiers = rawUnitST.split('\\n').map(val => parseFloat(val)).filter(Boolean);
-                      const unitSTFloat = unitSTTiers.length > 0 ? Math.min(...unitSTTiers) : 0;
+                      const parseCurrencyValues = (text) => {
+                        return String(text || '')
+                          .match(/-?\\d{1,3}(?:\\.\\d{3})*,\\d+|-?\\d+(?:[.,]\\d+)?/g)?.map(raw => {
+                            let clean = raw.trim();
+                            if (clean.includes('.') && clean.includes(',')) {
+                              clean = clean.replace(/\\./g, '').replace(',', '.');
+                            } else {
+                              clean = clean.replace(',', '.');
+                            }
+                            return parseFloat(clean);
+                          }).filter(value => Number.isFinite(value) && value > 0) || [];
+                      };
 
                       const stockText = (cols[8] || '').toLowerCase();
                       const isAvailable = !stockText.includes('avise-me') && stockText !== '0' && !stockText.includes('indispon');
@@ -337,20 +472,30 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       const qtyMatch = nameCol.match(/(\\d+)\\s*(cpr|comp|caps|frascos|un|cp|cps|cpr)/i);
                       const quantity = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
-                      const hasST = cols[6] && cols[6] !== '0' && cols[6] !== '-' && cols[6] !== '0,00';
+                      const basePriceValues = parseCurrencyValues(cols[3]);
+                      const stValues = parseCurrencyValues(cols[6]);
+                      const unitWithStValues = parseCurrencyValues(cols[7]);
+
+                      const basePriceFloat = basePriceValues[0] || 0;
+                      const stFloat = stValues[0] || 0;
+                      const unitWithStFloat = unitWithStValues[0] || 0;
+                      const priceWithAddedSt = stFloat > 0 ? basePriceFloat + stFloat : 0;
+                      const finalPriceFloat = unitWithStFloat || priceWithAddedSt || basePriceFloat;
+                      const hasST = stFloat > 0 || unitWithStFloat > 0;
 
                       results.push({
                         supplierProductName: nameCol,
                         laboratory: cols[10] || cols[2] || 'N/A',
                         dosage: dosage,
                         presentation: presentation,
-                        price: priceFloat,
+                        price: Number(finalPriceFloat.toFixed(2)),
                         stStatus: hasST ? 'COM_ST' : 'SEM_ST',
                         availability: isAvailable ? 'disponível' : 'sem estoque',
                         ean: ean,
                         packaging: nameCol,
                         quantity: quantity,
-                        unitPrice: unitSTFloat || (priceFloat / quantity)
+                        unitPrice: Number(finalPriceFloat.toFixed(4)),
+                        debugColumns: ${includeDebugColumns ? 'cols' : 'undefined'}
                       });
                     }
 
@@ -403,8 +548,15 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
                 if (results.length > 0) {
                   logger.info(`Scraping completed successfully. Found ${results.length} items.`);
-                  cleanup();
-                  resolve(results);
+                  const finish = () => {
+                    cleanup();
+                    resolve(results);
+                  };
+                  if (process.env.DEBUG_SCRAPER_COLUMNS === 'true') {
+                    saveDebugArtifacts(`success_supplier_${supplierId}`).finally(finish);
+                  } else {
+                    finish();
+                  }
                 } else {
                   logger.warn('No items found or parsing returned empty list.');
                   saveDebugArtifacts('empty_results').finally(() => {
@@ -429,8 +581,14 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
     win.webContents.on('did-finish-load', runStateMachine);
 
-    win.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
       logger.error(`Page load failed: ${errorDescription} (${errorCode})`);
+      if (isMainFrame && !hasResolved) {
+        hasResolved = true;
+        clearInterval(pollInterval);
+        cleanup();
+        reject(new Error(`Supplier portal page failed to load: ${errorDescription}`));
+      }
     });
 
     win.loadURL(loginUrl);

@@ -3,12 +3,26 @@ import { open } from 'sqlite';
 import path from 'path';
 import fs from 'fs';
 import { logger } from './logger.js';
-import { isValidST, getVisualStatusLabel, getSTPriority } from './st-rules.js';
+import { isValidST, getSTPriority } from './st-rules.js';
 
 let dbInstance = null;
 let isPostgres = false;
 let pgPool = null;
 let sqliteDb = null;
+
+function resolveSqliteDirectory(userDataPath) {
+  const configuredPath = (process.env.DATABASE_PATH || '').trim();
+
+  if (!configuredPath) {
+    return userDataPath || '.';
+  }
+
+  if (configuredPath.toLowerCase() === 'local') {
+    return path.join(process.cwd(), 'data');
+  }
+
+  return path.resolve(configuredPath);
+}
 
 function translateQuery(sql, params) {
   if (!isPostgres) return { sql, params };
@@ -95,7 +109,7 @@ export async function initDatabase(userDataPath) {
   }
 
   if (!isPostgres) {
-    const dbDir = userDataPath || '.';
+    const dbDir = resolveSqliteDirectory(userDataPath);
     if (!fs.existsSync(dbDir) && dbDir !== '.') {
       fs.mkdirSync(dbDir, { recursive: true });
     }
@@ -173,6 +187,8 @@ export async function initDatabase(userDataPath) {
         packaging TEXT,
         quantity INTEGER DEFAULT 1,
         unitPrice REAL,
+        auditStatus TEXT DEFAULT 'OK',
+        auditSummary TEXT,
         FOREIGN KEY(quoteItemId) REFERENCES QuoteItem(id) ON DELETE CASCADE,
         FOREIGN KEY(supplierId) REFERENCES Supplier(id)
       );
@@ -263,6 +279,8 @@ export async function initDatabase(userDataPath) {
         packaging TEXT,
         quantity INTEGER DEFAULT 1,
         unitPrice REAL,
+        auditStatus TEXT DEFAULT 'OK',
+        auditSummary TEXT,
         FOREIGN KEY(quoteItemId) REFERENCES QuoteItem(id) ON DELETE CASCADE,
         FOREIGN KEY(supplierId) REFERENCES Supplier(id)
       );
@@ -298,8 +316,8 @@ export async function initDatabase(userDataPath) {
     let hasReviewStatus = true;
     if (isPostgres) {
       const colCheck = await dbInstance.all(`
-        SELECT column_name 
-        FROM information_schema.columns 
+        SELECT column_name
+        FROM information_schema.columns
         WHERE table_name='quoteresult' AND column_name='reviewstatus'
       `);
       hasReviewStatus = colCheck.length > 0;
@@ -365,6 +383,28 @@ export async function initDatabase(userDataPath) {
         ALTER TABLE QuoteItem ADD COLUMN refinementSuggestion TEXT;
       `);
       logger.info('Vague description database migration completed successfully.');
+    }
+
+    let hasAuditStatus = true;
+    if (isPostgres) {
+      const colCheck = await dbInstance.all(`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name='quoteresult' AND column_name='auditstatus'
+      `);
+      hasAuditStatus = colCheck.length > 0;
+    } else {
+      const resColumns = await dbInstance.all("PRAGMA table_info(QuoteResult)");
+      hasAuditStatus = resColumns.some(c => c.name === 'auditStatus');
+    }
+
+    if (!hasAuditStatus) {
+      logger.info('Migrating tables to quote audit schema...');
+      await dbInstance.exec(`
+        ALTER TABLE QuoteResult ADD COLUMN auditStatus TEXT DEFAULT 'OK';
+        ALTER TABLE QuoteResult ADD COLUMN auditSummary TEXT;
+      `);
+      logger.info('Quote audit database migration completed successfully.');
     }
   } catch (err) {
     logger.error(`Database migration checking failed: ${err.message}`);
@@ -469,8 +509,9 @@ export async function saveQuoteResult(result) {
     `INSERT INTO QuoteResult (
       quoteItemId, supplierId, supplierProductName, laboratory, dosage, presentation,
       price, hasST, stStatus, availability, isValidOption, ignoreReason, recommendationStatus, 
-      reviewStatus, notes, confidence, capturedAt, source, ean, packaging, quantity, unitPrice
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      reviewStatus, notes, confidence, capturedAt, source, ean, packaging, quantity, unitPrice,
+      auditStatus, auditSummary
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     result.quoteItemId,
     result.supplierId,
     result.supplierProductName,
@@ -492,7 +533,9 @@ export async function saveQuoteResult(result) {
     result.ean || null,
     result.packaging || null,
     qty,
-    unitPrice
+    unitPrice,
+    result.auditStatus || 'OK',
+    result.auditSummary || null
   );
 }
 
@@ -507,9 +550,9 @@ export async function getQuoteDetails(quoteId) {
   const items = await dbInstance.all('SELECT * FROM QuoteItem WHERE quoteId = ?', quoteId);
   for (const item of items) {
     const results = await dbInstance.all(`
-      SELECT qr.*, s.name as supplierName 
+      SELECT qr.*, COALESCE(s.name, qr.source, 'N/A') as supplierName
       FROM QuoteResult qr
-      JOIN Supplier s ON qr.supplierId = s.id
+      LEFT JOIN Supplier s ON qr.supplierId = s.id
       WHERE qr.quoteItemId = ?
     `, item.id);
     item.results = results;
@@ -560,13 +603,21 @@ export async function recalculateQuoteItemRecommendations(quoteItemId) {
     let ignoreReason = '';
     let recStatus = '';
 
-    const isAvailable = res.availability === 'disponível';
+    const normalizedAvailability = String(res.availability || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    const isAvailable = normalizedAvailability === 'disponivel';
     const isApproved = res.reviewStatus !== 'REJEITADO';
+    const auditBlocked = res.auditStatus === 'BLOQUEADO' && res.reviewStatus !== 'APROVADO';
     const stValid = isValidST(res.stStatus);
 
     if (res.reviewStatus === 'REJEITADO') {
       ignoreReason = 'Rejeitado pelo usuário';
       recStatus = 'Ignorado — rejeitado';
+    } else if (auditBlocked) {
+      ignoreReason = res.auditSummary || 'Bloqueado pela auditoria';
+      recStatus = 'Precisa revisar cotação';
     } else if (!isAvailable) {
       ignoreReason = 'Sem estoque';
       recStatus = 'Sem estoque';
@@ -667,7 +718,11 @@ async function getSafeStorage() {
     try {
       const electron = await import('electron');
       if (electron.safeStorage && electron.safeStorage.isEncryptionAvailable()) {
-        safeStorageInstance = electron.safeStorage;
+        safeStorageInstance = {
+          encryptString: (str) => electron.safeStorage.encryptString(str),
+          decryptString: (buf) => electron.safeStorage.decryptString(buf),
+          storageMode: 'dpapi'
+        };
       }
     } catch (e) {
       // Bypassed (e.g. running in terminal testing context)
@@ -676,16 +731,48 @@ async function getSafeStorage() {
   if (!safeStorageInstance) {
     safeStorageInstance = {
       encryptString: (str) => Buffer.from(str, 'utf8'),
-      decryptString: (buf) => buf.toString('utf8')
+      decryptString: (buf) => buf.toString('utf8'),
+      storageMode: 'plain'
     };
   }
   return safeStorageInstance;
 }
 
+function decryptLegacyPlainPassword(value) {
+  try {
+    const decoded = Buffer.from(value, 'base64').toString('utf8');
+    return decoded || value;
+  } catch {
+    return value;
+  }
+}
+
+async function decryptStoredPassword(value) {
+  if (!value) return value;
+
+  if (value.startsWith('plain:')) {
+    return decryptLegacyPlainPassword(value.slice('plain:'.length));
+  }
+
+  const storage = await getSafeStorage();
+
+  if (value.startsWith('dpapi:')) {
+    const encryptedBuffer = Buffer.from(value.slice('dpapi:'.length), 'base64');
+    return storage.decryptString(encryptedBuffer);
+  }
+
+  try {
+    const encryptedBuffer = Buffer.from(value, 'base64');
+    return storage.decryptString(encryptedBuffer);
+  } catch {
+    return decryptLegacyPlainPassword(value);
+  }
+}
+
 export async function saveSupplierCredentials(supplierId, url, username, password, clientCode) {
   if (!dbInstance) return;
   const storage = await getSafeStorage();
-  const encryptedPassword = storage.encryptString(password).toString('base64');
+  const encryptedPassword = `${storage.storageMode}:${storage.encryptString(password).toString('base64')}`;
   await dbInstance.run(
     `INSERT INTO SupplierCredentials (supplierId, url, username, password, clientCode) 
      VALUES (?, ?, ?, ?, ?)
@@ -705,9 +792,7 @@ export async function getSupplierCredentials(supplierId) {
   if (!row) return null;
   if (row.password) {
     try {
-      const storage = await getSafeStorage();
-      const encryptedBuffer = Buffer.from(row.password, 'base64');
-      row.password = storage.decryptString(encryptedBuffer);
+      row.password = await decryptStoredPassword(row.password);
     } catch (err) {
       // Bypassed if key changed or incompatible context
     }
@@ -718,12 +803,10 @@ export async function getSupplierCredentials(supplierId) {
 export async function getAllSupplierCredentials() {
   if (!dbInstance) return [];
   const rows = await dbInstance.all('SELECT * FROM SupplierCredentials');
-  const storage = await getSafeStorage();
   for (const row of rows) {
     if (row.password) {
       try {
-        const encryptedBuffer = Buffer.from(row.password, 'base64');
-        row.password = storage.decryptString(encryptedBuffer);
+        row.password = await decryptStoredPassword(row.password);
       } catch (err) {
         // Bypassed
       }
