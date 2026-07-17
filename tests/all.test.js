@@ -81,6 +81,26 @@ test('Parser Utility - EAN, Quantities and Presentations', async (t) => {
     assert.strictEqual(creamRes.dosage, '20g');
     assert.strictEqual(creamRes.presentation, 'creme');
   });
+
+  await t.test('Expands safe medication abbreviations before supplier searches', () => {
+    const res = parseSearchQuery('hidrocloro 25mg 30 comp');
+    assert.strictEqual(res.name, 'hidroclorotiazida');
+    assert.deepStrictEqual(res.activeIngredients, ['hidroclorotiazida']);
+    assert.strictEqual(res.isCombination, false);
+  });
+
+  await t.test('Recognizes associated ingredients without requiring a plus sign', () => {
+    const res = parseSearchQuery('olmesartana hidrocloro 20mg 30 comp');
+    assert.strictEqual(res.name, 'olmesartana hidroclorotiazida');
+    assert.deepStrictEqual(res.activeIngredients, ['hidroclorotiazida', 'olmesartana']);
+    assert.strictEqual(res.isCombination, true);
+  });
+
+  await t.test('Normalizes soro fisiologico to its pharmaceutical solution name once', () => {
+    const res = parseSearchQuery('soro fisiologico 0,9% 500ml');
+    assert.strictEqual(res.name, 'cloreto de sodio 0.9%');
+    assert.deepStrictEqual(res.activeIngredients, ['cloreto de sodio']);
+  });
 });
 
 test('Parser Utility - Levenshtein and Fuzzy Matching', async (t) => {
@@ -97,6 +117,21 @@ test('Parser Utility - Levenshtein and Fuzzy Matching', async (t) => {
     assert.strictEqual(fuzzyMatch('losarta', 'Losartana Potássica 50mg'), true);
     assert.strictEqual(fuzzyMatch('omeprassol', 'Omeprazol 20mg caps'), true);
     assert.strictEqual(fuzzyMatch('paracetamol', 'Dipirona 500mg comp'), false);
+  });
+
+  await t.test('Matches associated ingredients in either order', () => {
+    assert.strictEqual(
+      fuzzyMatch('hidrocloro olmesartana', 'Olmesartana + Hidroclorotiazida 20/12,5mg'),
+      true
+    );
+    assert.strictEqual(
+      fuzzyMatch('olmesartana hidroclorotiazida', 'Hidroclorotiazida Olmesartana 12,5/20mg'),
+      true
+    );
+  });
+
+  await t.test('Does not expand unsafe short prefixes', () => {
+    assert.strictEqual(fuzzyMatch('hidro', 'Hidroclorotiazida 25mg'), false);
   });
 });
 
@@ -298,6 +333,16 @@ test('Recommendation Engine - Pharmacy Safety Rules', async (t) => {
     assert.strictEqual(bestRecommended.dosage, '50mg');
   });
 
+  await t.test('Uses the canonical medication name end to end for an abbreviated search', async () => {
+    const quote = await processQuoteQuery('hidrocloro 25mg 30 comp');
+    const bestRecommended = quote.results.find(r => r.isValidOption);
+
+    assert.strictEqual(quote.parsed.name, 'hidroclorotiazida');
+    assert.ok(bestRecommended);
+    assert.ok(bestRecommended.source.startsWith('DM'));
+    assert.strictEqual(bestRecommended.supplierProductName, 'Gen Hidroclorotiazida 25mg 30cpr');
+  });
+
   await t.test('Returns a structured unavailable row when no supplier has the product', async () => {
     const quote = await processQuoteQuery('produto inexistente teste 123mg comp');
 
@@ -377,6 +422,94 @@ test('Quote Auditor - Result Integrity Checks', async (t) => {
     });
     assert.strictEqual(audit.status, AUDIT_STATUS.BLOCKED);
     assert.match(audit.summary, /Produto combinado/);
+  });
+
+  await t.test('Approves an association in either order and without a plus sign', () => {
+    const associationResult = {
+      source: 'DM Parana',
+      supplierProductName: 'Olmesartana + Hidroclorotiazida 20/12,5mg 30cpr',
+      dosage: '20mg',
+      presentation: 'comprimido',
+      price: 18.40,
+      stStatus: 'COM_ST',
+      availability: 'disponivel',
+      ean: '7890000000000',
+      quantity: 30
+    };
+
+    for (const query of [
+      'hidrocloro olmesartana 20mg 30 comp',
+      'olmesartana hidroclorotiazida 20mg 30 comp'
+    ]) {
+      const audit = auditQuoteResult(parseSearchQuery(query), associationResult);
+      assert.strictEqual(audit.status, AUDIT_STATUS.OK, `${query}: ${audit.summary}`);
+    }
+  });
+
+  await t.test('Blocks an association with an extra active ingredient', () => {
+    const parsed = parseSearchQuery('olmesartana hidrocloro 20mg 30 comp');
+    const audit = auditQuoteResult(parsed, {
+      source: 'DM Parana',
+      supplierProductName: 'Olmesartana + Hidroclorotiazida + Amlodipino 20mg 30cpr',
+      dosage: '20mg',
+      presentation: 'comprimido',
+      price: 21.40,
+      stStatus: 'COM_ST',
+      availability: 'disponivel',
+      ean: '7890000000004',
+      quantity: 30
+    });
+    assert.strictEqual(audit.status, AUDIT_STATUS.BLOCKED);
+    assert.match(audit.summary, /Associacao encontrada nao confere/);
+  });
+
+  await t.test('Treats xarope and suspensao oral as contextual equivalents', () => {
+    const parsed = parseSearchQuery('ambroxol 15mg/5ml xarope');
+    const audit = auditQuoteResult(parsed, {
+      source: 'ANB',
+      supplierProductName: 'Ambroxol 15mg/5ml Suspensao Oral',
+      dosage: '15mg/5ml',
+      presentation: 'suspensao',
+      price: 8.90,
+      stStatus: 'COM_ST',
+      availability: 'disponivel',
+      ean: '7890000000001',
+      quantity: 1
+    });
+    assert.strictEqual(audit.status, AUDIT_STATUS.OK, audit.summary);
+  });
+
+  await t.test('Does not equate xarope with an ophthalmic solution', () => {
+    const parsed = parseSearchQuery('ambroxol 15mg xarope');
+    const audit = auditQuoteResult(parsed, {
+      source: 'ANB',
+      supplierProductName: 'Ambroxol 15mg Solucao Oftalmica',
+      dosage: '15mg',
+      presentation: 'solucao',
+      price: 8.90,
+      stStatus: 'COM_ST',
+      availability: 'disponivel',
+      ean: '7890000000002',
+      quantity: 1
+    });
+    assert.strictEqual(audit.status, AUDIT_STATUS.BLOCKED);
+    assert.match(audit.summary, /Apresentacao encontrada nao confere/);
+  });
+
+  await t.test('Matches soro fisiologico with solucao fisiologica', () => {
+    const parsed = parseSearchQuery('soro fisiologico 0,9% 500ml');
+    const audit = auditQuoteResult(parsed, {
+      source: 'Santa Cruz',
+      supplierProductName: 'Solucao Fisiologica 0,9% 500ml',
+      dosage: '500ml',
+      presentation: 'solucao',
+      price: 6.50,
+      stStatus: 'COM_ST',
+      availability: 'disponivel',
+      ean: '7890000000003',
+      quantity: 1
+    });
+    assert.strictEqual(audit.status, AUDIT_STATUS.OK, audit.summary);
   });
 
   await t.test('Keeps recommendations distinct for equal names with different EANs', () => {

@@ -66,6 +66,15 @@ O usuário insere linhas de texto simples (ex: `dipirona comprimido 500mg`). O p
 - **Apresentação** (comprimido, capsula, gotas, suspensao, xarope)
 - **Nível de confiança:** Caso dosagem ou apresentação estejam ausentes, o sistema sinaliza como `PRODUTO_PARECIDO_REVISAR`.
 
+### 1.1 Contexto Farmaceutico
+Antes de abrir cada fornecedor, a descricao recebe uma normalizacao compartilhada:
+- Abreviacoes seguras e prefixos unicos com pelo menos seis letras sao expandidos. Exemplo: `hidrocloro` e `hctz` viram `hidroclorotiazida`.
+- Associacoes sao comparadas por conjunto de principios ativos, em qualquer ordem e com ou sem `+`. Exemplo: `hidrocloro olmesartana` confere com `olmesartana + hidroclorotiazida`.
+- Uma busca com apenas um principio ativo continua bloqueando medicamentos associados, evitando compra automatica de outra composicao.
+- `xarope` e `suspensao oral` sao equivalentes no contexto oral. Solucoes oftalmicas, injetaveis, nasais e otologicas nao entram nessa equivalencia.
+- `soro fisiologico` e `solucao fisiologica` sao normalizados para `cloreto de sodio`, permitindo localizar a mesma descricao comercial.
+- Prefixos curtos ou ambiguos, como `hidro`, nao sao expandidos automaticamente.
+
 ### 2. Regra de ST (Fase 2)
 O sistema trabalha apenas com produtos que possuem Substituição Tributária. Os retornos são divididos em:
 - **COM_ST** / **ST_INCLUSO**: Opções válidas. Podem ser recomendadas diretamente.

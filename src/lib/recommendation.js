@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import { parseSearchQuery } from './parser.js';
+import { presentationsMatch } from './pharmaceutical-context.js';
 import { isValidST, getSTPriority } from './st-rules.js';
 import { AUDIT_STATUS, applyPriceOutlierAudit, auditQuoteResult, getDosageNumber } from './quote-auditor.js';
 import { getActiveConnectors, getConnectorMode } from '../connectors/connector-registry.js';
@@ -88,16 +89,11 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
     const resPresentation = res.presentation || '';
     const resDosage = res.dosage || '';
 
-    // Liquid presentations mapping (gotas, suspensao, xarope, liquido, solucao, spray)
-    const liquidKeywords = ['gotas', 'suspensao', 'xarope', 'liquido', 'solucao', 'spray', 'gts', 'susp', 'sol', 'xpe', 'oral'];
-    const isQueryLiquid = parsed.presentation && liquidKeywords.some(kw => parsed.presentation.toLowerCase().includes(kw));
-    const isResultLiquid = resPresentation && liquidKeywords.some(kw => resPresentation.toLowerCase().includes(kw));
-
     // Verify if presentation and dosage match search criteria
-    let presentationMatches = !parsed.presentation || resPresentation.toLowerCase().includes(parsed.presentation.toLowerCase()) || parsed.presentation.toLowerCase().includes(resPresentation.toLowerCase());
-    if (isQueryLiquid && isResultLiquid) {
-      presentationMatches = true;
-    }
+    const presentationMatchesResult = presentationsMatch(parsed.presentation, resPresentation, {
+      queryText: parsed.originalTerms || parsed.name,
+      resultText: res.supplierProductName || res.name || ''
+    });
 
     let dosageMatches = false;
     if (!parsed.dosage) {
@@ -114,7 +110,7 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
     }
     
     // Confidence overrides
-    const isSimilar = !(presentationMatches && dosageMatches);
+    const isSimilar = !(presentationMatchesResult && dosageMatches);
     const freshCapture = connectorMode !== 'real' || isFreshLiveCapture(res);
 
     if (!freshCapture) {
@@ -205,6 +201,8 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
         audit.primaryReason.includes('Dosagem') ||
         audit.primaryReason.includes('Apresentacao') ||
         audit.primaryReason.includes('Produto encontrado') ||
+        audit.primaryReason.includes('Produto combinado') ||
+        audit.primaryReason.includes('Associacao') ||
         audit.primaryReason.includes('EAN')
       ) {
         recStatus = 'Produto parecido — revisar';

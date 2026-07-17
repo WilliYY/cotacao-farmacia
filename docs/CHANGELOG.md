@@ -4,6 +4,23 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ---
 
+## [1.4.0] - 2026-07-17
+
+### Adicionado
+- **Contexto farmaceutico compartilhado:** novo modulo `pharmaceutical-context.js` centraliza nomes canonicos, principios ativos, associacoes e equivalencias de apresentacao usados pelo parser, recomendador e auditor.
+- **Abreviacoes seguras:** `hidrocloro`/`hctz` e prefixos unicos com pelo menos seis letras sao expandidos antes da pesquisa ao vivo, permitindo que os portais recebam o nome completo.
+- **Associacoes sem formato rigido:** dois principios ativos sao reconhecidos em qualquer ordem, com ou sem `+`, e comparados como conjunto.
+- **Sinonimos de apresentacao:** `xarope` confere com `suspensao oral`; `soro fisiologico` e `solucao fisiologica` convergem para `cloreto de sodio`.
+
+### Seguranca
+- Uma consulta de principio ativo unico continua bloqueando resultados combinados, inclusive quando o fornecedor omite o sinal `+`.
+- Prefixos curtos ou ambiguos nao sao expandidos automaticamente.
+- A equivalencia de liquidos nao aceita solucoes oftalmicas, injetaveis, nasais ou otologicas como xarope.
+
+### Validacao
+- `npm test`: 57/57 testes aprovados, incluindo fluxo completo de `hidrocloro`, associacao invertida sem `+`, bloqueio de terceiro principio ativo, xarope/suspensao, soro/solucao e controles negativos.
+- `npm run build` e `npm run lint` concluidos sem erro bloqueante.
+
 ## [1.3.0] - 2026-07-17
 
 ### Adicionado

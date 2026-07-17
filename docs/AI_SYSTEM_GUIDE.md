@@ -125,6 +125,14 @@ Extracts structured terms from unstructured text lines using regular expressions
 - **Quantity Capture:** Extracts package size/count (e.g., "30 comp" $\rightarrow$ quantity `30`).
 - **Confidence Rating:** Emits `ALTA` status if both dosage and presentation are verified; otherwise emits `PRODUTO_PARECIDO_REVISAR`.
 
+#### Pharmaceutical Context (`pharmaceutical-context.js`)
+- Expands controlled aliases and unique active-ingredient prefixes with a minimum of six characters before a live supplier search. Explicit established aliases such as `hctz` are supported separately.
+- Canonicalizes `soro fisiologico` and `solucao fisiologica` as `cloreto de sodio`.
+- Extracts known active ingredients and compares combinations as order-independent sets, so `hidrocloro olmesartana` matches `olmesartana + hidroclorotiazida` without relying on the plus sign.
+- Keeps the single-ingredient safety gate: a supplier combination is blocked unless the query requests the complete association.
+- Treats `xarope` and `suspensao oral` as equivalent while excluding ophthalmic, injectable, nasal, otologic, and other non-oral solutions.
+- The same helpers are used by the parser, recommendation pre-check, and final quote auditor to prevent contradictory decisions.
+
 ### 2. Substituição Tributária (ST) Rules Engine (`st-rules.js`)
 Classifies tax conditions into four operational categories:
 
@@ -259,13 +267,14 @@ PG_DATABASE=cotador_st
 ### Test Coverage Focus
 The Node test suite validates the high-risk pharmacy purchase paths:
 - Parser extraction for EAN, dosage, quantity, presentation, fuzzy names, and vague-query refinement.
+- Pharmaceutical context for safe abbreviations, order-independent associations, oral-liquid equivalence, physiological-solution aliases, and unsafe-short-prefix rejection.
 - ST safety rules, including the guarantee that `SEM_ST` cannot become a best recommendation.
 - Numerical dosage mismatch protection to avoid purchasing the wrong strength.
 - Structured unavailable rows when suppliers return no matches.
 - SQLite quote persistence plus manual review recalculation.
 - XLSX export workbook structure and best/ignored sheet routing.
 - Startup update safety for disabled updates, dirty worktrees, missing upstreams, and clean tracked repositories.
-- Current validation: `npm test` 35/35, `npm run build` approved, and `npm run lint` without blocking errors.
+- Current validation: `npm test` 57/57, `npm run build` approved, and `npm run lint` without blocking errors.
 
 ### Delivery Workflow
 - Every completed project change includes synchronized documentation, executable validation, a scoped Git commit, and a push of the current branch by default.

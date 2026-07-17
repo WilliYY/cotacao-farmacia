@@ -1,3 +1,13 @@
+import {
+  canonicalizeMedicationName,
+  expandMedicationAliases,
+  extractActiveIngredients,
+  isCombinationRequest,
+  normalizePharmaceuticalText
+} from './pharmaceutical-context.js';
+
+const MIN_SAFE_FUZZY_LENGTH = 6;
+
 const SYNONYMS = {
   comp: 'comprimido',
   cpr: 'comprimido',
@@ -89,13 +99,15 @@ export function parseSearchQuery(rawText) {
       originalTerms: '', 
       quantity: 1,
       ean: '',
+      activeIngredients: [],
+      isCombination: false,
       confidence: 0,
       confidenceStatus: 'PRODUTO_PARECIDO_REVISAR',
       refinementSuggestion: ''
     };
   }
 
-  const cleaned = rawText.trim().toLowerCase();
+  const cleaned = expandMedicationAliases(rawText);
   
   // 1. Extract EAN (usually 13 digits) and validate check digit
   const eanMatch = cleaned.match(/\b(\d{13})\b/);
@@ -140,7 +152,7 @@ export function parseSearchQuery(rawText) {
   if (!presentation) {
     const words = cleaned.split(/\s+/);
     for (const word of words) {
-      const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '');
+      const cleanWord = normalizePharmaceuticalText(word).replace(/[+/.%]/g, '');
       if (SYNONYMS[cleanWord]) {
         presentation = SYNONYMS[cleanWord];
         break;
@@ -156,7 +168,7 @@ export function parseSearchQuery(rawText) {
   const qtyToken = qtyMatch ? qtyMatch[0] : '';
   
   for (const word of words) {
-    const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '');
+    const cleanWord = normalizePharmaceuticalText(word).replace(/[+/.%]/g, '');
     const isEan = ean && word.includes(ean);
     const isDosageWord = (dosageStr && (word.includes(dosageStr) || word.includes(dosageNum)));
     
@@ -173,9 +185,9 @@ export function parseSearchQuery(rawText) {
     }
   }
 
-  let name = nameWords.join(' ').trim();
+  let name = canonicalizeMedicationName(nameWords.join(' ').trim());
   if (!name && words.length > 0) {
-    name = words[0];
+    name = canonicalizeMedicationName(words[0]);
   }
 
   // Calculate confidence and refinement suggestions
@@ -213,6 +225,8 @@ export function parseSearchQuery(rawText) {
     quantity,
     ean,
     originalTerms: rawText,
+    activeIngredients: extractActiveIngredients(name),
+    isCombination: isCombinationRequest(rawText),
     confidence,
     confidenceStatus,
     refinementSuggestion
@@ -239,11 +253,25 @@ export function levenshteinDistance(a, b) {
 }
 
 export function fuzzyMatch(query, target) {
-  const q = query.trim().toLowerCase();
-  const t = target.trim().toLowerCase();
-  if (t.includes(q) || q.includes(t)) return true;
+  const q = canonicalizeMedicationName(query);
+  const t = canonicalizeMedicationName(target);
+  if (!q || !t) return false;
+
+  const queryIngredients = extractActiveIngredients(q);
+  if (queryIngredients.length > 0) {
+    const targetIngredients = extractActiveIngredients(t);
+    return queryIngredients.every(ingredient => targetIngredients.includes(ingredient));
+  }
+
+  if (q === t) return true;
+  if ((t.includes(q) && q.length >= MIN_SAFE_FUZZY_LENGTH) ||
+      (q.includes(t) && t.length >= MIN_SAFE_FUZZY_LENGTH)) {
+    return true;
+  }
+
+  if (q.length < MIN_SAFE_FUZZY_LENGTH) return false;
   
-  const words = t.split(/\s+/).map(w => w.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, ''));
+  const words = t.split(/\s+/).map(w => normalizePharmaceuticalText(w).replace(/[+/.%]/g, ''));
   const threshold = Math.max(2, Math.floor(q.length * 0.35));
   
   for (const word of words) {

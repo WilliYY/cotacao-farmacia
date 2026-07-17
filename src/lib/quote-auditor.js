@@ -1,4 +1,9 @@
 import { fuzzyMatch } from './parser.js';
+import {
+  combinationMatches,
+  normalizePharmaceuticalText,
+  presentationsMatch
+} from './pharmaceutical-context.js';
 import { isValidST } from './st-rules.js';
 
 export const AUDIT_STATUS = {
@@ -7,36 +12,14 @@ export const AUDIT_STATUS = {
   BLOCKED: 'BLOQUEADO'
 };
 
-const LIQUID_KEYWORDS = ['gotas', 'suspensao', 'xarope', 'liquido', 'solucao', 'spray', 'gts', 'susp', 'sol', 'xpe', 'oral'];
-
 function normalizeText(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim();
+  return normalizePharmaceuticalText(value);
 }
 
 export function getDosageNumber(dosageStr) {
   if (!dosageStr) return null;
   const match = String(dosageStr).match(/(\d+(?:[.,]\d+)?)/);
   return match ? parseFloat(match[1].replace(',', '.')) : null;
-}
-
-function hasLiquidPresentation(value) {
-  const normalized = normalizeText(value);
-  return LIQUID_KEYWORDS.some(keyword => normalized.includes(keyword));
-}
-
-function presentationMatches(queryPresentation, resultPresentation) {
-  if (!queryPresentation) return true;
-  if (!resultPresentation) return false;
-
-  const query = normalizeText(queryPresentation);
-  const result = normalizeText(resultPresentation);
-  if (query.includes(result) || result.includes(query)) return true;
-
-  return hasLiquidPresentation(query) && hasLiquidPresentation(result);
 }
 
 function dosageMatches(queryDosage, resultDosage) {
@@ -110,20 +93,20 @@ export function auditQuoteResult(parsed, result) {
     blocks.push('Produto encontrado nao confere com a busca');
   }
 
-  const queryText = normalizeText(parsed.originalTerms || parsed.name || '');
-  const resultName = normalizeText(supplierProductName);
-  const queryRequestsCombination = queryText.includes('+') ||
-    queryText.includes(' associado ') ||
-    queryText.includes(' com ');
-  if (!queryRequestsCombination && resultName.includes('+')) {
-    blocks.push('Produto combinado nao confere com a busca de principio ativo unico');
+  if (!combinationMatches(parsed.originalTerms || parsed.name || '', supplierProductName)) {
+    blocks.push(parsed.isCombination
+      ? 'Associacao encontrada nao confere com os principios ativos pesquisados'
+      : 'Produto combinado nao confere com a busca de principio ativo unico');
   }
 
   if (!dosageMatches(parsed.dosage, result.dosage)) {
     blocks.push('Dosagem encontrada nao confere');
   }
 
-  if (!presentationMatches(parsed.presentation, result.presentation)) {
+  if (!presentationsMatch(parsed.presentation, result.presentation, {
+    queryText: parsed.originalTerms || parsed.name,
+    resultText: supplierProductName
+  })) {
     blocks.push('Apresentacao encontrada nao confere');
   }
 
