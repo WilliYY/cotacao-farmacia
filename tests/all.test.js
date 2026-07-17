@@ -7,9 +7,12 @@ import XLSX from 'xlsx';
 
 import { parseSearchQuery, levenshteinDistance, fuzzyMatch } from '../src/lib/parser.js';
 import { isValidST, getVisualStatusLabel, getSTPriority } from '../src/lib/st-rules.js';
-import { isFreshLiveCapture, processQuoteQuery } from '../src/lib/recommendation.js';
+import { isFreshLiveCapture, matchesSupplierProduct, processQuoteQuery } from '../src/lib/recommendation.js';
 import { AUDIT_STATUS, auditQuoteResult } from '../src/lib/quote-auditor.js';
-import { normalizeSantaCruzGuiPayload } from '../src/connectors/real/santacruz-real.js';
+import { getSantaCruzFinalPrice, normalizeSantaCruzGuiPayload } from '../src/connectors/real/santacruz-real.js';
+import { normalizeProfarmaUrl } from '../src/connectors/real/profarma-real.js';
+import { normalizeDmParanaUrl } from '../src/connectors/real/dm-parana-real.js';
+import { parseDmParanaCard, parseProfarmaTableRow } from '../src/lib/electron-scraper.js';
 import { resolveConnectorMode } from '../src/connectors/connector-registry.js';
 import {
   initDatabase,
@@ -102,6 +105,7 @@ test('ST Rules Engine', async (t) => {
     assert.strictEqual(isValidST('COM_ST'), true);
     assert.strictEqual(isValidST('ST_INCLUSO'), true);
     assert.strictEqual(isValidST('ST_SEPARADO'), true);
+    assert.strictEqual(isValidST('ST_ISENTO'), true);
     assert.strictEqual(isValidST('SEM_ST'), false);
     assert.strictEqual(isValidST('ST_DESCONHECIDO'), false);
   });
@@ -110,6 +114,7 @@ test('ST Rules Engine', async (t) => {
     assert.strictEqual(getSTPriority('COM_ST'), 1);
     assert.strictEqual(getSTPriority('ST_INCLUSO'), 1);
     assert.strictEqual(getSTPriority('ST_SEPARADO'), 2);
+    assert.strictEqual(getSTPriority('ST_ISENTO'), 1);
     assert.strictEqual(getSTPriority('SEM_ST'), 3);
     assert.strictEqual(getVisualStatusLabel('ST_DESCONHECIDO'), 'Precisa revisar ST');
   });
@@ -132,6 +137,97 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.strictEqual(legacy.results.length, 1);
   });
 
+  await t.test('Uses Preco NF as the authoritative Santa Cruz final price', () => {
+    assert.strictEqual(getSantaCruzFinalPrice({ priceNf: 53.35, unitCostWithSt: 999, price: 116.12 }), 53.35);
+    assert.strictEqual(getSantaCruzFinalPrice({ unitCostWithSt: 71.13, price: 116.15 }), 71.13);
+  });
+
+  await t.test('Keeps Profarma credentials on the approved sales portal only', () => {
+    assert.strictEqual(normalizeProfarmaUrl('https://portal.profarma.com.br/portal/'), 'https://pedido.profarma.com.br/');
+    assert.strictEqual(normalizeProfarmaUrl('https://pedido.profarma.com.br/login'), 'https://pedido.profarma.com.br/');
+    assert.throws(() => normalizeProfarmaUrl('https://example.com/login'), /dominio permitido/);
+  });
+
+});
+
+test('Profarma Novo Pedido Parser', async (t) => {
+  await t.test('Uses Preco Final and requires ST for medicines', () => {
+    const withSt = parseProfarmaTableRow([
+      'Pex', '7896181915638', 'LOSARTANA POT 50MG 30CPR BIOS', '0', '2,70',
+      '76.6%', '8,11', '8,51%', '0,96', '11,18', '50', 'BIOSINTETICA GENERIC', 'Generico', 'Nao'
+    ], true);
+    assert.strictEqual(withSt.price, 2.70);
+    assert.strictEqual(withSt.stStatus, 'COM_ST');
+    assert.strictEqual(withSt.availability, 'disponivel');
+
+    const withoutSt = parseProfarmaTableRow([
+      'Pex', '7896422507738', 'LOSARTANA POT 50MG 30CPR MDLY', '0', '4,19',
+      '73.4%', '15,74', '-', '-', '21,70', '140', 'MEDLEY GENERICO', 'Generico', 'Nao'
+    ], true);
+    assert.strictEqual(withoutSt.price, 4.19);
+    assert.strictEqual(withoutSt.stStatus, 'SEM_ST');
+  });
+
+  await t.test('Allows explicit cosmetic exemptions and detects Avise-me', () => {
+    const cosmetic = parseProfarmaTableRow([
+      '', '7890000000001', 'CREME FACIAL 30G', '0', '12,50', '10%', '15,00', '-', '-',
+      '20,00', '12', 'LAB TESTE', 'Cosmeticos', 'Nao'
+    ], true);
+    assert.strictEqual(cosmetic.stStatus, 'ST_ISENTO');
+
+    const unavailable = parseProfarmaTableRow([
+      '', '7890000000002', 'CREME FACIAL 30G', 'Avise-me', '12,50', '10%', '15,00', '-', '-',
+      '20,00', '12', 'LAB TESTE', 'Cosmeticos', 'Nao'
+    ], false);
+    assert.strictEqual(unavailable.availability, 'sem estoque');
+  });
+});
+
+test('DM Parana Card Parser', async (t) => {
+  await t.test('Uses only the explicit Preco final value', () => {
+    const result = parseDmParanaCard({
+      name: 'Gen Hidroclorotiazida 25mg 30cpr',
+      laboratory: 'Teuto+',
+      text: [
+        'Gen Hidroclorotiazida 25mg 30cpr',
+        'Teuto+',
+        'EAN: 7896112165651',
+        'R$ 1,37/cada',
+        'ST: R$ 0,19',
+        'Preço final: R$ 1,56',
+        'Comprar'
+      ].join('\n'),
+      hasBuyButton: true,
+      buyButtonDisabled: false
+    });
+
+    assert.strictEqual(result.price, 1.56);
+    assert.strictEqual(result.stAmount, 0.19);
+    assert.strictEqual(result.priceSourceLabel, 'Preço final: R$');
+    assert.strictEqual(result.availability, 'disponivel');
+    assert.strictEqual(result.ean, '7896112165651');
+    assert.strictEqual(result.quantity, 30);
+  });
+
+  await t.test('Rejects cards without the final-price label and ignores unavailable stock', () => {
+    assert.strictEqual(parseDmParanaCard({
+      name: 'Gen Hidroclorotiazida 25mg 30cpr',
+      text: 'EAN: 7896112165651\nR$ 1,37/cada\nST: R$ 0,19',
+      hasBuyButton: true
+    }), null);
+
+    const unavailable = parseDmParanaCard({
+      name: 'Gen Hidroclorotiazida 25mg 30cpr',
+      text: 'EAN: 7896112165651\nST: R$ 0,19\nPreço final: R$ 1,56\nSem estoque',
+      hasBuyButton: false
+    });
+    assert.strictEqual(unavailable.availability, 'sem estoque');
+  });
+
+  await t.test('Keeps DM credentials on the approved portal', () => {
+    assert.strictEqual(normalizeDmParanaUrl('https://portal.dmparana.com.br/home'), 'https://portal.dmparana.com.br/login');
+    assert.throws(() => normalizeDmParanaUrl('https://dmparana.example/login'), /dominio permitido/);
+  });
 });
 
 test('Live Quote Source Safety', async (t) => {
@@ -265,6 +361,39 @@ test('Quote Auditor - Result Integrity Checks', async (t) => {
     assert.strictEqual(audit.status, AUDIT_STATUS.WARNING);
     assert.ok(audit.summary.includes('Embalagem retornada'));
   });
+
+  await t.test('Blocks combined medicines when a single active ingredient was requested', () => {
+    const parsed = parseSearchQuery('hidroclorotiazida 25mg 30 comprimidos');
+    const audit = auditQuoteResult(parsed, {
+      source: 'DM Paraná',
+      supplierProductName: 'Gen Losartana+hidroclorotiazida 100/25mg 30cpr',
+      dosage: '25mg',
+      presentation: 'comprimido',
+      price: 19.70,
+      stStatus: 'COM_ST',
+      availability: 'disponivel',
+      ean: '7896112135876',
+      quantity: 30
+    });
+    assert.strictEqual(audit.status, AUDIT_STATUS.BLOCKED);
+    assert.match(audit.summary, /Produto combinado/);
+  });
+
+  await t.test('Keeps recommendations distinct for equal names with different EANs', () => {
+    const cheaper = {
+      source: 'DM Paraná',
+      supplierProductName: 'Gen Hidroclorotiazida 25mg 30cpr',
+      ean: '7896112165651',
+      price: 1.56
+    };
+    const other = {
+      ...cheaper,
+      ean: '7896004716176',
+      price: 1.73
+    };
+    assert.strictEqual(matchesSupplierProduct(cheaper, cheaper), true);
+    assert.strictEqual(matchesSupplierProduct(cheaper, other), false);
+  });
 });
 
 test('Database Flow - Manual Review Recalculation', async () => {
@@ -346,7 +475,11 @@ test('Database Flow - Supplier Credentials Roundtrip', async () => {
 
   try {
     await initDatabase(tempDir);
-    const { saveSupplierCredentials, getSupplierCredentials } = await import('../src/lib/database.js');
+    const {
+      saveSupplierCredentials,
+      getSupplierCredentials,
+      getSupplierIdByName
+    } = await import('../src/lib/database.js');
 
     await saveSupplierCredentials(
       3,
@@ -362,6 +495,19 @@ test('Database Flow - Supplier Credentials Roundtrip', async () => {
     assert.strictEqual(creds.username, 'usuario-teste');
     assert.strictEqual(creds.password, 'senha-teste');
     assert.strictEqual(creds.clientCode, '48');
+
+    const dmSupplierId = await getSupplierIdByName('DM Paraná');
+    assert.strictEqual(dmSupplierId, 4);
+    await saveSupplierCredentials(
+      dmSupplierId,
+      'https://portal.dmparana.com.br/login',
+      'cnpj-teste',
+      'senha-dm-teste',
+      ''
+    );
+    const dmCredentials = await getSupplierCredentials(dmSupplierId);
+    assert.strictEqual(dmCredentials.username, 'cnpj-teste');
+    assert.strictEqual(dmCredentials.password, 'senha-dm-teste');
   } finally {
     await closeDatabase();
     fs.rmSync(tempDir, { recursive: true, force: true });

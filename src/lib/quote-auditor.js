@@ -110,6 +110,15 @@ export function auditQuoteResult(parsed, result) {
     blocks.push('Produto encontrado nao confere com a busca');
   }
 
+  const queryText = normalizeText(parsed.originalTerms || parsed.name || '');
+  const resultName = normalizeText(supplierProductName);
+  const queryRequestsCombination = queryText.includes('+') ||
+    queryText.includes(' associado ') ||
+    queryText.includes(' com ');
+  if (!queryRequestsCombination && resultName.includes('+')) {
+    blocks.push('Produto combinado nao confere com a busca de principio ativo unico');
+  }
+
   if (!dosageMatches(parsed.dosage, result.dosage)) {
     blocks.push('Dosagem encontrada nao confere');
   }

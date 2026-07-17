@@ -2,6 +2,26 @@
 [System.Reflection.Assembly]::LoadFile("C:\Windows\Microsoft.NET\Framework\v4.0.30319\WPF\UIAutomationTypes.dll") | Out-Null
 [System.Reflection.Assembly]::LoadFile("C:\Windows\Microsoft.NET\Framework\v4.0.30319\System.Windows.Forms.dll") | Out-Null
 
+Add-Type @"
+using System.Runtime.InteropServices;
+public static class SantaCruzMouse {
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, System.UIntPtr extraInfo);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(System.IntPtr handle);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(System.IntPtr handle, int command);
+
+    [DllImport("user32.dll")]
+    public static extern void SwitchToThisWindow(System.IntPtr handle, bool useAltTab);
+}
+"@
+
 $ProgressPreference = "SilentlyContinue"
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
@@ -46,6 +66,15 @@ if ($env:SANTACRUZ_HEADLESS_GRACE_SECONDS) {
 $desktop = [System.Windows.Automation.AutomationElement]::RootElement
 $cacheDirectory = Join-Path $env:LOCALAPPDATA "WimifarmaCotacao"
 $discoveryCachePath = Join-Path $cacheDirectory "santacruz-install.json"
+$tracePath = [string]$env:SANTACRUZ_TRACE_PATH
+
+function Write-SantaCruzTrace {
+    param([string]$Message)
+    if (-not $tracePath) { return }
+    try {
+        "$(Get-Date -Format 'HH:mm:ss.fff') $Message" | Add-Content -LiteralPath $tracePath -Encoding UTF8
+    } catch {}
+}
 
 function Complete-SantaCruzResult {
     param(
@@ -288,21 +317,34 @@ function Get-ProcessPath {
 }
 
 function Find-SantaCruzWindow {
-    $windows = $desktop.FindAll(
-        [System.Windows.Automation.TreeScope]::Children,
-        [System.Windows.Automation.PropertyCondition]::TrueCondition
-    )
+    $process = Find-SantaCruzProcess
+    if (-not $process) { return $null }
+    try {
+        $processCondition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+            $process.Id
+        )
+        $windows = $desktop.FindAll(
+            [System.Windows.Automation.TreeScope]::Children,
+            $processCondition
+        )
+    } catch { return $null }
+
+    $candidates = @()
     foreach ($candidateWindow in $windows) {
         try {
             $title = [string]$candidateWindow.Current.Name
-            $processPath = Get-ProcessPath $candidateWindow.Current.ProcessId
-            if ($title -match '(?i)santa\s*-?\s*cruz|pedido\s+eletr' -or
-                $processPath -match '(?i)santa\s*-?\s*cruz|digitador-sd') {
-                return $candidateWindow
+            if ($title -match '(?i)santa\s*-?\s*cruz|pedido\s+eletr' -or $title -eq "Pedidos") {
+                $bounds = $candidateWindow.Current.BoundingRectangle
+                $score = [double]($bounds.Width * $bounds.Height)
+                if ($title -eq "Pedidos") { $score += 10000000 }
+                if ($title -match '(?i)^Pedido Eletr.nico SantaCruz') { $score += 1000000 }
+                $candidates += [PSCustomObject]@{ Window = $candidateWindow; Score = $score }
             }
         } catch {}
     }
-    return $null
+    $winner = $candidates | Sort-Object Score -Descending | Select-Object -First 1
+    return $(if ($winner) { $winner.Window } else { $null })
 }
 
 function Find-SantaCruzProcess {
@@ -333,32 +375,49 @@ function Find-ControlByAutomationId {
 
 function Find-TableControl {
     param($Window)
-    $knownTable = Find-ControlByAutomationId $Window "JavaFX1172"
-    if ($knownTable) { return $knownTable }
     try {
-        return $Window.FindFirst(
-            [System.Windows.Automation.TreeScope]::Descendants,
-            (New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                [System.Windows.Automation.ControlType]::Table
-            ))
+        $tableCondition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Table
         )
+        $tables = $Window.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $tableCondition
+        )
+
+        foreach ($table in $tables) {
+            $names = New-Object System.Collections.Generic.HashSet[string]
+            $elements = $table.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.PropertyCondition]::TrueCondition
+            )
+            foreach ($element in $elements) {
+                $name = [string]$element.Current.Name
+                if ($name) { $names.Add((ConvertTo-NormalizedText $name)) | Out-Null }
+            }
+            if ($names.Contains("codigo ean") -and $names.Contains("descricao") -and
+                $names.Contains("preco nf") -and $names.Contains("entrega") -and
+                $names.Contains("ofertaol") -and $names.Contains("laboratorio")) {
+                try {
+                    $grid = $table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
+                    if ($grid.Current.ColumnCount -eq 18) { return $table }
+                } catch {}
+            }
+        }
     } catch { return $null }
+    return $null
 }
 
 function Find-SearchControl {
-    param($Window)
-    $knownSearch = Find-ControlByAutomationId $Window "JavaFX272"
-    if ($knownSearch -and $knownSearch.Current.IsEnabled -and -not $knownSearch.Current.IsOffscreen) {
-        return $knownSearch
-    }
-
+    param($Window, $Table = $null)
     try {
         $editCondition = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
             [System.Windows.Automation.ControlType]::Edit
         )
         $edits = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCondition)
+        $windowBounds = $Window.Current.BoundingRectangle
+        $tableBounds = if ($Table) { $Table.Current.BoundingRectangle } else { $null }
         $scored = @()
         foreach ($edit in $edits) {
             if (-not $edit.Current.IsEnabled -or $edit.Current.IsOffscreen -or $edit.Current.IsPassword) { continue }
@@ -367,12 +426,36 @@ function Find-SearchControl {
             $score = 0
             if ($identity -match '(?i)busca|pesquis|produto|ean|descri|codigo') { $score += 100 }
             $bounds = $edit.Current.BoundingRectangle
-            if ($bounds.Width -ge 220) { $score += 20 }
-            if ($bounds.Top -gt $Window.Current.BoundingRectangle.Top + 50) { $score += 5 }
+            if ($bounds.Width -ge 300) { $score += 50 }
+            if ($bounds.Top -gt $windowBounds.Top + 250) { $score += 25 }
+            if ($bounds.Top -lt $windowBounds.Top + 500) { $score += 10 }
+            if ($tableBounds) {
+                $verticalGap = $tableBounds.Top - $bounds.Bottom
+                if ($verticalGap -ge 0 -and $verticalGap -le 40) { $score += 100 }
+                $expectedWidth = $tableBounds.Width * 0.62
+                $widthDifference = [Math]::Abs($bounds.Width - $expectedWidth)
+                $score += [Math]::Max(0, 100 - ($widthDifference / 2))
+            }
             $scored += [PSCustomObject]@{ Element = $edit; Score = $score }
         }
-        return ($scored | Sort-Object Score -Descending | Select-Object -First 1).Element
+        $winner = $scored | Sort-Object Score -Descending | Select-Object -First 1
+        if ($winner -and $winner.Score -ge 60) { return $winner.Element }
     } catch { return $null }
+    return $null
+}
+
+function ConvertTo-NormalizedText {
+    param([string]$Value)
+    if (-not $Value) { return "" }
+    $decomposed = $Value.Normalize([System.Text.NormalizationForm]::FormD)
+    $builder = New-Object System.Text.StringBuilder
+    foreach ($character in $decomposed.ToCharArray()) {
+        $category = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($character)
+        if ($category -ne [System.Globalization.UnicodeCategory]::NonSpacingMark) {
+            $builder.Append($character) | Out-Null
+        }
+    }
+    return (($builder.ToString().ToLowerInvariant() -replace '\s+', ' ').Trim())
 }
 
 function Get-WindowTextSummary {
@@ -407,6 +490,179 @@ function Set-AutomationValue {
             return $true
         } catch { return $false }
     }
+}
+
+function Type-AutomationValue {
+    param($Element, [string]$Value)
+    if (-not $Element) { return $false }
+    try {
+        $Element.SetFocus()
+        [System.Windows.Forms.SendKeys]::SendWait("^a")
+        [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
+        if ($Value) {
+            foreach ($character in $Value.ToCharArray()) {
+                $escaped = ([string]$character).Replace("+", "{+}").Replace("^", "{^}").Replace("%", "{%}")
+                [System.Windows.Forms.SendKeys]::SendWait($escaped)
+                Start-Sleep -Milliseconds 45
+            }
+        }
+        return $true
+    } catch { return $false }
+}
+
+function Find-SearchSubmitControl {
+    param($Window, $SearchControl)
+    if (-not $Window -or -not $SearchControl) { return $null }
+    try {
+        $searchBounds = $SearchControl.Current.BoundingRectangle
+        $comboCondition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::ComboBox
+        )
+        $combos = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $comboCondition)
+        $rightEdge = $searchBounds.Right
+        foreach ($combo in $combos) {
+            $bounds = $combo.Current.BoundingRectangle
+            if (-not $combo.Current.IsOffscreen -and [Math]::Abs($bounds.Top - $searchBounds.Top) -le 15) {
+                $rightEdge = [Math]::Max($rightEdge, $bounds.Right)
+            }
+        }
+
+        $imageCondition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Image
+        )
+        $images = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $imageCondition)
+        $candidates = @()
+        foreach ($image in $images) {
+            $bounds = $image.Current.BoundingRectangle
+            if ($image.Current.IsOffscreen -or -not $image.Current.IsEnabled) { continue }
+            if ([Math]::Abs($bounds.Top - $searchBounds.Top) -gt 20) { continue }
+            if ($bounds.Left -lt $rightEdge -or $bounds.Width -lt 20 -or $bounds.Width -gt 50) { continue }
+            $candidates += [PSCustomObject]@{ Element = $image; Distance = $bounds.Left - $rightEdge }
+        }
+        $winner = $candidates | Sort-Object Distance | Select-Object -First 1
+        if ($winner) { return $winner.Element }
+    } catch {}
+    return $null
+}
+
+function Invoke-AutomationControl {
+    param($Element)
+    if (-not $Element) { return $false }
+
+    try {
+        $bounds = $Element.Current.BoundingRectangle
+        $centerX = $bounds.Left + ($bounds.Width / 2)
+        $centerY = $bounds.Top + ($bounds.Height / 2)
+        $windowHandle = 0
+        $topWindows = $desktop.FindAll(
+            [System.Windows.Automation.TreeScope]::Children,
+            [System.Windows.Automation.PropertyCondition]::TrueCondition
+        )
+        $containingWindows = @()
+        foreach ($topWindow in $topWindows) {
+            $topBounds = $topWindow.Current.BoundingRectangle
+            if ($topWindow.Current.ProcessId -ne $Element.Current.ProcessId -or $topWindow.Current.NativeWindowHandle -eq 0) { continue }
+            if ($centerX -lt $topBounds.Left -or $centerX -gt $topBounds.Right -or
+                $centerY -lt $topBounds.Top -or $centerY -gt $topBounds.Bottom) { continue }
+            $containingWindows += [PSCustomObject]@{
+                Handle = $topWindow.Current.NativeWindowHandle
+                Area = $topBounds.Width * $topBounds.Height
+            }
+        }
+        $topMatch = $containingWindows | Sort-Object Area | Select-Object -First 1
+        if ($topMatch) { $windowHandle = $topMatch.Handle }
+
+        if ($windowHandle -eq 0) {
+            $ancestor = $Element
+            for ($level = 0; $level -lt 12 -and $ancestor; $level++) {
+                if ($ancestor.Current.NativeWindowHandle -ne 0) { $windowHandle = $ancestor.Current.NativeWindowHandle }
+                $ancestor = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($ancestor)
+            }
+        }
+        if ($windowHandle -ne 0) {
+            Write-SantaCruzTrace "activate handle=$windowHandle id=$($Element.Current.AutomationId) name=$($Element.Current.Name)"
+            [SantaCruzMouse]::ShowWindow([System.IntPtr]$windowHandle, 5) | Out-Null
+            [SantaCruzMouse]::SwitchToThisWindow([System.IntPtr]$windowHandle, $true)
+            [SantaCruzMouse]::SetForegroundWindow([System.IntPtr]$windowHandle) | Out-Null
+            Start-Sleep -Milliseconds 180
+        }
+        try { $Element.SetFocus() } catch {}
+        if ($bounds.Width -gt 0 -and $bounds.Height -gt 0) {
+            $x = [int]($bounds.Left + ($bounds.Width / 2))
+            $y = [int]($bounds.Top + ($bounds.Height / 2))
+            Write-SantaCruzTrace "click x=$x y=$y bounds=$bounds"
+            [SantaCruzMouse]::SetCursorPos($x, $y) | Out-Null
+            [SantaCruzMouse]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
+            [SantaCruzMouse]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
+            return $true
+        }
+    } catch {}
+
+    foreach ($patternId in @(
+        [System.Windows.Automation.InvokePattern]::Pattern,
+        [System.Windows.Automation.SelectionItemPattern]::Pattern
+    )) {
+        try {
+            $pattern = $Element.GetCurrentPattern($patternId)
+            if ($patternId -eq [System.Windows.Automation.InvokePattern]::Pattern) { $pattern.Invoke() }
+            else { $pattern.Select() }
+            return $true
+        } catch {}
+    }
+    return $false
+}
+
+function Find-TopActionImage {
+    param($Window)
+    if (-not $Window) { return $null }
+    try {
+        $imageCondition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Image
+        )
+        $images = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $imageCondition)
+        $windowBounds = $Window.Current.BoundingRectangle
+        $candidates = @()
+        foreach ($image in $images) {
+            if ($image.Current.IsOffscreen -or -not $image.Current.IsEnabled) { continue }
+            $bounds = $image.Current.BoundingRectangle
+            if ($bounds.Top -lt $windowBounds.Top + 25 -or $bounds.Top -gt $windowBounds.Top + 140) { continue }
+            if ($bounds.Width -lt 50 -or $bounds.Width -gt 125 -or $bounds.Height -lt 35 -or $bounds.Height -gt 85) { continue }
+            if ($bounds.Left -lt $windowBounds.Left + ($windowBounds.Width * 0.35)) { continue }
+            $candidates += [PSCustomObject]@{ Element = $image; Left = $bounds.Left }
+        }
+        $winner = $candidates | Sort-Object Left | Select-Object -First 1
+        if ($winner) { return $winner.Element }
+    } catch {}
+    return $null
+}
+
+function Test-SantaCruzUpdating {
+    param($Window)
+    $summary = Get-WindowTextSummary $Window
+    return $summary -match '(?i)atualizando|aguarde.{0,40}atualiza|baixando|importando\s+dados|sincronizando|download\s+\d+\s*%'
+}
+
+function Invoke-NewOrderDialog {
+    param($Window)
+    if (-not $Window -or ([string]$Window.Current.Name).Trim() -ne "Pedidos") { return $false }
+    try {
+        $buttonCondition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Button
+        )
+        $buttons = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+        $applyButton = $buttons | Where-Object {
+            $_.Current.IsEnabled -and -not $_.Current.IsOffscreen -and $_.Current.Name -match '(?i)^aplicar$'
+        } | Select-Object -First 1
+        if ($applyButton) {
+            Write-SantaCruzTrace "dialog apply id=$($applyButton.Current.AutomationId) bounds=$($applyButton.Current.BoundingRectangle)"
+            return Invoke-AutomationControl $applyButton
+        }
+    } catch {}
+    return $false
 }
 
 function Invoke-LoginIfPresent {
@@ -468,17 +724,35 @@ function Get-TableSignature {
     param($Table)
     if (-not $Table) { return "" }
     try {
-        $dataCondition = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::DataItem
-        )
-        $items = $Table.FindAll([System.Windows.Automation.TreeScope]::Descendants, $dataCondition)
+        $grid = $Table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
         $parts = @()
-        for ($index = 0; $index -lt [Math]::Min($items.Count, 30); $index++) {
-            $parts += [string]$items[$index].Current.Name
+        for ($row = 0; $row -lt [Math]::Min($grid.Current.RowCount, 5); $row++) {
+            foreach ($column in @(0, 2, 13)) {
+                if ($column -lt $grid.Current.ColumnCount) {
+                    $parts += Get-GridCellText $grid $row $column
+                }
+            }
         }
-        return "$($items.Count):$($parts -join '|')"
+        return "$($grid.Current.RowCount):$($parts -join '|')"
     } catch { return "" }
+}
+
+function Get-GridCellText {
+    param($Grid, [int]$Row, [int]$Column)
+    try {
+        $cell = $Grid.GetItem($Row, $Column)
+        $value = [string]$cell.Current.Name
+        if ($value) { return $value.Trim() }
+        $text = $cell.FindFirst(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Text
+            ))
+        )
+        if ($text) { return ([string]$text.Current.Name).Trim() }
+    } catch {}
+    return ""
 }
 
 function Parse-DoubleSafe {
@@ -500,70 +774,36 @@ function Parse-DoubleSafe {
 function Read-SantaCruzRows {
     param($Table)
     if (-not $Table) { return @() }
-
-    $scrollPattern = $null
-    try { $scrollPattern = $Table.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern) } catch {}
-    $uniqueRows = @{}
-    $dataCondition = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::DataItem
-    )
-
-    for ($loop = 0; $loop -lt 12; $loop++) {
-        $dataItems = $Table.FindAll([System.Windows.Automation.TreeScope]::Descendants, $dataCondition)
-        $currentRow = @()
-        foreach ($item in $dataItems) {
-            $value = [string]$item.Current.Name
-            if ($value -match '^\d{13}$') {
-                if ($currentRow.Count -gt 0 -and $currentRow[0] -match '^\d{13}$') {
-                    $key = "$($currentRow[0])|$($currentRow[1])"
-                    if (-not $uniqueRows.ContainsKey($key)) { $uniqueRows[$key] = $currentRow }
-                }
-                $currentRow = @($value)
-            } elseif ($currentRow.Count -gt 0) {
-                $currentRow += $value
-            }
-        }
-        if ($currentRow.Count -gt 0 -and $currentRow[0] -match '^\d{13}$') {
-            $key = "$($currentRow[0])|$($currentRow[1])"
-            if (-not $uniqueRows.ContainsKey($key)) { $uniqueRows[$key] = $currentRow }
-        }
-
-        if ($scrollPattern -and $scrollPattern.Current.VerticallyScrollable) {
-            $oldPercent = $scrollPattern.Current.VerticalScrollPercent
-            if ($oldPercent -ge 99.0) { break }
-            try {
-                $scrollPattern.Scroll(
-                    [System.Windows.Automation.ScrollAmount]::NoAmount,
-                    [System.Windows.Automation.ScrollAmount]::LargeIncrement
-                )
-                Start-Sleep -Milliseconds 350
-                if ($scrollPattern.Current.VerticalScrollPercent -eq $oldPercent) { break }
-            } catch { break }
-        } else { break }
-    }
-
     $output = New-Object System.Collections.Generic.List[object]
-    foreach ($row in $uniqueRows.Values) {
-        if ($row.Count -lt 14) { continue }
-        $finalPrice = Parse-DoubleSafe $row[13]
-        if ($finalPrice -le 0) { continue }
-        $laboratory = if ($row.Count -gt 16) { $row[16] } else { "N/A" }
-        $output.Add([PSCustomObject]@{
-            ean = $row[0]
-            name = $row[2]
-            price = Parse-DoubleSafe $row[6]
-            st = Parse-DoubleSafe $row[12]
-            unitCostWithSt = $finalPrice
-            stock = "Disponivel"
-            laboratory = $laboratory
-            listType = "N"
-        })
-    }
+    try {
+        $grid = $Table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
+        if ($grid.Current.ColumnCount -lt 18) { return @() }
+        for ($row = 0; $row -lt $grid.Current.RowCount; $row++) {
+            $ean = Get-GridCellText $grid $row 0
+            $name = Get-GridCellText $grid $row 2
+            $priceNf = Parse-DoubleSafe (Get-GridCellText $grid $row 13)
+            if ($ean -notmatch '^\d{13}$' -or -not $name -or $priceNf -le 0) { continue }
+            $output.Add([PSCustomObject]@{
+                ean = $ean
+                name = $name
+                price = $priceNf
+                priceNf = $priceNf
+                factoryPrice = Parse-DoubleSafe (Get-GridCellText $grid $row 6)
+                st = Parse-DoubleSafe (Get-GridCellText $grid $row 12)
+                unitCostWithSt = $priceNf
+                stock = "Disponivel"
+                laboratory = Get-GridCellText $grid $row 17
+                quantityBox = Get-GridCellText $grid $row 5
+                listType = Get-GridCellText $grid $row 15
+            })
+        }
+    } catch { return @() }
     return @($output)
 }
 
+Write-SantaCruzTrace "start query=$SearchQuery"
 $installation = Find-SantaCruzInstallation
+Write-SantaCruzTrace "installation path=$($installation.LaunchPath) source=$($installation.Source)"
 if ($DiscoveryOnly) {
     if ($installation) {
         Complete-SantaCruzResult "discovered" "Aplicativo localizado" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
@@ -600,23 +840,29 @@ $searchControl = $null
 $lastState = if ($existingProcess -and -not $window) { "running-without-window" } else { "starting" }
 $loginSubmitted = $false
 $updateDeadlineExtended = $false
+$digitadorOpened = $false
+$newOrderOpened = $false
+$headlessSeenAt = [DateTime]::UtcNow
 $deadline = [DateTime]::UtcNow.AddSeconds($StartupWaitSeconds)
 while ([DateTime]::UtcNow -lt $deadline) {
     $window = Find-SantaCruzWindow
     if ($window) {
-        $searchControl = Find-SearchControl $window
-        if ($searchControl) {
-            $readyWindow = $window
-            break
+        Write-SantaCruzTrace "window title=$($window.Current.Name) id=$($window.Current.AutomationId)"
+        $headlessSeenAt = [DateTime]::UtcNow
+        if (Invoke-NewOrderDialog $window) {
+            $lastState = "applying-new-order"
+            Start-Sleep -Seconds 2
+            continue
         }
 
-        $summary = Get-WindowTextSummary $window
-        if ($summary -match '(?i)atualiz|importando|sincroniz|download') {
+        if (Test-SantaCruzUpdating $window) {
             $lastState = "updating"
             if (-not $updateDeadlineExtended) {
                 $deadline = [DateTime]::UtcNow.AddSeconds($UpdateWaitSeconds)
                 $updateDeadlineExtended = $true
             }
+            Start-Sleep -Seconds 1
+            continue
         }
 
         if (-not $loginSubmitted) {
@@ -631,16 +877,43 @@ while ([DateTime]::UtcNow -lt $deadline) {
                 Complete-SantaCruzResult "login-required" "Credenciais da Santa Cruz nao configuradas" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
             }
         }
+
+        $title = [string]$window.Current.Name
+        if ($title -match '(?i)\s-\sHome\s-' -and -not $digitadorOpened) {
+            $digitadorControl = Find-TopActionImage $window
+            if ($digitadorControl -and (Invoke-AutomationControl $digitadorControl)) {
+                $digitadorOpened = $true
+                $lastState = "opening-digitador"
+                Start-Sleep -Seconds 2
+                continue
+            }
+        }
+
+        if ($title -match '(?i)\s-\sPedidos\s-' -and -not $newOrderOpened) {
+            $newOrderControl = Find-TopActionImage $window
+            if ($newOrderControl -and (Invoke-AutomationControl $newOrderControl)) {
+                $newOrderOpened = $true
+                $lastState = "opening-new-order"
+                Start-Sleep -Seconds 2
+                continue
+            }
+        }
+
+        $table = Find-TableControl $window
+        $searchControl = Find-SearchControl $window $table
+        if ($table -and $searchControl) {
+            $readyWindow = $window
+            break
+        }
     } else {
+        Write-SantaCruzTrace "window not found"
         $headlessProcess = Find-SantaCruzProcess
         if ($headlessProcess) {
             $lastState = "running-without-window"
-            try {
-                $headlessAgeSeconds = ([DateTime]::Now - $headlessProcess.StartTime).TotalSeconds
-                if ($headlessAgeSeconds -ge $HeadlessGraceSeconds) {
-                    Complete-SantaCruzResult "running-without-window" "Processo Santa Cruz ativo sem janela de pesquisa" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
-                }
-            } catch {}
+            $headlessSeconds = ([DateTime]::UtcNow - $headlessSeenAt).TotalSeconds
+            if ($headlessSeconds -ge $HeadlessGraceSeconds) {
+                Complete-SantaCruzResult "running-without-window" "Processo Santa Cruz ativo sem janela de pesquisa" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+            }
         }
     }
     Start-Sleep -Seconds 1
@@ -671,29 +944,47 @@ try {
 } catch {}
 
 $table = Find-TableControl $readyWindow
+$searchSubmitControl = Find-SearchSubmitControl $readyWindow $searchControl
 $previousSignature = Get-TableSignature $table
-if (-not (Set-AutomationValue $searchControl $SearchQuery)) {
+$clearedSignature = $previousSignature
+
+if (-not (Type-AutomationValue $searchControl $SearchQuery)) {
     Complete-SantaCruzResult "search-input-failed" "Nao foi possivel escrever o medicamento" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
 }
 
-try {
-    $searchControl.SetFocus()
-    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-} catch {
-    Complete-SantaCruzResult "search-submit-failed" "Nao foi possivel iniciar a pesquisa" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+if ($searchSubmitControl) {
+    if (-not (Invoke-AutomationControl $searchSubmitControl)) {
+        Complete-SantaCruzResult "search-submit-failed" "Nao foi possivel clicar na lupa de pesquisa" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+    }
+} else {
+    try {
+        $searchControl.SetFocus()
+        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+    } catch {
+        Complete-SantaCruzResult "search-submit-failed" "Nao foi possivel iniciar a pesquisa" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+    }
 }
 
 $resultDeadline = [DateTime]::UtcNow.AddSeconds($ResultWaitSeconds)
 $currentSignature = ""
+$lastCandidateSignature = ""
+$stableSignatureReads = 0
 while ([DateTime]::UtcNow -lt $resultDeadline) {
     Start-Sleep -Milliseconds 500
     $window = Find-SantaCruzWindow
-    if ($window) { $table = Find-TableControl $window }
+    if ($window) {
+        $candidateTable = Find-TableControl $window
+        if ($candidateTable) { $table = $candidateTable }
+    }
     if (-not $table) { continue }
     $currentSignature = Get-TableSignature $table
-    if ($currentSignature -and $currentSignature -ne "0:" -and
-        ($currentSignature -ne $previousSignature -or ([DateTime]::UtcNow.AddSeconds(-2) -gt $resultDeadline.AddSeconds(-$ResultWaitSeconds)))) {
-        break
+    if ($currentSignature -and $currentSignature -ne "0:" -and $currentSignature -ne $clearedSignature) {
+        if ($currentSignature -eq $lastCandidateSignature) { $stableSignatureReads++ }
+        else {
+            $lastCandidateSignature = $currentSignature
+            $stableSignatureReads = 1
+        }
+        if ($stableSignatureReads -ge 2) { break }
     }
 }
 
@@ -701,9 +992,37 @@ if (-not $table) {
     Complete-SantaCruzResult "table-not-found" "Grade de resultados da Santa Cruz nao encontrada" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
 }
 
-$results = Read-SantaCruzRows $table
+$results = @()
+$readDeadline = [DateTime]::UtcNow.AddSeconds(4)
+while ([DateTime]::UtcNow -lt $readDeadline -and $results.Count -eq 0) {
+    $window = Find-SantaCruzWindow
+    if ($window) {
+        $candidateTable = Find-TableControl $window
+        if ($candidateTable) { $table = $candidateTable }
+    }
+    $results = @(Read-SantaCruzRows $table)
+    if ($results.Count -eq 0) { Start-Sleep -Milliseconds 400 }
+}
 if ($results.Count -eq 0) {
-    Complete-SantaCruzResult "empty" "Pesquisa concluida sem produtos" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+    if ($currentSignature -eq "0:") {
+        Complete-SantaCruzResult "empty" "Pesquisa concluida sem produtos" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+    }
+    Complete-SantaCruzResult "stale-results" "A grade mudou, mas os produtos ainda nao puderam ser lidos" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+}
+
+$normalizedQuery = ConvertTo-NormalizedText $SearchQuery
+$queryToken = @($normalizedQuery -split '\s+' | Where-Object { $_.Length -ge 4 } | Select-Object -First 1)
+$hasMatchingResult = $false
+foreach ($result in $results) {
+    $normalizedName = ConvertTo-NormalizedText $result.name
+    if (($SearchQuery -match '^\d{13}$' -and $result.ean -eq $SearchQuery) -or
+        ($queryToken.Count -gt 0 -and $normalizedName.Contains($queryToken[0]))) {
+        $hasMatchingResult = $true
+        break
+    }
+}
+if (-not $hasMatchingResult) {
+    Complete-SantaCruzResult "stale-results" "A grade exibida nao corresponde ao medicamento pesquisado" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
 }
 
 Complete-SantaCruzResult "ok" "Pesquisa concluida" $results $installation.InstallRoot $installation.LaunchPath $installation.Source

@@ -4,6 +4,24 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ---
 
+## [1.3.0] - 2026-07-17
+
+### Adicionado
+- **Quarta distribuidora DM Paraná:** cadastro, seleção, filtro, credenciais locais, conector real/mock e URL restrita a `portal.dmparana.com.br`.
+- **Preço final auditável:** a DM aceita exclusivamente o campo `Preço final: R$`; o preço cru em negrito é ignorado e a origem do valor aparece na tela.
+- **Paginação e estoque:** o coletor percorre até dez páginas, deduplica EANs e descarta itens sem botão `Comprar` ativo ou marcados sem estoque.
+- **Portabilidade documentada:** novo computador reinstala dependências pelo bootstrap e exige recadastro das senhas protegidas por DPAPI.
+
+### Corrigido
+- **Busca compatível com a DM:** o portal recebe apenas o nome do medicamento; dosagem e apresentação permanecem na auditoria para não gerar falso resultado vazio.
+- **Medicamentos combinados:** resultados com `+` são bloqueados quando a consulta pede um único princípio ativo.
+- **Ranking por EAN:** produtos de mesmo nome e fornecedor permanecem distintos, permitindo marcar somente o EAN realmente mais barato como `Melhor preço com ST`.
+- **Teste real:** `hidroclorotiazida 25mg 30 comprimidos` retornou 14 cartões ao vivo. Teuto, EAN `7896112165651`, venceu com `Preço final: R$ 1,56`; EMS, EAN `7896004716176`, ficou em segundo com `Preço final: R$ 1,73`.
+
+### Validação
+- `npm test`: 46/46 testes aprovados.
+- Coleta Electron real da DM concluída com saída limpa e `capturedAt` atual.
+
 ## [1.2.2] - 2026-07-15
 
 ### Adicionado

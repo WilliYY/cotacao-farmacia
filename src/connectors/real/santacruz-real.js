@@ -59,11 +59,16 @@ export function normalizeSantaCruzGuiPayload(stdout) {
   };
 }
 
+export function getSantaCruzFinalPrice(result = {}) {
+  const price = Number(result.priceNf ?? result.unitCostWithSt ?? result.price ?? 0);
+  return Number.isFinite(price) && price > 0 ? price : 0;
+}
+
 function runSantaCruzGuiSearch(scriptPath, searchTerm, credentials) {
   const startupSeconds = getPositiveInteger(process.env.SANTACRUZ_STARTUP_WAIT_SECONDS, 180);
   const updateSeconds = getPositiveInteger(process.env.SANTACRUZ_UPDATE_WAIT_SECONDS, 600);
   const resultSeconds = getPositiveInteger(process.env.SANTACRUZ_RESULT_WAIT_SECONDS, 20);
-  const timeout = (Math.max(startupSeconds, updateSeconds) + resultSeconds + 45) * 1000;
+  const timeout = (startupSeconds + updateSeconds + resultSeconds + 60) * 1000;
 
   return new Promise((resolve) => {
     execFile('powershell', [
@@ -98,6 +103,7 @@ function describeGuiFailure(payload) {
     'search-control-not-found': 'campo de pesquisa nao encontrado',
     'search-input-failed': 'falha ao escrever o medicamento',
     'search-submit-failed': 'falha ao iniciar a pesquisa',
+    'stale-results': 'a grade nao foi atualizada para o medicamento pesquisado',
     'table-not-found': 'grade de resultados nao encontrada',
     'running-without-window': 'processo ativo sem janela de pesquisa',
     'not-installed': 'aplicativo nao localizado',
@@ -156,7 +162,7 @@ export class SantaCruzRealConnector extends SupplierConnector {
         name.match(/(\d+)\s*(?:comp|caps|cp|cps|cpr|tabletes|unidades)/i);
       if (quantityMatch) parsedQuantity = Number.parseInt(quantityMatch[1], 10);
 
-      const finalPrice = result.unitCostWithSt || result.price || 0;
+      const finalPrice = getSantaCruzFinalPrice(result);
       return {
         ean: result.ean || '',
         supplierProductName: name,
@@ -165,7 +171,7 @@ export class SantaCruzRealConnector extends SupplierConnector {
         presentation: parsedQuery.presentation || '',
         price: finalPrice,
         stStatus: result.st > 0 ? 'COM_ST' : 'SEM_ST',
-        availability: 'disponivel',
+        availability: result.stock || 'disponivel',
         quantity: parsedQuantity,
         unitPrice: finalPrice / parsedQuantity,
         source: 'Santa Cruz',

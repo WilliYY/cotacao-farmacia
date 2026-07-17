@@ -7,7 +7,7 @@ Cronograma de desenvolvimento técnico planejado para o **Cotador Inteligente ST
 ## 📌 Fase 1 — MVP (Concluído)
 - [x] Tela de busca inicial por caixa de texto.
 - [x] Busca estruturada por linha com quebra automática.
-- [x] Conectores de dados simulados (ANB, Profarma, Santa Cruz).
+- [x] Conectores de dados simulados (ANB, Profarma, Santa Cruz e DM Paraná).
 - [x] Regra de filtragem básica de Substituição Tributária (ST).
 - [x] Indicação da melhor e segunda melhor opção de compra.
 - [x] Exportação de cotação para planilha XLSX simples.
@@ -44,6 +44,11 @@ Cronograma de desenvolvimento técnico planejado para o **Cotador Inteligente ST
 ## 📌 Fase 6 — Conector Assistido Santa Cruz
 - [ ] Desenvolvimento de conector para o portal da Santa Cruz.
 - [ ] Login manual assistido e extração automática na tela de resultados do portal.
+
+## Fase 6.1 - Conector DM Paraná (Concluído)
+- [x] Login autônomo pelo portal oficial.
+- [x] Busca por nome com auditoria de dosagem, apresentação e princípio ativo.
+- [x] Extração exclusiva de `Preço final: R$`, paginação e bloqueio de itens sem estoque.
 
 ## 📌 Fase 7 — Estoque e Giro
 - [ ] Banco de dados local para cadastro simples de quantidades em estoque da farmácia.

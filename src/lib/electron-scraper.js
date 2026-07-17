@@ -1,5 +1,120 @@
 import { logger } from './logger.js';
 
+export function parseDmParanaCard(cardData = {}) {
+  const text = String(cardData.text || '').replace(/\u00a0/g, ' ');
+  const name = String(cardData.name || '').trim();
+  const laboratory = String(cardData.laboratory || '').trim();
+  const normalize = value => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  const parseCurrency = value => {
+    const match = String(value || '').match(/\d{1,3}(?:\.\d{3})*,\d+|\d+(?:[.,]\d+)?/);
+    if (!match) return 0;
+    let clean = match[0];
+    if (clean.includes('.') && clean.includes(',')) clean = clean.replace(/\./g, '').replace(',', '.');
+    else clean = clean.replace(',', '.');
+    const parsed = Number.parseFloat(clean);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  };
+
+  const finalPriceMatch = text.match(/pre[cç]o\s*final:\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d+|\d+(?:[.,]\d+)?)/i);
+  if (!finalPriceMatch) return null;
+
+  const finalPrice = parseCurrency(finalPriceMatch[1]);
+  if (finalPrice <= 0) return null;
+
+  const stMatch = text.match(/\bST:\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d+|\d+(?:[.,]\d+)?)/i);
+  const stAmount = parseCurrency(stMatch?.[1]);
+  const normalizedText = normalize(text);
+  const normalizedName = normalize(name);
+  const explicitStExempt = ['cosmet', 'dermocosmet', 'perfum', 'shampoo', 'sabonete', 'higiene']
+    .some(term => normalizedName.includes(term));
+  const hasActiveBuyButton = cardData.hasBuyButton === true && cardData.buyButtonDisabled !== true;
+  const available = hasActiveBuyButton &&
+    !normalizedText.includes('sem estoque') &&
+    !normalizedText.includes('indisponivel') &&
+    !normalizedText.includes('avise-me');
+  const quantityMatch = name.match(/(?:c\/?|com\s+)(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i) ||
+    name.match(/(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i);
+  const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
+  const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
+  const ean = text.match(/EAN:\s*(\d{13})/i)?.[1] || '';
+  let presentation = 'comprimido';
+  if (normalizedName.includes('caps')) presentation = 'capsula';
+  else if (normalizedName.includes('creme') || normalizedName.includes('pomada')) presentation = 'creme';
+  else if (normalizedName.includes('gotas') || normalizedName.includes('solucao') || normalizedName.includes('xarope')) presentation = 'liquido';
+
+  return {
+    supplierProductName: name,
+    laboratory: laboratory || 'N/A',
+    dosage,
+    presentation,
+    price: Number(finalPrice.toFixed(2)),
+    stAmount: Number(stAmount.toFixed(2)),
+    stStatus: stAmount > 0 ? 'COM_ST' : (explicitStExempt ? 'ST_ISENTO' : 'SEM_ST'),
+    availability: available ? 'disponivel' : 'sem estoque',
+    ean,
+    packaging: name,
+    quantity,
+    unitPrice: quantity > 0 ? Number((finalPrice / quantity).toFixed(4)) : finalPrice,
+    priceSourceLabel: 'Preço final: R$'
+  };
+}
+
+export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
+  const cols = Array.isArray(columns) ? columns.map(value => String(value || '').trim()) : [];
+  if (cols.length < 14) return null;
+
+  const parseCurrency = (value) => {
+    const match = String(value || '').match(/-?\d{1,3}(?:\.\d{3})*,\d+|-?\d+(?:[.,]\d+)?/);
+    if (!match) return 0;
+    let clean = match[0];
+    if (clean.includes('.') && clean.includes(',')) clean = clean.replace(/\./g, '').replace(',', '.');
+    else clean = clean.replace(',', '.');
+    const parsed = Number.parseFloat(clean);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  };
+  const normalize = (value) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  const ean = cols[1].match(/\d{13}/)?.[0] || '';
+  const name = cols[2];
+  const quantityText = normalize(cols[3]);
+  const finalPrice = parseCurrency(cols[4]);
+  const stAmount = parseCurrency(cols[8]);
+  const category = cols[12];
+  const normalizedCategory = normalize(category);
+  const stExempt = ['cosmet', 'dermocosmet', 'perfum', 'higiene'].some(term => normalizedCategory.includes(term));
+  const available = hasQuantityInput && !quantityText.includes('avise') && !quantityText.includes('indispon');
+  const quantityMatch = name.match(/c\/\s*(\d+)/i) || name.match(/(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i);
+  const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
+  const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
+  const normalizedName = normalize(name);
+  let presentation = 'comprimido';
+  if (normalizedName.includes('caps')) presentation = 'capsula';
+  else if (normalizedName.includes('creme') || normalizedName.includes('pomada')) presentation = 'creme';
+  else if (normalizedName.includes('gotas') || normalizedName.includes('solucao') || normalizedName.includes('xarope')) presentation = 'liquido';
+
+  return {
+    supplierProductName: name,
+    laboratory: cols[11] || 'N/A',
+    dosage,
+    presentation,
+    price: Number(finalPrice.toFixed(2)),
+    stAmount: Number(stAmount.toFixed(2)),
+    stStatus: stAmount > 0 ? 'COM_ST' : (stExempt ? 'ST_ISENTO' : 'SEM_ST'),
+    availability: available ? 'disponivel' : 'sem estoque',
+    ean,
+    packaging: name,
+    quantity,
+    unitPrice: quantity > 0 ? Number((finalPrice / quantity).toFixed(4)) : finalPrice,
+    category
+  };
+}
+
 /**
  * Headless/Headed Scraping Engine using Electron's BrowserWindow.
  * Bypasses bot detection by using the app's native Chrome engine.
@@ -83,11 +198,14 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
     let injectedLogin = false;
     let submittedSearch = false;
+    let submittedSearchAt = 0;
     let typedSearch = false;
     let lastPromoClickTime = 0;
+    let stateMachineRunning = false;
 
     const runStateMachine = async () => {
-      if (hasResolved || !win || win.isDestroyed()) return;
+      if (hasResolved || stateMachineRunning || !win || win.isDestroyed()) return;
+      stateMachineRunning = true;
 
       const currentUrl = win.getURL();
       let pathname = '';
@@ -126,7 +244,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           injectedLogin = true;
           logger.info('Login page detected (has password field). Injecting credentials...');
 
-          await win.webContents.executeJavaScript(`
+          const loginSubmitted = await win.webContents.executeJavaScript(`
             (async () => {
               const wait = ms => new Promise(r => setTimeout(r, ms));
               const setInputValue = (input, value) => {
@@ -146,7 +264,10 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 input.dispatchEvent(new Event('change', { bubbles: true }));
                 input.blur();
               };
-              const userInp = document.querySelector('input[type="text"]') || 
+              const userInp = document.querySelector('input[type="text"]') ||
+                              document.querySelector('input[type="cnpj"]') ||
+                              document.querySelector('input[name="cnpj"]') ||
+                              document.querySelector('#cnpj') ||
                               document.querySelector('input[name*="user"]') || 
                               document.querySelector('input[name*="login"]') ||
                               document.querySelector('#email') ||
@@ -185,9 +306,12 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   const form = userInp.closest('form');
                   if (form) form.submit();
                 }
+                return true;
               }
+              return false;
             })();
           `).catch(() => {});
+          if (!loginSubmitted) injectedLogin = false;
           return;
         }
 
@@ -212,6 +336,12 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
             cleanup();
             reject(new Error('Supplier portal rejected the configured login credentials.'));
           });
+          return;
+        }
+
+        if (supplierId === 2 && !hasPasswordInput && (pathname === '/inicio' || pathname === '/')) {
+          logger.info('Opening Profarma Novo Pedido page...');
+          await win.loadURL(new URL('/novo-pedido', currentUrl).href);
           return;
         }
 
@@ -275,11 +405,27 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
         }
 
         // --- 2. SEARCH & EXTRACTION FLOW ---
-        const isSearchPage = pathname.includes('/dashboard') || 
+        const isSearchPage = pathname.includes('/dashboard') ||
                              pathname.includes('/produtos') || 
-                             (pathname.includes('/pedido') && pathname !== '/');
+                             pathname.includes('/novo-pedido') ||
+                             (pathname.includes('/pedido') && pathname !== '/') ||
+                             (supplierId === 4 && pathname === '/home');
 
         if (isSearchPage) {
+          if (supplierId === 2) {
+            const profarmaReady = await win.webContents.executeJavaScript(`
+              (() => {
+                const text = (document.body?.innerText || '')
+                  .normalize('NFD')
+                  .replace(/[\u0300-\u036f]/g, '')
+                  .toLowerCase();
+                const input = document.querySelector('input[placeholder*="buscando"]');
+                return !!input && !input.disabled && !text.includes('carregando produtos');
+              })()
+            `).catch(() => false);
+            if (!profarmaReady) return;
+          }
+
           // Check promotions select state
           const promoState = await win.webContents.executeJavaScript(`
             (() => {
@@ -302,7 +448,9 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
               const searchInp = document.querySelector('#inputPP') ||
                                 document.querySelector('input[data-placeholder*="Pesquisar"]') ||
-                                document.querySelector('input[placeholder*="Pesquisar"]');
+                                document.querySelector('input[placeholder*="Pesquisar"]') ||
+                                document.querySelector('input[placeholder*="buscando"]') ||
+                                document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
               if (searchInp && !searchInp.disabled && searchInp.offsetParent !== null) {
                 return 'NO_PROMO_FIELD';
               }
@@ -344,12 +492,21 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 (() => {
                   const searchInp = document.querySelector('#inputPP') || 
                                     document.querySelector('input[data-placeholder*="Pesquisar"]') ||
-                                    document.querySelector('input[placeholder*="Pesquisar"]');
+                                    document.querySelector('input[placeholder*="Pesquisar"]') ||
+                                    document.querySelector('input[placeholder*="buscando"]') ||
+                                    document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
                   return searchInp ? searchInp.value : null;
                 })()
               `);
 
               if (searchInpVal !== null) {
+                if (typedSearch && String(searchInpVal).trim().toLowerCase() !== String(searchTerm).trim().toLowerCase()) {
+                  logger.info('Search field was reset by the portal; typing the term again...');
+                  typedSearch = false;
+                  submittedSearch = false;
+                  return;
+                }
+
                 // If we haven't typed yet, type the search term
                 if (!typedSearch) {
                   typedSearch = true;
@@ -359,11 +516,22 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       const wait = ms => new Promise(r => setTimeout(r, ms));
                       const searchInp = document.querySelector('#inputPP') || 
                                         document.querySelector('input[data-placeholder*="Pesquisar"]') ||
-                                        document.querySelector('input[placeholder*="Pesquisar"]');
+                                        document.querySelector('input[placeholder*="Pesquisar"]') ||
+                                        document.querySelector('input[placeholder*="buscando"]') ||
+                                        document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
                       if (searchInp) {
                         searchInp.focus();
-                        searchInp.value = ${JSON.stringify(searchTerm)};
-                        searchInp.dispatchEvent(new Event('input', { bubbles: true }));
+                        const setter = Object.getOwnPropertyDescriptor(
+                          window.HTMLInputElement.prototype,
+                          'value'
+                        )?.set;
+                        if (setter) setter.call(searchInp, ${JSON.stringify(searchTerm)});
+                        else searchInp.value = ${JSON.stringify(searchTerm)};
+                        searchInp.dispatchEvent(new InputEvent('input', {
+                          bubbles: true,
+                          inputType: 'insertText',
+                          data: ${JSON.stringify(searchTerm)}
+                        }));
                         searchInp.dispatchEvent(new Event('change', { bubbles: true }));
                         await wait(200);
                         searchInp.blur();
@@ -376,23 +544,40 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 // If typed, trigger search submit
                 if (typedSearch && !submittedSearch) {
                   submittedSearch = true;
+                  submittedSearchAt = Date.now();
                   logger.info('Submitting product search...');
                   await win.webContents.executeJavaScript(`
                     (() => {
+                      const supplierId = ${Number(supplierId)};
                       const searchInp = document.querySelector('#inputPP') || 
                                         document.querySelector('input[data-placeholder*="Pesquisar"]') ||
-                                        document.querySelector('input[placeholder*="Pesquisar"]');
+                                        document.querySelector('input[placeholder*="Pesquisar"]') ||
+                                        document.querySelector('input[placeholder*="buscando"]') ||
+                                        document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
                       if (searchInp) {
                         searchInp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
                         searchInp.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
                         searchInp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
                       }
 
-                      const searchIcon = document.querySelector('mat-icon[matsuffix]') || 
-                                         document.querySelector('.mat-form-field-suffix mat-icon') ||
-                                         document.querySelector('mat-icon');
+                      const searchIcon = supplierId === 2 || supplierId === 4 ? null : (
+                        document.querySelector('mat-icon[matsuffix]') ||
+                        document.querySelector('.mat-form-field-suffix mat-icon') ||
+                        document.querySelector('mat-icon')
+                      );
                       if (searchIcon) {
                         searchIcon.click();
+                      }
+
+                      if (searchInp) {
+                        const inputRect = searchInp.getBoundingClientRect();
+                        const nearbyButton = Array.from(document.querySelectorAll('button')).find(button => {
+                          const rect = button.getBoundingClientRect();
+                          return rect.width > 0 && rect.height > 0 &&
+                            Math.abs(rect.top - inputRect.top) < 20 &&
+                            rect.left >= inputRect.right - 10 && rect.left <= inputRect.right + 120;
+                        });
+                        if (nearbyButton) nearbyButton.click();
                       }
                     })()
                   `).catch(() => {});
@@ -408,6 +593,9 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   const wait = ms => new Promise(r => setTimeout(r, ms));
                   const results = [];
                   const visitedEans = new Set();
+                  const supplierId = ${Number(supplierId)};
+                  const parseProfarmaRow = ${parseProfarmaTableRow.toString()};
+                  const parseDmParanaCardFn = ${parseDmParanaCard.toString()};
 
                   const nextSelectors = [
                     'button.mat-paginator-navigation-next',
@@ -418,7 +606,8 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                     '.mat-paginator-navigation-next',
                     'a.next',
                     '.pagination-next a',
-                    'button.next'
+                    'button.next',
+                    'a[aria-label="Go to next page"]'
                   ];
 
                   let hasNext = true;
@@ -427,15 +616,69 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
                   // First check if table rows are even present before starting
                   const initialRows = Array.from(document.querySelectorAll('table tr, .table tr, mat-row')).filter(row => row.querySelector('td') || row.querySelector('mat-cell'));
-                  if (initialRows.length === 0) return null; // Wait for grid to load
+                  const initialDmPrices = supplierId === 4
+                    ? Array.from(document.querySelectorAll('span')).filter(el => /^pre[cç]o\\s*final:\\s*R\\$/i.test((el.textContent || '').trim()))
+                    : [];
+                  if (supplierId === 4 && initialDmPrices.length === 0) {
+                    const paginationReady = !!document.querySelector('[aria-label="pagination"]');
+                    const searchSettled = ${Date.now() - submittedSearchAt} >= 3000;
+                    return paginationReady && searchSettled ? [] : null;
+                  }
+                  if (supplierId !== 4 && initialRows.length === 0) return null;
 
                   while (hasNext && pageCount < maxPages) {
                     pageCount++;
                     const rows = Array.from(document.querySelectorAll('table tr, .table tr, mat-row')).filter(row => row.querySelector('td') || row.querySelector('mat-cell'));
-                    
-                    for (const row of rows) {
+
+                    if (supplierId === 4) {
+                      const priceNodes = Array.from(document.querySelectorAll('span'))
+                        .filter(el => /^pre[cç]o\\s*final:\\s*R\\$/i.test((el.textContent || '').trim()));
+
+                      for (const priceNode of priceNodes) {
+                        let card = priceNode;
+                        while (card && card !== document.body) {
+                          const cardText = card.innerText || '';
+                          if (/EAN:\\s*\\d{13}/i.test(cardText) && card.querySelector('button')) break;
+                          card = card.parentElement;
+                        }
+                        if (!card || card === document.body) continue;
+
+                        const productImage = Array.from(card.querySelectorAll('img[alt]')).find(img => {
+                          const alt = (img.getAttribute('alt') || '').trim();
+                          return alt && !/^brasil$/i.test(alt) && !/^logo/i.test(alt);
+                        });
+                        const name = productImage?.getAttribute('alt')?.trim() || '';
+                        const paragraphs = Array.from(card.querySelectorAll('p')).map(p => (p.innerText || '').trim()).filter(Boolean);
+                        const laboratory = paragraphs.find(value => !/^EAN:/i.test(value) && !/^Desconto\\s+de/i.test(value)) || '';
+                        const buyButton = Array.from(card.querySelectorAll('button')).find(button => /^comprar$/i.test((button.innerText || '').trim()));
+                        const parsedCard = parseDmParanaCardFn({
+                          name,
+                          laboratory,
+                          text: card.innerText || '',
+                          hasBuyButton: !!buyButton,
+                          buyButtonDisabled: !!buyButton?.disabled || buyButton?.getAttribute('aria-disabled') === 'true'
+                        });
+                        if (!parsedCard || !parsedCard.ean || visitedEans.has(parsedCard.ean)) continue;
+                        visitedEans.add(parsedCard.ean);
+                        results.push(parsedCard);
+                      }
+                    }
+
+                    for (const row of supplierId === 4 ? [] : rows) {
                       const cols = Array.from(row.querySelectorAll('td, mat-cell')).map(td => td.innerText.trim());
                       if (cols.length < 5) continue;
+
+                      if (supplierId === 2) {
+                        const quantityCell = row.querySelectorAll('td, mat-cell')[3];
+                        const parsedRow = parseProfarmaRow(cols, !!quantityCell?.querySelector('input'));
+                        if (!parsedRow || !parsedRow.ean || visitedEans.has(parsedRow.ean)) continue;
+                        visitedEans.add(parsedRow.ean);
+                        results.push({
+                          ...parsedRow,
+                          debugColumns: ${includeDebugColumns ? 'cols' : 'undefined'}
+                        });
+                        continue;
+                      }
 
                       const nameCol = cols[1] || '';
                       const eanMatch = nameCol.match(/\\d{13}/);
@@ -467,7 +710,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       if (nameUpper.includes('GOTAS') || nameUpper.includes('SOLUÇÃO')) presentation = 'líquido';
 
                       const dosageMatch = nameCol.match(/\\d+\\s*(?:mg|g|ml|mcg|ui)/i);
-                      const dosage = dosageMatch ? dosageMatch[0].replace(/\s+/g, '') : '500mg';
+                      const dosage = dosageMatch ? dosageMatch[0].replace(/\\s+/g, '') : '500mg';
 
                       const qtyMatch = nameCol.match(/(\\d+)\\s*(cpr|comp|caps|frascos|un|cp|cps|cpr)/i);
                       const quantity = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
@@ -481,7 +724,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       const unitWithStFloat = unitWithStValues[0] || 0;
                       const priceWithAddedSt = stFloat > 0 ? basePriceFloat + stFloat : 0;
                       const finalPriceFloat = unitWithStFloat || priceWithAddedSt || basePriceFloat;
-                      const hasST = stFloat > 0 || unitWithStFloat > 0;
+                      const hasST = stFloat > 0;
 
                       results.push({
                         supplierProductName: nameCol,
@@ -515,16 +758,20 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                     }
 
                     if (nextBtn) {
-                      const firstRowBefore = document.querySelector('table tr td, mat-row mat-cell');
-                      const textBefore = firstRowBefore ? firstRowBefore.innerText : '';
+                      const firstItemBefore = supplierId === 4
+                        ? Array.from(document.querySelectorAll('span')).find(el => /^pre[cç]o\\s*final:\\s*R\\$/i.test((el.textContent || '').trim()))?.closest('div')
+                        : document.querySelector('table tr td, mat-row mat-cell');
+                      const textBefore = firstItemBefore ? firstItemBefore.innerText : '';
 
                       nextBtn.click();
                       
                       let pageChanged = false;
                       for (let w = 0; w < 30; w++) {
                         await wait(100);
-                        const firstRowAfter = document.querySelector('table tr td, mat-row mat-cell');
-                        const textAfter = firstRowAfter ? firstRowAfter.innerText : '';
+                        const firstItemAfter = supplierId === 4
+                          ? Array.from(document.querySelectorAll('span')).find(el => /^pre[cç]o\\s*final:\\s*R\\$/i.test((el.textContent || '').trim()))?.closest('div')
+                          : document.querySelector('table tr td, mat-row mat-cell');
+                        const textAfter = firstItemAfter ? firstItemAfter.innerText : '';
                         if (textAfter !== textBefore) {
                           pageChanged = true;
                           break;
@@ -538,19 +785,43 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                     }
                   }
 
+                  if ((supplierId === 2 || supplierId === 4) && results.length === 0) {
+                    const bodyText = (document.body?.innerText || '')
+                      .normalize('NFD')
+                      .replace(/[\u0300-\u036f]/g, '')
+                      .toLowerCase();
+                    const explicitlyEmpty = bodyText.includes('nenhum produto') ||
+                      bodyText.includes('nao encontramos') ||
+                      bodyText.includes('sem produtos encontrados');
+                    return explicitlyEmpty ? [] : null;
+                  }
+
                   return results;
                 })()
               `);
 
               if (results !== null) {
+                if ((supplierId === 2 || supplierId === 4) && results.length > 0) {
+                  const normalize = value => String(value || '')
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '')
+                    .toLowerCase();
+                  const normalizedSearch = normalize(searchTerm);
+                  const searchToken = normalizedSearch.split(/\s+/).find(token => token.length >= 4) || normalizedSearch;
+                  const matchesSearch = results.some(result =>
+                    (normalizedSearch.match(/^\d{13}$/) && result.ean === normalizedSearch) ||
+                    normalize(result.supplierProductName).includes(searchToken)
+                  );
+                  if (!matchesSearch) return;
+                }
                 hasResolved = true;
                 clearInterval(pollInterval);
 
                 if (results.length > 0) {
                   logger.info(`Scraping completed successfully. Found ${results.length} items.`);
                   const finish = () => {
-                    cleanup();
                     resolve(results);
+                    setTimeout(cleanup, 2000);
                   };
                   if (process.env.DEBUG_SCRAPER_COLUMNS === 'true') {
                     saveDebugArtifacts(`success_supplier_${supplierId}`).finally(finish);
@@ -559,9 +830,9 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   }
                 } else {
                   logger.warn('No items found or parsing returned empty list.');
-                  saveDebugArtifacts('empty_results').finally(() => {
-                    cleanup();
+                  saveDebugArtifacts(`empty_results_supplier_${supplierId}`).finally(() => {
                     resolve([]);
+                    setTimeout(cleanup, 2000);
                   });
                 }
               }
@@ -574,6 +845,8 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
         clearInterval(pollInterval);
         cleanup();
         reject(err);
+      } finally {
+        stateMachineRunning = false;
       }
     };
 

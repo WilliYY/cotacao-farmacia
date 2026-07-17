@@ -411,11 +411,17 @@ export async function initDatabase(userDataPath) {
   }
 
   // Insert default suppliers
-  const suppliers = ['ANB', 'Profarma', 'Santa Cruz'];
-  for (const name of suppliers) {
+  const suppliers = [
+    { id: 1, name: 'ANB' },
+    { id: 2, name: 'Profarma' },
+    { id: 3, name: 'Santa Cruz' },
+    { id: 4, name: 'DM Paraná' }
+  ];
+  for (const supplier of suppliers) {
     await dbInstance.run(
-      'INSERT OR IGNORE INTO Supplier (name, active) VALUES (?, 1)',
-      name
+      'INSERT OR IGNORE INTO Supplier (id, name, active) VALUES (?, ?, 1)',
+      supplier.id,
+      supplier.name
     );
   }
 
@@ -427,6 +433,15 @@ export function getDb() {
     throw new Error('Database not initialized. Call initDatabase first.');
   }
   return dbInstance;
+}
+
+export async function getSupplierIdByName(name) {
+  if (!dbInstance) return null;
+  const supplier = await dbInstance.get(
+    'SELECT id FROM Supplier WHERE name = ? AND active = 1',
+    name
+  );
+  return supplier?.id || null;
 }
 
 export async function saveSearch(rawText, parsed) {

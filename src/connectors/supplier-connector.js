@@ -1,6 +1,6 @@
 /**
  * Base SupplierConnector interface/contract class.
- * All connectors (ANB, Profarma, Santa Cruz) must inherit from this.
+ * All supplier connectors must inherit from this contract.
  */
 export class SupplierConnector {
   constructor(supplierName) {

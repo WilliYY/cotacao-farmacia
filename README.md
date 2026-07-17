@@ -15,6 +15,15 @@ O sistema roda localmente no computador da farmácia. Certifique-se de possuir o
    ```
 3. Abra `cotacao.bat`. O inicializador verifica uma versão remota segura, instala ou atualiza as dependências necessárias e então abre o aplicativo.
 
+### Configuração em outro computador
+
+1. Clone o projeto e abra `cotacao.bat`; o bootstrap instala as dependências compatíveis antes de iniciar.
+2. Abra **Configurar Logins das Distribuidoras** no aplicativo.
+3. Cadastre ANB, Profarma, Santa Cruz e **DM Paraná**. A URL da DM é `https://portal.dmparana.com.br/login`.
+4. Faça uma cotação curta e confira se cada fonte aparece como consultada ao vivo.
+
+As senhas não ficam no Git. O Windows protege os acessos com DPAPI, portanto uma senha protegida em uma máquina não deve ser copiada como arquivo para outra: cadastre novamente pela tela de configurações em cada computador. O banco e o histórico podem permanecer locais, mas nunca são usados como fonte de preço para uma nova cotação.
+
 ---
 
 ## 🚀 Como Rodar o Sistema
@@ -85,3 +94,12 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - **Histórico não é fonte:** O SQLite serve para reabrir/exportar cotações anteriores e guardar credenciais protegidas; uma nova cotação nunca consulta preços desse banco.
 - **Janelas visíveis:** `SHOW_SCRAPER_WINDOW=true` mantém o navegador do robô visível para login/captcha e conferência visual.
 - **Privacidade Local:** O sistema grava histórico local em banco SQLite (`cotador-st.db`) na pasta de dados do usuário e gera logs limpos em `logs/app.log` sem armazenar dados de cookies, senhas, tokens ou contas de acesso.
+
+### 5. Regra de preço da DM Paraná
+
+- O robô pesquisa pelo nome do medicamento e usa dosagem/apresentação para auditar os cartões retornados.
+- O único valor aceito é o texto literal **`Preço final: R$`**, que já representa o custo final exibido pelo portal.
+- O preço grande em negrito (`R$ .../cada`) é preço cru e nunca participa do ranking.
+- Itens sem botão **Comprar** ativo, com `Sem estoque`, `Indisponível` ou `Avise-me`, são ignorados.
+- A paginação avança pelo botão **Próximo** enquanto estiver habilitado, com limite defensivo de dez páginas.
+- Medicamentos combinados são bloqueados quando a busca pede apenas um princípio ativo.

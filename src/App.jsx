@@ -453,7 +453,7 @@ function App() {
 
   // Settings Panel States
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [selectedSettingSupplier, setSelectedSettingSupplier] = useState(1); // 1: ANB, 2: Profarma, 3: Santa Cruz
+  const [selectedSettingSupplier, setSelectedSettingSupplier] = useState(1);
   const [settingsUrl, setSettingsUrl] = useState('');
   const [settingsUsername, setSettingsUsername] = useState('');
   const [settingsPassword, setSettingsPassword] = useState('');
@@ -465,7 +465,8 @@ function App() {
   const [selectedSuppliers, setSelectedSuppliers] = useState({
     ANB: true,
     Profarma: true,
-    'Santa Cruz': true
+    'Santa Cruz': true,
+    'DM Paraná': true
   });
 
   // Table filters
@@ -549,7 +550,8 @@ function App() {
           const defaultUrls = {
             1: 'https://portal.anbfarma.com.br/login',
             2: 'https://pedido.profarma.com.br/',
-            3: 'https://www.santacruz.com.br/login'
+            3: 'https://www.santacruz.com.br/login',
+            4: 'https://portal.dmparana.com.br/login'
           };
           setSettingsUrl(defaultUrls[supplierId] || '');
           setSettingsUsername('');
@@ -981,7 +983,7 @@ function App() {
         ) : isSettingsOpen ? (
           /* Distributor Settings Panel */
           <div className="search-card animate-fade-in" style={{ maxWidth: '800px', width: '100%', margin: '2rem auto', background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(20px)', boxShadow: '0 20px 40px rgba(0,0,0,0.3)', padding: '2.5rem', borderRadius: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+            <div className="settings-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h2 className="search-title" style={{ fontSize: '1.65rem', fontWeight: 800, background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.03em', margin: 0 }}>
                 ⚙️ Configurar Logins das Distribuidoras
               </h2>
@@ -993,14 +995,15 @@ function App() {
               Cadastre suas credenciais de acesso para permitir que o robô faça pesquisas de medicamentos diretamente nos portais oficiais de cada distribuidora de forma segura e autônoma.
             </p>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '2rem' }}>
+            <div className="settings-layout" style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '2rem' }}>
               {/* Left panel: supplier selectors */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', borderRight: '1px solid rgba(255,255,255,0.05)', paddingRight: '1.5rem' }}>
+              <div className="settings-suppliers" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', borderRight: '1px solid rgba(255,255,255,0.05)', paddingRight: '1.5rem' }}>
                 <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: '#64748b', fontWeight: 700, marginBottom: '0.5rem' }}>Distribuidoras</h4>
                 {[
                   { id: 1, name: 'ANB Farma' },
                   { id: 2, name: 'Profarma' },
-                  { id: 3, name: 'Santa Cruz' }
+                  { id: 3, name: 'Santa Cruz' },
+                  { id: 4, name: 'DM Paraná' }
                 ].map(sup => (
                   <button
                     key={sup.id}
@@ -1047,7 +1050,7 @@ function App() {
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div className="settings-credentials-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                   <div>
                     <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.4rem', fontWeight: 600 }}>
                       Usuário / CNPJ
@@ -1187,7 +1190,7 @@ function App() {
 
             <div className="action-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div className="suppliers-checkboxes">
-                {['ANB', 'Profarma', 'Santa Cruz'].map(sup => (
+                {['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'].map(sup => (
                   <label key={sup} className="supplier-label" style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
                     <input
                       type="checkbox"
@@ -1537,6 +1540,7 @@ function App() {
                   <option value="ANB">ANB</option>
                   <option value="Profarma">Profarma</option>
                   <option value="Santa Cruz">Santa Cruz</option>
+                  <option value="DM Paraná">DM Paraná</option>
                 </select>
               </div>
             </div>
@@ -1584,10 +1588,15 @@ function App() {
                           <span className={`text-price ${row.isValidOption ? 'highlight' : ''}`}>
                             R$ {row.price.toFixed(2).replace('.', ',')}
                           </span>
+                          {row.source === 'DM Paraná' && (
+                            <div style={{ color: '#94a3b8', fontSize: '0.65rem', marginTop: '0.2rem' }}>
+                              Preço final: R$
+                            </div>
+                          )}
                         </td>
                         <td>
                           <span className={`badge ${
-                            row.stStatus === 'COM_ST' || row.stStatus === 'ST_INCLUSO' ? 'badge-st-com' : 
+                            row.stStatus === 'COM_ST' || row.stStatus === 'ST_INCLUSO' || row.stStatus === 'ST_ISENTO' ? 'badge-st-com' :
                             row.stStatus === 'ST_SEPARADO' ? 'badge-status-second' :
                             row.stStatus === 'SEM_ST' ? 'badge-st-sem' : 'badge-st-unknown'
                           }`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>

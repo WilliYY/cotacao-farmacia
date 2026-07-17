@@ -6,22 +6,18 @@ import { createLiveUnavailableResult } from './live-result.js';
 
 const PROFARMA_PORTAL_URL = 'https://pedido.profarma.com.br/';
 
-function normalizeProfarmaUrl(url) {
+export function normalizeProfarmaUrl(url) {
   if (!url) return PROFARMA_PORTAL_URL;
 
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase();
     const isProfarmaPortal = hostname === 'portal.profarma.com.br' || hostname === 'pedido.profarma.com.br';
-    const path = parsed.pathname.replace(/\/+$/, '').toLowerCase();
-    if (isProfarmaPortal && (path === '' || path === '/portal')) {
-      return PROFARMA_PORTAL_URL;
-    }
+    if (!isProfarmaPortal) throw new Error('Dominio Profarma invalido');
+    return PROFARMA_PORTAL_URL;
   } catch {
-    // Keep custom/non-URL values untouched so the operator can diagnose them.
+    throw new Error('URL da Profarma nao pertence a um dominio permitido');
   }
-
-  return url;
 }
 
 export class ProfarmaRealConnector extends SupplierConnector {

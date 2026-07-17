@@ -17,6 +17,13 @@ export function isFreshLiveCapture(result, now = Date.now(), maxAgeMs = MAX_LIVE
   return age >= -60_000 && age <= maxAgeMs;
 }
 
+export function matchesSupplierProduct(left, right) {
+  if (left?.source !== right?.source) return false;
+  if (left?.ean && right?.ean) return String(left.ean) === String(right.ean);
+  return left?.supplierProductName === right?.supplierProductName &&
+    Number(left?.price || 0) === Number(right?.price || 0);
+}
+
 const callWithRetry = async (connector, parsedQuery, retries = 2) => {
   let lastErr = null;
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
@@ -37,7 +44,7 @@ const callWithRetry = async (connector, parsedQuery, retries = 2) => {
   return [];
 };
 
-export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Profarma', 'Santa Cruz']) {
+export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná']) {
   logger.info(`Processing search query: "${rawText}" with suppliers: ${activeSuppliers.join(', ')}`);
   
   const parsed = parseSearchQuery(rawText);
@@ -76,7 +83,7 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
 
     const isAvailable = !res.availability || res.availability.toLowerCase() === 'disponível' || res.availability.toLowerCase() === 'disponivel';
     const stValid = isValidST(res.stStatus);
-    const hasST = res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO';
+    const hasST = res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_ISENTO';
 
     const resPresentation = res.presentation || '';
     const resDosage = res.dosage || '';
@@ -127,7 +134,9 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       recStatus = 'Produto parecido — revisar';
     } else if (stValid) {
       isValidOption = true;
-      if (res.stStatus === 'ST_SEPARADO') {
+      if (res.stStatus === 'ST_ISENTO') {
+        recStatus = 'Valido - categoria isenta de ST';
+      } else if (res.stStatus === 'ST_SEPARADO') {
         recStatus = 'ST separado — conferir custo final';
       } else {
         recStatus = 'Válido com ST';
@@ -161,6 +170,7 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       packaging: res.packaging || `${qty} ${res.presentation || parsed.presentation || 'unidades'}`,
       quantity: qty,
       unitPrice: unitPrice,
+      priceSourceLabel: res.priceSourceLabel || null,
       debugColumns: res.debugColumns
     };
   });
@@ -267,7 +277,7 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
   // Combine back to update statuses
   const finalResults = processedResults.map(res => {
     if (res.isValidOption) {
-      const match = validOptions.find(vo => vo.source === res.source && vo.supplierProductName === res.supplierProductName);
+      const match = validOptions.find(vo => matchesSupplierProduct(vo, res));
       if (match) {
         res.recommendationStatus = match.recommendationStatus;
       }

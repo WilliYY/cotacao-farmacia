@@ -1,10 +1,12 @@
 import { ANBConnector } from './mock/anb.js';
 import { ProfarmaConnector } from './mock/profarma.js';
 import { SantaCruzConnector } from './mock/santacruz.js';
+import { DmParanaConnector } from './mock/dm-parana.js';
 
 import { ANBRealConnector } from './real/anb-real.js';
 import { ProfarmaRealConnector } from './real/profarma-real.js';
 import { SantaCruzRealConnector } from './real/santacruz-real.js';
+import { DmParanaRealConnector } from './real/dm-parana-real.js';
 
 import { logger } from '../lib/logger.js';
 
@@ -12,14 +14,16 @@ import { logger } from '../lib/logger.js';
 const mockRegistry = [
   new ANBConnector(),
   new ProfarmaConnector(),
-  new SantaCruzConnector()
+  new SantaCruzConnector(),
+  new DmParanaConnector()
 ];
 
 // Real scraping registry
 const realRegistry = [
   new ANBRealConnector(),
   new ProfarmaRealConnector(),
-  new SantaCruzRealConnector()
+  new SantaCruzRealConnector(),
+  new DmParanaRealConnector()
 ];
 
 logger.info(`Connector Registry loaded. Mock: ${mockRegistry.length} suppliers. Real: ${realRegistry.length} suppliers.`);

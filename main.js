@@ -21,7 +21,8 @@ import {
   getPopularSearches,
   saveSupplierCredentials,
   getSupplierCredentials,
-  getAllSupplierCredentials
+  getAllSupplierCredentials,
+  getSupplierIdByName
 } from './src/lib/database.js';
 import { processQuoteQuery } from './src/lib/recommendation.js';
 import { generateExcelBuffer } from './src/lib/exporter.js';
@@ -156,8 +157,8 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
       for (const res of quote.results) {
         await saveQuoteResult({
           quoteItemId: itemId,
-          supplierId: getSupplierIdByName(res.source),
-          ...res
+          ...res,
+          supplierId: await getSupplierIdByName(res.source)
         });
       }
     }
@@ -273,13 +274,3 @@ ipcMain.handle('get-all-supplier-credentials', async () => {
     throw error;
   }
 });
-
-// Helper mapping supplier string to database supplier id
-function getSupplierIdByName(name) {
-  switch (name) {
-    case 'ANB': return 1;
-    case 'Profarma': return 2;
-    case 'Santa Cruz': return 3;
-    default: return null;
-  }
-}

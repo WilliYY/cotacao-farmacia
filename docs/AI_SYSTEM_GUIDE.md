@@ -141,7 +141,7 @@ Ranks matching supplier results:
 2. Reject `SEM_ST` before ranking. A product without ST must never be marked as `isValidOption` and must never receive `Melhor preço com ST`.
 3. **Exact Numerical Dosage Check:** Extracts the raw numeric value of dosages (e.g. `"50mg"` $\rightarrow$ `50.0`, `"5mg"` $\rightarrow$ `5.0`) and requires exact mathematical equality (`queryDosage === resultDosage`). This avoids false positive substring matches (like matching "50mg" with "5mg" or "25mg" with "250mg") to prevent costly purchase mistakes. If the search contains name and dosage but omits presentation, matching supplier rows can still be recommended; the audit layer handles missing evidence as warnings instead of forcing every row into "produto parecido".
 4. Run the Quote Auditor before ranking. Blocked rows are marked as `auditStatus='BLOQUEADO'`, removed from automatic recommendation, and sent to manual review. Warning rows keep `auditStatus='ATENCAO'` and remain visible with an explanation in `auditSummary`.
-5. Group options that pass the valid ST test (`COM_ST`, `ST_INCLUSO`, or `ST_SEPARADO`) and pass the audit gate.
+5. Group options that pass the valid ST test (`COM_ST`, `ST_INCLUSO`, `ST_SEPARADO`, or the explicit exemption `ST_ISENTO`) and pass the audit gate.
 6. Sort by:
    - **Priority 1:** ST Priority (prefer `COM_ST` over `ST_SEPARADO`).
    - **Priority 2:** Lowest `unitPrice` when packaging differs.
@@ -158,6 +158,7 @@ Validates whether each supplier result is safe to use in the quotation:
 - **ANB:** searches with EAN when available; otherwise sends name + dosage + presentation. The captured quote price must come directly from the `Unit c/St.` grid column. Do not rank ANB rows from `Preço`, `Preço + St.`, or package-multiplied values.
 - **Profarma:** uses the same Electron BrowserWindow scraper path as ANB and normalizes old portal addresses to `https://pedido.profarma.com.br/`. Login rejection, page failure, and timeout return a blocked supplier-unavailable row instead of an empty/zero-price quote.
 - **Santa Cruz:** uses `src/lib/santacruz-search.ps1` for the local JavaFX program. Discovery checks an optional environment override, a validated machine-local path cache, running processes, Desktop/Start Menu shortcuts, uninstall registry entries, standard install folders, and finally a time-bounded fixed-drive scan. It opens the app, handles login, waits for updates, writes the medicine in the live search control, submits the query, waits for the grid to change, and extracts only the visible live result grid.
+- **DM Paraná:** opens only `https://portal.dmparana.com.br/login`, searches by medication name, scans all result pages, ignores cards without active purchase stock, and accepts only the literal card field `Preço final: R$`. The bold `R$ .../cada` amount is the raw price and must never be ranked. Each row carries `priceSourceLabel='Preço final: R$'` so the origin remains visible.
 - **No stored-price fallback:** `santacruz-h2-reader.js` was removed. The recommendation engine also no longer caches unavailable searches. Historical SQLite rows are output/history only and are never inputs to `processQuoteQuery()`.
 - **Freshness gate:** in real mode, every supplier row must have a valid `capturedAt` no older than five minutes. Missing or stale timestamps are blocked before ranking.
 - **Fail-closed mode selection:** real operation requires `ENABLE_REAL_CONNECTORS=true`; test mocks require the separate explicit `ENABLE_MOCK_CONNECTORS=true`. When neither is enabled, quotation execution stops instead of silently selecting mocks. Browser UI mocks also require `VITE_ENABLE_UI_MOCKS=true`.
@@ -169,14 +170,18 @@ Operational notes added after the 2026-07-17 live tests:
 - **Santa Cruz update state:** `SANTACRUZ_STARTUP_WAIT_SECONDS` controls normal startup, while `SANTACRUZ_UPDATE_WAIT_SECONDS` extends the first-run wait when the JavaFX updater is visible. If it still does not expose the live search field, return a blocked unavailable result; never read local product data.
 - **Santa Cruz headless process:** if a matching `javaw`/launcher is already running but no UI Automation window exists, do not start a duplicate instance. `SANTACRUZ_HEADLESS_GRACE_SECONDS` allows normal startup briefly; after that, return `running-without-window` as a blocked supplier state.
 - **Scraper timeout:** `SCRAPER_TIMEOUT_MS` controls the BrowserWindow scraper timeout for live diagnostics and long supplier pages.
-- **Live diagnostic shutdown:** `scratch/codex-live-quote-losartana.mjs` closes the database and quits Electron asynchronously after printing the payload; it must not call `process.exit()` while native SQLite handles are active.
+- **Live diagnostic shutdown:** `scratch/codex-live-quote-losartana.mjs` prints the payload before requesting Electron shutdown; it must not call `process.exit()` while native SQLite handles are active.
+- **DM search contract:** use only the normalized medication name in the portal input. Dosage, presentation, package quantity, EAN, ST and combination checks remain in the auditor; sending the full parsed phrase can produce a false empty search on this portal.
+- **DM pagination and stock:** traverse `Go to next page` while enabled, deduplicate by EAN, require an enabled `Comprar` button, and stop after ten pages as a defensive limit.
+- **DM final-price proof:** results without the exact `Preço final: R$` label are discarded instead of falling back to the bold raw amount.
 
 ### 6. Credentials Security Vault (`database.js`)
 - Enters supplier credentials using Electron's native `safeStorage` API.
 - Criptographs passwords at operating system level using **Windows DPAPI** before saving them as Base64 strings in SQLite.
 - Seamlessly falls back to transparent UTF-8 conversion in testing/terminal contexts where Electron bindings are unavailable.
 - Supports prefixed credential formats (`dpapi:` and `plain:`) so Electron can read credentials created in local terminal diagnostics and legacy Base64 rows.
-- Real connectors read credentials from `SupplierCredentials`: ANB (`supplierId=1`), Profarma (`supplierId=2`), and Santa Cruz (`supplierId=3`).
+- Real connectors read credentials from `SupplierCredentials`: ANB (`supplierId=1`), Profarma (`supplierId=2`), Santa Cruz (`supplierId=3`), and DM Paraná (`supplierId=4`). Quote persistence resolves the supplier ID by name instead of assuming the insertion order.
+- On a new Windows computer, re-enter credentials in the settings screen. DPAPI-protected password blobs are machine-bound and must not be copied through Git.
 
 ---
 
