@@ -828,6 +828,81 @@ textarea.search-textarea {
   color: var(--primary);
 }
 
+.santacruz-readiness {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: center;
+  margin-top: 0.7rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #c8d6dd;
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: linear-gradient(100deg, #f8fbfc 0%, #eef5f7 100%);
+}
+
+.santacruz-readiness.is-success {
+  border-color: #74bda4;
+  background: linear-gradient(100deg, #eefbf5 0%, #e7f7f4 62%, #edf7fb 100%);
+  color: #07694c;
+}
+
+.santacruz-readiness.is-info {
+  border-color: #75aeca;
+  background: linear-gradient(100deg, #edf8fb 0%, #eef4fb 100%);
+  color: #145f82;
+}
+
+.santacruz-readiness.is-warning {
+  border-color: #dca63c;
+  background: linear-gradient(100deg, #fff9e9 0%, #fff5df 100%);
+  color: #8a5a00;
+}
+
+.santacruz-readiness.is-danger {
+  border-color: #dd7381;
+  background: linear-gradient(100deg, #fff3f4 0%, #fff0f2 100%);
+  color: #a7273b;
+}
+
+.santacruz-readiness__icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.santacruz-readiness__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.santacruz-readiness__copy strong {
+  color: currentColor;
+  font-size: 0.8rem;
+}
+
+.santacruz-readiness__copy span,
+.santacruz-readiness__copy small {
+  color: #526773;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.santacruz-readiness__copy small {
+  color: #71848e;
+}
+
+.santacruz-readiness__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .action-row {
   display: flex;
   align-items: center;
@@ -2376,6 +2451,15 @@ textarea.search-textarea {
   .suppliers-checkboxes,
   .metrics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .santacruz-readiness {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .santacruz-readiness__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
   }
 
   .metrics-grid .metric-card:last-child {

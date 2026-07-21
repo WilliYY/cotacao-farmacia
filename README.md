@@ -138,6 +138,8 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - O processo técnico permanece oculto e grava sua saída em `logs/startup.log`; a janela preta do CMD não fica aberta junto do aplicativo.
 - Uma cotação nunca permanece carregando indefinidamente: por padrão, portais web têm limite de 5 minutos, enquanto Santa Cruz e a cotação completa têm limite de 10 minutos. Ao atingir o limite, processos pendentes são cancelados, resultados reais já obtidos são preservados e as fontes incompletas ficam sinalizadas.
 - Durante a espera, o painel mostra o medicamento atual, o progresso total, o tempo decorrido e o estado real de cada distribuidora: aguardando, pesquisando, concluída, sem resultado, falha, ignorada ou tempo limite. As mensagens também identificam o campo final conferido em cada portal.
+- Antes da cotação, a faixa da Santa Cruz verifica a instalação e a janela a cada 30 segundos. Ela informa se o programa está pronto, fechado, atualizando, na tela de login, aberto em Home/Pedidos, sem janela ou não instalado.
+- **Abrir e preparar** localiza o executável de cada computador, inicia o programa, preenche o login salvo e navega até Digitalizador/Novo Pedido. Se existir um processo validado sem janela, o comando explícito muda para **Reiniciar e preparar**; a cotação comum nunca encerra o programa automaticamente.
 - A pesquisa mostra quantos itens serão cotados e quais distribuidoras estão selecionadas antes de iniciar o robô.
 - A prévia explica cada correção ou herança de contexto antes da cotação. Linhas incompletas permanecem vermelhas e visíveis para ajuste.
 - Cada resultado exibe a origem exata do valor utilizado: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final` e DM Paraná `Preço final: R$`.

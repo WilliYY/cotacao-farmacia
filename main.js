@@ -31,6 +31,7 @@ import { getQuoteTimeoutMs, isTimeoutFailure, processQuoteQuery } from './src/li
 import { analyzeQuoteBatch, INPUT_STATUS } from './src/lib/search-intelligence.js';
 import { generateExcelBuffer } from './src/lib/exporter.js';
 import { logger } from './src/lib/logger.js';
+import { getSantaCruzStatus, prepareSantaCruz } from './src/connectors/real/santacruz-real.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,6 +40,8 @@ let mainWindow = null;
 let updateCheckInProgress = false;
 let updateCheckIntervalId = null;
 const isLiveDiagnostic = process.argv.includes('--live-diagnostic');
+const isSantaCruzPrepareDiagnostic = process.argv.includes('--prepare-santacruz');
+const isDiagnosticMode = isLiveDiagnostic || isSantaCruzPrepareDiagnostic;
 const updateStatusPath = path.join(__dirname, 'logs', 'update-status.json');
 
 if (String(process.env.DISABLE_HARDWARE_ACCELERATION || 'true').toLowerCase() !== 'false') {
@@ -178,6 +181,23 @@ app.whenReady().then(async () => {
     return;
   }
 
+  if (isSantaCruzPrepareDiagnostic) {
+    const status = await prepareSantaCruz();
+    console.log(`[SANTACRUZ-PREPARE] ${JSON.stringify({
+      status: status.status,
+      reason: status.reason,
+      ready: status.ready,
+      processRunning: status.processRunning,
+      windowDetected: status.windowDetected,
+      windowTitle: status.windowTitle,
+      launchPath: status.launchPath,
+      discoverySource: status.discoverySource
+    })}`);
+    await closeDatabase();
+    app.exit(status.ready ? 0 : 1);
+    return;
+  }
+
   createWindow();
   updateCheckIntervalId = setInterval(checkGitUpdates, getUpdateCheckIntervalMs());
 
@@ -189,7 +209,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (!isLiveDiagnostic && process.platform !== 'darwin') {
+  if (!isDiagnosticMode && process.platform !== 'darwin') {
     app.quit();
   }
 });
@@ -437,6 +457,36 @@ ipcMain.handle('get-all-supplier-credentials', async () => {
   } catch (error) {
     logger.error(`Failed to get all supplier credentials: ${error.message}`);
     throw error;
+  }
+});
+
+ipcMain.handle('get-santacruz-status', async () => {
+  try {
+    return await getSantaCruzStatus();
+  } catch (error) {
+    logger.warn(`Santa Cruz status check failed: ${error.message}`);
+    return {
+      status: 'status-failed',
+      reason: 'Nao foi possivel verificar a Santa Cruz neste momento',
+      ready: false,
+      requiresOperator: true,
+      canAutoPrepare: false
+    };
+  }
+});
+
+ipcMain.handle('prepare-santacruz', async () => {
+  try {
+    return await prepareSantaCruz();
+  } catch (error) {
+    logger.warn(`Santa Cruz preparation failed: ${error.message}`);
+    return {
+      status: 'prepare-failed',
+      reason: 'Nao foi possivel abrir e preparar a Santa Cruz',
+      ready: false,
+      requiresOperator: true,
+      canAutoPrepare: true
+    };
   }
 });
 

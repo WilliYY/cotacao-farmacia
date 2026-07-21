@@ -33,6 +33,8 @@ $SantaUser = if ($args.Count -gt 1) { [string]$args[1] } else { "" }
 $SantaPassword = if ($args.Count -gt 2) { [string]$args[2] } else { "" }
 $SantaClientCode = if ($args.Count -gt 3) { [string]$args[3] } else { "" }
 $DiscoveryOnly = $SearchQuery -eq "--discover-only" -or $env:SANTACRUZ_DISCOVERY_ONLY -eq "true"
+$StatusOnly = $SearchQuery -eq "--status-only"
+$PrepareOnly = $SearchQuery -eq "--prepare"
 
 $StartupWaitSeconds = 240
 if ($env:SANTACRUZ_STARTUP_WAIT_SECONDS) {
@@ -87,7 +89,8 @@ function Complete-SantaCruzResult {
         [object[]]$Results = @(),
         [string]$InstallRoot = "",
         [string]$LaunchPath = "",
-        [string]$DiscoverySource = ""
+        [string]$DiscoverySource = "",
+        [hashtable]$Details = @{}
     )
 
     $payload = [ordered]@{
@@ -97,6 +100,9 @@ function Complete-SantaCruzResult {
         launchPath = $LaunchPath
         discoverySource = $DiscoverySource
         results = @($Results)
+    }
+    foreach ($key in $Details.Keys) {
+        $payload[$key] = $Details[$key]
     }
     if ($env:SANTACRUZ_RESTORE_FOCUS -ne "false" -and $originalForegroundWindow -ne [System.IntPtr]::Zero) {
         try { [SantaCruzMouse]::SetForegroundWindow($originalForegroundWindow) | Out-Null } catch {}
@@ -364,6 +370,22 @@ function Find-SantaCruzProcess {
         } catch {}
     }
     return $null
+}
+
+function Get-RecentSantaCruzStartupIssue {
+    param([string]$InstallRoot)
+    if (-not $InstallRoot) { return "" }
+    $initializerLog = Join-Path $InstallRoot "log\inicializador.log.0"
+    if (-not (Test-Path -LiteralPath $initializerLog -PathType Leaf)) { return "" }
+    try {
+        $logFile = Get-Item -LiteralPath $initializerLog -ErrorAction Stop
+        if ($logFile.LastWriteTime -lt (Get-Date).AddMinutes(-20)) { return "" }
+        $recentLines = Get-Content -LiteralPath $initializerLog -Tail 160 -ErrorAction Stop
+        if ($recentLines -match '503\s*-\s*Service Unavailable') {
+            return "O atualizador da Santa Cruz respondeu 503 Service Unavailable"
+        }
+    } catch {}
+    return ""
 }
 
 function Find-ControlByAutomationId {
@@ -734,6 +756,23 @@ function Invoke-LoginIfPresent {
     } catch { return "login-failed" }
 }
 
+function Test-LoginScreenPresent {
+    param($Window)
+    if (-not $Window) { return $false }
+    try {
+        $editCondition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Edit
+        )
+        $edits = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCondition)
+        foreach ($edit in $edits) {
+            if ($edit.Current.IsPassword) { return $true }
+        }
+        $summary = Get-WindowTextSummary $Window
+        return $edits.Count -ge 2 -and $summary -match '(?i)login|conectar|entrar|acesso'
+    } catch { return $false }
+}
+
 function Get-TableSignature {
     param($Table)
     if (-not $Table) { return "" }
@@ -857,13 +896,97 @@ if ($DiscoveryOnly) {
     Complete-SantaCruzResult "not-installed" "Aplicativo Santa Cruz nao localizado"
 }
 
-if (-not $SearchQuery) {
+if ($StatusOnly) {
+    if (-not $installation) {
+        Complete-SantaCruzResult "not-installed" "Aplicativo Santa Cruz nao localizado neste computador" @() "" "" "" @{
+            ready = $false
+            processRunning = $false
+            windowDetected = $false
+            requiresOperator = $true
+            canAutoPrepare = $false
+        }
+    }
+
+    $statusProcess = Find-SantaCruzProcess
+    if (-not $statusProcess) {
+        Complete-SantaCruzResult "closed" "Abra a Santa Cruz para o sistema cotar; o robo tambem pode abrir e entrar sozinho" @() $installation.InstallRoot $installation.LaunchPath $installation.Source @{
+            ready = $false
+            processRunning = $false
+            windowDetected = $false
+            requiresOperator = $false
+            canAutoPrepare = $true
+        }
+    }
+
+    $statusWindow = Find-SantaCruzWindow
+    if (-not $statusWindow) {
+        $statusIssue = Get-RecentSantaCruzStartupIssue $installation.InstallRoot
+        $statusReason = if ($statusIssue) {
+            "$statusIssue; o processo ficou sem janela. Tente Reiniciar e preparar ou aguarde o fornecedor"
+        } else {
+            "Santa Cruz esta em execucao, mas sem janela acessivel; use Reiniciar e preparar"
+        }
+        Complete-SantaCruzResult "running-without-window" $statusReason @() $installation.InstallRoot $installation.LaunchPath $installation.Source @{
+            ready = $false
+            processRunning = $true
+            windowDetected = $false
+            requiresOperator = $true
+            canAutoPrepare = $true
+        }
+    }
+
+    $statusTitle = [string]$statusWindow.Current.Name
+    $statusDetails = @{
+        ready = $false
+        processRunning = $true
+        windowDetected = $true
+        windowTitle = $statusTitle
+        requiresOperator = $false
+        canAutoPrepare = $true
+    }
+    if (Test-SantaCruzUpdating $statusWindow) {
+        Complete-SantaCruzResult "updating" "Santa Cruz esta atualizando; aguarde a tela concluir" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+    }
+
+    $statusTable = Find-TableControl $statusWindow
+    $statusSearch = Find-SearchControl $statusWindow $statusTable
+    if ($statusTable -and $statusSearch) {
+        $statusDetails.ready = $true
+        $statusDetails.canAutoPrepare = $false
+        Complete-SantaCruzResult "ready" "Santa Cruz pronta; a cotacao reutilizara a tela de pesquisa ja aberta" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+    }
+    if (Test-LoginScreenPresent $statusWindow) {
+        Complete-SantaCruzResult "login-required" "Santa Cruz aberta na tela de login; o robo usara as credenciais salvas" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+    }
+    if ($statusTitle -match '(?i)\s-\sHome\s-') {
+        Complete-SantaCruzResult "logged-in-home" "Santa Cruz aberta e conectada; o robo abrira o Digitalizador" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+    }
+    if ($statusTitle -match '(?i)\s-\sPedidos\s-' -or $statusTitle.Trim() -eq "Pedidos") {
+        Complete-SantaCruzResult "logged-in-orders" "Santa Cruz aberta em Pedidos; o robo abrira ou aplicara o Novo Pedido" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+    }
+    Complete-SantaCruzResult "open-not-ready" "Santa Cruz esta aberta, mas a rota de pesquisa ainda nao foi reconhecida" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+}
+
+if (-not $SearchQuery -and -not $PrepareOnly) {
     Complete-SantaCruzResult "invalid-query" "Medicamento nao informado" @() $(if ($installation) { $installation.InstallRoot }) $(if ($installation) { $installation.LaunchPath }) $(if ($installation) { $installation.Source })
 }
 
 $window = Find-SantaCruzWindow
 $existingProcess = Find-SantaCruzProcess
 $launchAttempted = $false
+if ($PrepareOnly -and $existingProcess -and -not $window) {
+    Write-SantaCruzTrace "prepare restart stale process id=$($existingProcess.Id) path=$($existingProcess.Path)"
+    try {
+        Stop-Process -Id $existingProcess.Id -Force -ErrorAction Stop
+        $stopDeadline = [DateTime]::UtcNow.AddSeconds(8)
+        while ([DateTime]::UtcNow -lt $stopDeadline -and (Get-Process -Id $existingProcess.Id -ErrorAction SilentlyContinue)) {
+            Start-Sleep -Milliseconds 250
+        }
+        $existingProcess = $null
+    } catch {
+        Complete-SantaCruzResult "restart-failed" "Nao foi possivel reiniciar o processo Santa Cruz sem janela" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+    }
+}
 if (-not $window -and $installation) {
     try {
         $startArguments = @{
@@ -926,6 +1049,13 @@ while ([DateTime]::UtcNow -lt $deadline) {
             }
         }
 
+        $table = Find-TableControl $window
+        $searchControl = Find-SearchControl $window $table
+        if ($table -and $searchControl) {
+            $readyWindow = $window
+            break
+        }
+
         $title = [string]$window.Current.Name
         if ($title -match '(?i)\s-\sHome\s-' -and -not $digitadorOpened) {
             $digitadorControl = Find-TopActionImage $window
@@ -947,12 +1077,6 @@ while ([DateTime]::UtcNow -lt $deadline) {
             }
         }
 
-        $table = Find-TableControl $window
-        $searchControl = Find-SearchControl $window $table
-        if ($table -and $searchControl) {
-            $readyWindow = $window
-            break
-        }
     } else {
         Write-SantaCruzTrace "window not found"
         $headlessProcess = Find-SantaCruzProcess
@@ -978,11 +1102,24 @@ if (-not $readyWindow -or -not $searchControl) {
     $reason = if ($lastState -eq "updating") {
         "Aplicativo Santa Cruz permanece em atualizacao"
     } elseif ($lastState -eq "running-without-window") {
-        "Processo Santa Cruz ativo sem janela de pesquisa"
+        $startupIssue = Get-RecentSantaCruzStartupIssue $installation.InstallRoot
+        if ($startupIssue) { "$startupIssue; processo ativo sem janela de pesquisa" }
+        else { "Processo Santa Cruz ativo sem janela de pesquisa" }
     } else {
         "Campo de pesquisa da Santa Cruz nao encontrado"
     }
     Complete-SantaCruzResult $status $reason @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+}
+
+if ($PrepareOnly) {
+    Complete-SantaCruzResult "ready" "Santa Cruz aberta, conectada e pronta para pesquisar" @() $installation.InstallRoot $installation.LaunchPath $installation.Source @{
+        ready = $true
+        processRunning = $true
+        windowDetected = $true
+        windowTitle = [string]$readyWindow.Current.Name
+        requiresOperator = $false
+        canAutoPrepare = $false
+    }
 }
 
 $table = Find-TableControl $readyWindow

@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('get-supplier-credentials', supplierId),
   getAllSupplierCredentials: () => 
     ipcRenderer.invoke('get-all-supplier-credentials'),
+  getSantaCruzStatus: () => ipcRenderer.invoke('get-santacruz-status'),
+  prepareSantaCruz: () => ipcRenderer.invoke('prepare-santacruz'),
   getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
   ping: () => ipcRenderer.invoke('ping')
 });

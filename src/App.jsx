@@ -437,6 +437,24 @@ const mockApi = {
     const creds = JSON.parse(localStorage.getItem('supplier_creds') || '{}');
     return Object.keys(creds).map(k => ({ supplierId: parseInt(k, 10), ...creds[k] }));
   },
+  getSantaCruzStatus: async () => ({
+    status: 'ready',
+    reason: 'Santa Cruz pronta; a cotação reutilizará a tela de pesquisa já aberta',
+    ready: true,
+    processRunning: true,
+    windowDetected: true,
+    canAutoPrepare: false,
+    credentialsConfigured: true
+  }),
+  prepareSantaCruz: async () => ({
+    status: 'ready',
+    reason: 'Santa Cruz aberta, conectada e pronta para pesquisar',
+    ready: true,
+    processRunning: true,
+    windowDetected: true,
+    canAutoPrepare: false,
+    credentialsConfigured: true
+  }),
   getUpdateStatus: async () => ({ status: 'up-to-date', automaticUpdateEnabled: true }),
   onQuoteProgress: null,
   exportExcel: async (quoteId) => {
@@ -460,6 +478,14 @@ const unavailableApi = {
   getPopularSearches: async () => [],
   getSupplierCredentials: async () => null,
   getAllSupplierCredentials: async () => [],
+  getSantaCruzStatus: async () => ({
+    status: 'status-failed',
+    reason: 'Abra o aplicativo pelo Wimi Cotação para verificar a Santa Cruz.',
+    ready: false,
+    requiresOperator: true,
+    canAutoPrepare: false
+  }),
+  prepareSantaCruz: integrationUnavailable,
   getUpdateStatus: async () => ({ status: 'unknown', automaticUpdateEnabled: false }),
   onGitUpdateAvailable: null,
   onQuoteProgress: null,
@@ -509,6 +535,32 @@ function getSupplierTone(source) {
     'DM Paraná': 'dm-parana'
   };
   return tones[source] || 'default';
+}
+
+function getSantaCruzStatusLabel(status) {
+  const labels = {
+    checking: 'Verificando Santa Cruz',
+    preparing: 'Abrindo e preparando Santa Cruz',
+    ready: 'Santa Cruz pronta',
+    closed: 'Abra a Santa Cruz para cotar',
+    updating: 'Santa Cruz atualizando',
+    'login-required': 'Login da Santa Cruz identificado',
+    'logged-in-home': 'Santa Cruz aberta na tela inicial',
+    'logged-in-orders': 'Santa Cruz aberta em Pedidos',
+    'running-without-window': 'Santa Cruz sem janela acessível',
+    'not-installed': 'Santa Cruz não localizada',
+    'open-not-ready': 'Santa Cruz aberta, rota ainda não reconhecida',
+    'status-failed': 'Não foi possível verificar a Santa Cruz',
+    'prepare-failed': 'Não foi possível preparar a Santa Cruz'
+  };
+  return labels[status] || 'Estado da Santa Cruz';
+}
+
+function getSantaCruzStatusTone(status, ready) {
+  if (ready || status === 'ready') return 'success';
+  if (['checking', 'preparing', 'updating', 'login-required', 'logged-in-home', 'logged-in-orders'].includes(status)) return 'info';
+  if (['running-without-window', 'not-installed', 'status-failed', 'prepare-failed'].includes(status)) return 'danger';
+  return 'warning';
 }
 
 function SupplierProgressIcon({ status }) {
@@ -617,6 +669,14 @@ function App() {
   const [settingsClientCode, setSettingsClientCode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [configuredSuppliers, setConfiguredSuppliers] = useState({});
+  const [santaCruzStatus, setSantaCruzStatus] = useState({
+    status: 'checking',
+    reason: 'Verificando se a Santa Cruz está aberta e pronta.',
+    ready: false,
+    canAutoPrepare: false
+  });
+  const [isCheckingSantaCruz, setIsCheckingSantaCruz] = useState(false);
+  const [isPreparingSantaCruz, setIsPreparingSantaCruz] = useState(false);
 
   // Suppliers selection
   const [selectedSuppliers, setSelectedSuppliers] = useState({
@@ -625,6 +685,7 @@ function App() {
     'Santa Cruz': true,
     'DM Paraná': true
   });
+  const santaCruzSelected = selectedSuppliers['Santa Cruz'];
 
   // Table filters
   const [filterOnlyST, setFilterOnlyST] = useState(true);
@@ -737,6 +798,13 @@ function App() {
     };
   }, [editingResult]);
 
+  useEffect(() => {
+    if (!santaCruzSelected || activeQuote || isSettingsOpen || loading || isPreparingSantaCruz) return undefined;
+    loadSantaCruzStatus(false);
+    const statusTimer = setInterval(() => loadSantaCruzStatus(false), 30_000);
+    return () => clearInterval(statusTimer);
+  }, [santaCruzSelected, activeQuote, isSettingsOpen, loading, isPreparingSantaCruz]);
+
   const loadHistory = async () => {
     try {
       const data = await api.getHistory();
@@ -799,6 +867,58 @@ function App() {
       }
     } catch (e) {
       console.error('Failed to load all credentials status:', e);
+    }
+  };
+
+  const loadSantaCruzStatus = async (showActivity = true) => {
+    if (!api.getSantaCruzStatus) return;
+    if (showActivity) setIsCheckingSantaCruz(true);
+    try {
+      const status = await api.getSantaCruzStatus();
+      setSantaCruzStatus(status || {
+        status: 'status-failed',
+        reason: 'A Santa Cruz não informou o estado atual.',
+        ready: false,
+        requiresOperator: true,
+        canAutoPrepare: false
+      });
+    } catch (error) {
+      console.error('Failed to check Santa Cruz status:', error);
+      setSantaCruzStatus({
+        status: 'status-failed',
+        reason: 'Não foi possível verificar a Santa Cruz neste momento.',
+        ready: false,
+        requiresOperator: true,
+        canAutoPrepare: false
+      });
+    } finally {
+      if (showActivity) setIsCheckingSantaCruz(false);
+    }
+  };
+
+  const handlePrepareSantaCruz = async () => {
+    if (!api.prepareSantaCruz || isPreparingSantaCruz) return;
+    setIsPreparingSantaCruz(true);
+    setSantaCruzStatus(previous => ({
+      ...previous,
+      status: 'preparing',
+      reason: 'Localizando, abrindo, entrando e preparando a tela de pesquisa.',
+      ready: false
+    }));
+    try {
+      const status = await api.prepareSantaCruz();
+      setSantaCruzStatus(status);
+    } catch (error) {
+      console.error('Failed to prepare Santa Cruz:', error);
+      setSantaCruzStatus({
+        status: 'prepare-failed',
+        reason: 'Abra ou reinicie a Santa Cruz e tente preparar novamente.',
+        ready: false,
+        requiresOperator: true,
+        canAutoPrepare: true
+      });
+    } finally {
+      setIsPreparingSantaCruz(false);
     }
   };
 
@@ -1476,6 +1596,47 @@ function App() {
                   </label>
                 ))}
               </div>
+              {santaCruzSelected && (
+                <div
+                  className={`santacruz-readiness is-${getSantaCruzStatusTone(santaCruzStatus.status, santaCruzStatus.ready)}`}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="santacruz-readiness__icon" aria-hidden="true">
+                    {santaCruzStatus.ready
+                      ? <CheckCircle2 size={18} />
+                      : santaCruzStatus.status === 'updating' || santaCruzStatus.status === 'preparing'
+                        ? <Clock3 size={18} />
+                        : <CircleAlert size={18} />}
+                  </div>
+                  <div className="santacruz-readiness__copy">
+                    <strong>{getSantaCruzStatusLabel(santaCruzStatus.status)}</strong>
+                    <span>{santaCruzStatus.reason || 'Verifique o aplicativo antes da cotação.'}</span>
+                    {santaCruzStatus.windowTitle && <small>Janela: {santaCruzStatus.windowTitle}</small>}
+                  </div>
+                  <div className="santacruz-readiness__actions">
+                    {!santaCruzStatus.ready && santaCruzStatus.canAutoPrepare && (
+                      <button className="btn btn-primary btn-compact" onClick={handlePrepareSantaCruz} disabled={isPreparingSantaCruz}>
+                        <PanelLeftOpen size={15} aria-hidden="true" />
+                        {isPreparingSantaCruz
+                          ? 'Preparando...'
+                          : santaCruzStatus.status === 'running-without-window'
+                            ? 'Reiniciar e preparar'
+                            : 'Abrir e preparar'}
+                      </button>
+                    )}
+                    <button
+                      className="icon-button"
+                      onClick={() => loadSantaCruzStatus(true)}
+                      disabled={isCheckingSantaCruz || isPreparingSantaCruz}
+                      aria-label="Verificar Santa Cruz novamente"
+                      title="Verificar Santa Cruz novamente"
+                    >
+                      <RotateCcw size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="action-row">

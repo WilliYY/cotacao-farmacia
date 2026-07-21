@@ -61,6 +61,12 @@ export function normalizeSantaCruzGuiPayload(stdout) {
     installRoot: String(parsed.installRoot || ''),
     launchPath: String(parsed.launchPath || ''),
     discoverySource: String(parsed.discoverySource || ''),
+    ready: Boolean(parsed.ready),
+    processRunning: Boolean(parsed.processRunning),
+    windowDetected: Boolean(parsed.windowDetected),
+    windowTitle: String(parsed.windowTitle || ''),
+    requiresOperator: Boolean(parsed.requiresOperator),
+    canAutoPrepare: Boolean(parsed.canAutoPrepare),
     results: Array.isArray(parsed.results) ? parsed.results : []
   };
 }
@@ -70,18 +76,19 @@ export function getSantaCruzFinalPrice(result = {}) {
   return Number.isFinite(price) && price > 0 ? price : 0;
 }
 
-function runSantaCruzGuiSearch(scriptPath, searchTerm, credentials, options = {}) {
+function runSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) {
   const startupSeconds = getPositiveInteger(process.env.SANTACRUZ_STARTUP_WAIT_SECONDS, 180);
   const updateSeconds = getPositiveInteger(process.env.SANTACRUZ_UPDATE_WAIT_SECONDS, 600);
   const resultSeconds = getPositiveInteger(process.env.SANTACRUZ_RESULT_WAIT_SECONDS, 20);
-  const timeout = (startupSeconds + updateSeconds + resultSeconds + 60) * 1000;
+  const defaultTimeout = (startupSeconds + updateSeconds + resultSeconds + 60) * 1000;
+  const timeout = getPositiveInteger(options.timeoutMs, defaultTimeout);
 
   return new Promise((resolve) => {
     execFile('powershell', [
       '-NoProfile',
       '-ExecutionPolicy', 'Bypass',
       '-File', scriptPath,
-      searchTerm,
+      command,
       credentials?.username || '',
       credentials?.password || '',
       credentials?.clientCode || ''
@@ -105,6 +112,46 @@ function runSantaCruzGuiSearch(scriptPath, searchTerm, credentials, options = {}
       resolve(payload);
     });
   });
+}
+
+function getSantaCruzScriptPath() {
+  return path.join(__dirname, '..', '..', 'lib', 'santacruz-search.ps1');
+}
+
+export async function getSantaCruzStatus() {
+  const credentials = await getSupplierCredentials(3);
+  const payload = await runSantaCruzGuiCommand(
+    getSantaCruzScriptPath(),
+    '--status-only',
+    credentials || {},
+    { timeoutMs: 30_000 }
+  );
+  return {
+    ...payload,
+    credentialsConfigured: Boolean(credentials?.username && credentials?.password)
+  };
+}
+
+export async function prepareSantaCruz(options = {}) {
+  const credentials = await getSupplierCredentials(3);
+  if (!credentials?.username || !credentials?.password) {
+    return {
+      status: 'login-required',
+      reason: 'Configure o login da Santa Cruz antes de preparar o aplicativo',
+      ready: false,
+      requiresOperator: true,
+      canAutoPrepare: false,
+      credentialsConfigured: false,
+      results: []
+    };
+  }
+  const payload = await runSantaCruzGuiCommand(
+    getSantaCruzScriptPath(),
+    '--prepare',
+    credentials,
+    options
+  );
+  return { ...payload, credentialsConfigured: true };
 }
 
 function describeGuiFailure(payload) {
@@ -144,11 +191,11 @@ export class SantaCruzRealConnector extends SupplierConnector {
     if (!credentials?.username || !credentials?.password) {
       return [createLiveUnavailableResult('Santa Cruz', parsedQuery, 'credenciais nao configuradas')];
     }
-    const scriptPath = path.join(__dirname, '..', '..', 'lib', 'santacruz-search.ps1');
+    const scriptPath = getSantaCruzScriptPath();
     logger.info(`Searching Santa Cruz for: "${searchTerm}"...`);
     logger.info('Locating the Santa Cruz installation and starting autonomous GUI search...');
 
-    const guiPayload = await runSantaCruzGuiSearch(scriptPath, searchTerm, credentials, options);
+    const guiPayload = await runSantaCruzGuiCommand(scriptPath, searchTerm, credentials, options);
     let rawResults = [];
 
     if (guiPayload.status === 'ok') {

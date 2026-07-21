@@ -287,6 +287,15 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     assert.match(mainSource, /mainWindow\.maximize\(\)/);
     assert.match(mainSource, /mainWindow\.show\(\)/);
   });
+
+  await t.test('provides a bounded Santa Cruz preparation diagnostic', () => {
+    const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const mainSource = fs.readFileSync(path.join(projectRoot, 'main.js'), 'utf8');
+    const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    assert.match(mainSource, /process\.argv\.includes\('--prepare-santacruz'\)/);
+    assert.match(mainSource, /await prepareSantaCruz\(\)/);
+    assert.strictEqual(packageJson.scripts['diagnose:santacruz'], 'electron . --prepare-santacruz');
+  });
 });
 
 test('Parser Utility - EAN, Quantities and Presentations', async (t) => {
@@ -442,6 +451,42 @@ test('Santa Cruz Portable Automation', async (t) => {
   await t.test('Uses Preco NF as the authoritative Santa Cruz final price', () => {
     assert.strictEqual(getSantaCruzFinalPrice({ priceNf: 53.35, unitCostWithSt: 999, price: 116.12 }), 53.35);
     assert.strictEqual(getSantaCruzFinalPrice({ unitCostWithSt: 71.13, price: 116.15 }), 71.13);
+  });
+
+  await t.test('preserves portable readiness evidence from the GUI probe', () => {
+    const payload = normalizeSantaCruzGuiPayload(JSON.stringify({
+      status: 'ready',
+      reason: 'Santa Cruz pronta',
+      ready: true,
+      processRunning: true,
+      windowDetected: true,
+      windowTitle: 'Pedido Eletrônico SantaCruz - Pedidos -',
+      requiresOperator: false,
+      canAutoPrepare: false,
+      results: []
+    }));
+
+    assert.strictEqual(payload.status, 'ready');
+    assert.strictEqual(payload.ready, true);
+    assert.strictEqual(payload.processRunning, true);
+    assert.strictEqual(payload.windowDetected, true);
+    assert.match(payload.windowTitle, /Pedidos/);
+    assert.strictEqual(payload.requiresOperator, false);
+    assert.strictEqual(payload.canAutoPrepare, false);
+  });
+
+  await t.test('provides read-only status and autonomous prepare modes', () => {
+    const scriptSource = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'lib', 'santacruz-search.ps1'), 'utf8');
+    assert.match(scriptSource, /\$StatusOnly = \$SearchQuery -eq "--status-only"/);
+    assert.match(scriptSource, /\$PrepareOnly = \$SearchQuery -eq "--prepare"/);
+    assert.match(scriptSource, /Santa Cruz pronta; a cotacao reutilizara a tela de pesquisa ja aberta/);
+    assert.match(scriptSource, /Reiniciar e preparar/);
+    assert.match(scriptSource, /\$PrepareOnly -and \$existingProcess -and -not \$window/);
+    assert.match(scriptSource, /Stop-Process -Id \$existingProcess\.Id -Force/);
+    assert.match(scriptSource, /503\\s\*-\\s\*Service Unavailable/);
+    const readyGridCheck = scriptSource.indexOf('$table = Find-TableControl $window', scriptSource.indexOf('while ([DateTime]::UtcNow -lt $deadline)'));
+    const homeNavigation = scriptSource.indexOf("$title -match '(?i)\\s-\\sHome\\s-'", readyGridCheck);
+    assert.ok(readyGridCheck > 0 && homeNavigation > readyGridCheck, 'A grade aberta deve ser reutilizada antes de navegar por Home/Novo Pedido.');
   });
 
   await t.test('Uses a configured local path before portable discovery', () => {

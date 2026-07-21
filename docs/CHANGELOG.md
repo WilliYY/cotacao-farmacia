@@ -27,6 +27,19 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Evidência persistente:** origem do preço, motivo/código de falha, timeout e fallback de busca sobrevivem ao ciclo SQLite/PostgreSQL e continuam visíveis ao reabrir o histórico.
 - **Compatibilidade PostgreSQL:** linhas retornadas pelo driver recuperam os nomes camelCase esperados pela aplicação, preservando cobertura, falhas e origem do preço também no modo servidor.
 
+### Pré-voo e recuperação da Santa Cruz
+- **Estado antes da cotação:** a tela verifica a cada 30 segundos se a Santa Cruz está pronta, fechada, atualizando, em login, em Home/Pedidos, sem janela ou não instalada.
+- **Uso da instância aberta:** quando a grade já está pronta, a cotação reutiliza o campo de pesquisa; quando está em login/Home/Pedidos, a mesma automação entra e navega sem exigir Novo Pedido a cada medicamento.
+- **Ação explícita:** `Abrir e preparar` inicia e autentica; diante de `javaw` validado sem janela, o botão vira `Reiniciar e preparar`. A cotação normal nunca mata o processo do fornecedor.
+- **Portabilidade:** instalação continua sendo descoberta por configuração, cache validado, atalhos, registro, pastas padrão e varredura limitada, sem caminho fixo de usuário.
+- **Diagnóstico repetível:** `npm run diagnose:santacruz` inicializa o banco real, usa as credenciais locais, prepara a interface e retorna um estado sanitizado.
+
+### Validação real Santa Cruz de 2026-07-21
+- O pré-voo encontrou `C:\Program Files (x86)\Pe - SantaCruz\digitador-sd.exe` pelo cache validado e confirmou um `javaw` sem janela de UI Automation.
+- A tentativa real de `hidroclorotiazida 25mg` terminou bloqueada em 39 segundos e não aceitou preço antigo, estimado ou armazenado.
+- `Reiniciar e preparar` encerrou somente o processo órfão validado e iniciou uma nova instância; o fornecedor novamente não criou janela.
+- O log oficial `inicializador.log.0` registrou `503 Service Unavailable` na autorização da atualização `12.0.119`. O Wimi Cotação agora mostra essa causa no aviso da Santa Cruz.
+
 ### Limite de duração da cotação
 - **Sem espera infinita:** portais web são interrompidos após 5 minutos; Santa Cruz e a cotação completa são encerradas após 10 minutos por padrão.
 - **Cancelamento real:** BrowserWindow, espera de nova tentativa e automação PowerShell recebem sinal de cancelamento, evitando que o trabalho continue escondido depois da resposta.
@@ -60,7 +73,7 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Diagnóstico resiliente:** o fechamento de uma janela web oculta não encerra mais a auditoria enquanto um conector local ainda está trabalhando.
 
 ### Validação
-- `npm test`: 89/89 testes aprovados, incluindo resumo comparável, normalização PostgreSQL, persistência de evidências, redução do progresso entre itens e eventos reais de início/conclusão dos conectores.
+- `npm test`: 92/92 testes aprovados, incluindo pré-voo/preparo Santa Cruz, resumo comparável, normalização PostgreSQL, persistência de evidências, redução do progresso entre itens e eventos reais de início/conclusão dos conectores.
 - Build, lint, sintaxe PowerShell, inspeção visual em 1600x900, 1200x800 e 390x844, e diagnóstico real ANB executados antes da publicação.
 
 ### Teste real de hidroclorotiazida 25 mg - 2026-07-21
