@@ -2,7 +2,7 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
 import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
-import { createLiveUnavailableResult } from './live-result.js';
+import { createLiveUnavailableResult, isRetryablePortalError } from './live-result.js';
 
 const PROFARMA_PORTAL_URL = 'https://pedido.profarma.com.br/';
 
@@ -60,7 +60,9 @@ export class ProfarmaRealConnector extends SupplierConnector {
       }));
     } catch (error) {
       logger.error(`Profarma Portal search failed: ${error.message}`);
-      return [createLiveUnavailableResult('Profarma', parsedQuery, 'consulta ao portal falhou')];
+      return [createLiveUnavailableResult('Profarma', parsedQuery, 'consulta ao portal falhou', {
+        retryable: isRetryablePortalError(error)
+      })];
     }
   }
 }

@@ -2,7 +2,21 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
 import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
-import { createLiveUnavailableResult } from './live-result.js';
+import { createLiveUnavailableResult, isRetryablePortalError } from './live-result.js';
+
+const ANB_ORIGIN = 'https://pedido.anbfarma.com.br';
+
+export function normalizeAnbUrl(value) {
+  const candidate = new URL(String(value || `${ANB_ORIGIN}/login`));
+  if (candidate.protocol !== 'https:' || candidate.hostname !== 'pedido.anbfarma.com.br') {
+    throw new Error('URL da ANB fora do dominio permitido');
+  }
+  return `${ANB_ORIGIN}/login`;
+}
+
+export function isRetryableAnbError(error) {
+  return isRetryablePortalError(error);
+}
 
 export class ANBRealConnector extends SupplierConnector {
   constructor() {
@@ -30,13 +44,18 @@ export class ANBRealConnector extends SupplierConnector {
     try {
       const results = await scrapePortal(
         1, 
-        creds.url || 'https://pedido.anbfarma.com.br/login', 
+        normalizeAnbUrl(creds.url),
         creds.username, 
         creds.password, 
         creds.clientCode, 
         searchTerm
       );
       
+      if (parsedQuery.ean && !results.some(result => String(result.ean || '') === String(parsedQuery.ean))) {
+        logger.warn(`ANB did not return evidence for EAN ${parsedQuery.ean}; allowing name fallback.`);
+        return [];
+      }
+
       return results.map(res => ({
         ...res,
         source: 'ANB',
@@ -44,7 +63,9 @@ export class ANBRealConnector extends SupplierConnector {
       }));
     } catch (error) {
       logger.error(`ANB Portal search failed: ${error.message}`);
-      return [createLiveUnavailableResult('ANB', parsedQuery, 'consulta ao portal falhou')];
+      return [createLiveUnavailableResult('ANB', parsedQuery, 'consulta ao portal falhou', {
+        retryable: isRetryableAnbError(error)
+      })];
     }
   }
 }

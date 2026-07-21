@@ -4,6 +4,63 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ---
 
+## [1.7.0] - 2026-07-21
+
+### Inteligência de pesquisa
+- **Contexto entre linhas:** `metformina 500` seguido de `met 850` gera `metformina 850mg`; termos curtos sem contexto seguro ficam vermelhos e não chegam aos fornecedores.
+- **Várias dosagens:** `sinvastatina 20 40` é expandida em duas pesquisas independentes, sem confundir 40 com quantidade.
+- **Correção rastreável:** erros e prefixos únicos, como `dapaglifozina` e `dapagli`, são pesquisados como `dapagliflozina`, mantendo visível a transformação aplicada.
+- **Fallback EAN seguro:** EAN é tentado primeiro; somente resultado vazio permite busca pelo nome informado. Falha de rede ou portal permanece bloqueada.
+- **Aprendizado sem preço antigo:** `QueryCorrection` guarda apenas associações linguísticas confirmadas por captura real; preço, estoque, ST e recomendação nunca são reutilizados.
+
+### Automação e interface
+- **ANB endurecida:** domínio permitido, contrato literal de cabeçalhos, preço exclusivo `Unit c/ST`, bloqueio de grade anterior, paginação sem duplicação e condição comercial configurável.
+- **Falhas controladas:** rede/timeout recebem uma nova tentativa; erro determinístico de tela não entra em repetição e nenhum fornecedor cai para preço histórico.
+- **Menos interferência:** portais web ficam ocultos por padrão. A Santa Cruz tenta preencher por UI Automation, reutiliza a tela de pesquisa e restaura a janela anteriormente ativa.
+- **Conferência rápida:** histórico completo recolhido por padrão, busca por medicamento e painel de interpretação com correções e itens não encontrados em vermelho.
+
+### Teste real ANB de 2026-07-21
+- `losartana 50` `R$ 2,80`; `hidrocloro 25` `R$ 1,55`; `metformina 500` `R$ 3,92`; `met 850` `R$ 5,21`; `sinvastatina 20` `R$ 3,52`, todos exatamente iguais à conferência informada.
+- `sinvastatina 40` retornou `R$ 6,49`. A opção de `R$ 5,97` estava sem estoque e nenhum item de `R$ 6,06` apareceu na grade ao vivo, portanto o sistema não forçou o valor antigo.
+- `dapaglifozina 10` e `dapagli 10` foram corrigidos para `dapagliflozina 10`; ambos retornaram opção válida a partir de `R$ 55,25`.
+- Repetição final de `losartana 50`: 12 resultados, 7 válidos e menor `Unit c/ST` de `R$ 2,80`.
+
+### Auditoria das quatro rotas em 2026-07-21
+- **Losartana 50 mg:** ANB `R$ 2,80` (`Unit c/ST`), Profarma `R$ 2,70` (`Preço Final`) e DM Paraná `R$ 2,66` (`Preço final: R$`).
+- **Amitriptilina 25 mg:** ANB `R$ 7,44`, Profarma `R$ 7,93` e DM Paraná `R$ 5,58`, cada qual pela sua fonte final obrigatória.
+- **Clonazepam 2 mg:** ANB `R$ 5,32`, Profarma `R$ 6,61` e DM Paraná `R$ 6,72`, cada qual pela sua fonte final obrigatória.
+- **Santa Cruz:** instalação confirmada em `C:\Program Files (x86)\Pe - SantaCruz\digitador-sd.exe`, mas o processo `javaw.exe` permaneceu sem janela de pesquisa. As três consultas ficaram bloqueadas, sem preço antigo; o circuito evitou repetir a espera nas linhas seguintes.
+- **Diagnóstico resiliente:** o fechamento de uma janela web oculta não encerra mais a auditoria enquanto um conector local ainda está trabalhando.
+
+### Validação
+- `npm test`: 76/76 testes aprovados.
+- Build, lint, sintaxe PowerShell, inspeção visual e diagnóstico real ANB executados antes da publicação.
+
+## [1.6.0] - 2026-07-17
+
+### Conectores reais
+- **ANB sem preço alternativo:** o valor aceito vem exclusivamente de `Unit c/ST`; a soma de emergência `Preço + ST` foi removida e a origem fica persistida em cada linha.
+- **Profarma auditável:** resultados carregam `Preço Final` como fonte e medicamentos com ST ausente continuam fora do ranking.
+- **Santa Cruz fail-closed:** o robô usa apenas `Preço NF`, aguarda até quatro minutos na inicialização Java e exige evidência de estoque na coluna `Disp.`; estado desconhecido não é recomendado.
+- **DM portátil:** credenciais canônicas da DM são reconciliadas com o ID real do fornecedor no SQLite, mesmo quando a sequência interna não usa ID `4`.
+
+### Resiliência e portabilidade
+- **Credenciais internas portáteis:** `CREDENTIAL_STORAGE_MODE=plain` mantém as senhas no SQLite local sem vinculação DPAPI à máquina; arquivos locais continuam excluídos do Git.
+- **Electron autocorrigível:** o bootstrap verifica se `electron.exe` realmente existe e executa `install-electron` quando o pacote npm está presente sem o runtime.
+- **Falha de rede controlada:** portais web recebem uma única nova tentativa em erro transitório; configuração inválida e aplicativo local indisponível falham imediatamente e nunca consultam histórico.
+- **Diagnóstico oficial:** `npm run diagnose:live` testa termos/fornecedores em sequência, preserva a origem exata do preço, grava relatório sanitizado e abre circuito após falha de infraestrutura.
+- **Depuração portátil:** HTML e screenshots do scraper passam para `logs/scraper-debug`, sem caminho fixo de usuário.
+
+### Teste real de 2026-07-17
+- **ANB (`Unit c/ST`):** losartana 50 mg `R$ 2,71`; amitriptilina 25 mg `R$ 7,44`; clonazepam 2 mg `R$ 5,32`.
+- **Profarma (`Preço Final`):** losartana 50 mg `R$ 2,70`; amitriptilina 25 mg `R$ 6,19`; clonazepam 2 mg `R$ 6,40`.
+- **DM Paraná (`Preço final: R$`):** losartana 50 mg `R$ 2,66`; amitriptilina 25 mg `R$ 5,58`; clonazepam 2 mg `R$ 6,72`.
+- **Santa Cruz:** instalação e atalho foram descobertos, mas o fornecedor retornou `503 Service Unavailable` na autorização da atualização e o Java permaneceu sem janela. A rodada ficou bloqueada antes das pesquisas dos três medicamentos, sem preço antigo ou estimado.
+
+### Validação
+- `npm test`: 61/61 testes aprovados, incluindo ID variável da DM, runtime Electron, caminho configurado da Santa Cruz, nova tentativa seletiva de rede e circuito por fornecedor.
+- Parser PowerShell da Santa Cruz, build, lint, diagnóstico do bootstrap e `git diff --check` executados antes da entrega.
+
 ## [1.5.0] - 2026-07-17
 
 ### Interface

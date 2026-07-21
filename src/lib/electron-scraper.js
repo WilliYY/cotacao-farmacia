@@ -1,5 +1,70 @@
 import { logger } from './logger.js';
 
+function parsePositiveCurrency(value) {
+  const match = String(value || '').match(/-?\d{1,3}(?:\.\d{3})*,\d+|-?\d+(?:[.,]\d+)?/);
+  if (!match) return 0;
+  let clean = match[0];
+  if (clean.includes('.') && clean.includes(',')) clean = clean.replace(/\./g, '').replace(',', '.');
+  else clean = clean.replace(',', '.');
+  const parsed = Number.parseFloat(clean);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+export function parseAnbTableRow(headers, columns) {
+  const normalize = value => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  const normalizedHeaders = Array.isArray(headers) ? headers.map(normalize) : [];
+  const cols = Array.isArray(columns) ? columns.map(value => String(value || '').trim()) : [];
+  const findIndex = predicate => normalizedHeaders.findIndex(predicate);
+  const nameIndex = findIndex(value => value === 'nome' || value.includes('descricao'));
+  const stIndex = findIndex(value => /^st\.?$/.test(value));
+  const unitWithStIndex = findIndex(value => value.includes('unit') && /c\/?\s*st/.test(value));
+  const stockIndex = findIndex(value => value.includes('estoque'));
+  const laboratoryIndex = findIndex(value => value.includes('laboratorio'));
+  if ([nameIndex, stIndex, unitWithStIndex, stockIndex, laboratoryIndex].some(index => index < 0)) return null;
+
+  const name = cols[nameIndex] || '';
+  const finalPrice = parsePositiveCurrency(cols[unitWithStIndex]);
+  if (!name || finalPrice <= 0) return null;
+
+  const stAmount = parsePositiveCurrency(cols[stIndex]);
+  const stockText = normalize(cols[stockIndex]);
+  const stockNumber = Number.parseInt(stockText.replace(/\D/g, ''), 10);
+  const available = !stockText.includes('avise') &&
+    !stockText.includes('indispon') &&
+    (!Number.isFinite(stockNumber) || stockNumber > 0);
+  const normalizedName = normalize(name);
+  let presentation = 'comprimido';
+  if (normalizedName.includes('caps')) presentation = 'capsula';
+  else if (normalizedName.includes('creme') || normalizedName.includes('pomada')) presentation = 'creme';
+  else if (normalizedName.includes('gotas') || normalizedName.includes('solucao') || normalizedName.includes('xarope')) presentation = 'liquido';
+  const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
+  const quantityMatch = name.match(/(?:c\/?|com\s+)(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i) ||
+    name.match(/(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i);
+  const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
+  const ean = cols.join(' ').match(/\b\d{13}\b/)?.[0] || '';
+
+  return {
+    supplierProductName: name,
+    laboratory: cols[laboratoryIndex] || 'N/A',
+    dosage,
+    presentation,
+    price: Number(finalPrice.toFixed(2)),
+    stAmount: Number(stAmount.toFixed(2)),
+    stStatus: stAmount > 0 ? 'COM_ST' : 'SEM_ST',
+    availability: available ? 'disponivel' : 'sem estoque',
+    ean,
+    packaging: name,
+    quantity,
+    unitPrice: Number(finalPrice.toFixed(4)),
+    priceSourceLabel: 'Unit c/ST'
+  };
+}
+
 export function parseDmParanaCard(cardData = {}) {
   const text = String(cardData.text || '').replace(/\u00a0/g, ' ');
   const name = String(cardData.name || '').trim();
@@ -111,7 +176,8 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
     packaging: name,
     quantity,
     unitPrice: quantity > 0 ? Number((finalPrice / quantity).toFixed(4)) : finalPrice,
-    category
+    category,
+    priceSourceLabel: 'Preço Final'
   };
 }
 
@@ -132,9 +198,12 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
       width: 1024,
       height: 768,
       show: showWindow,
+      skipTaskbar: !showWindow,
       webPreferences: {
         nodeIntegration: false,
-        contextIsolation: true
+        contextIsolation: true,
+        backgroundThrottling: false,
+        partition: `persist:wimifarma-supplier-${supplierId}`
       }
     });
 
@@ -158,17 +227,21 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
     const saveDebugArtifacts = async (name) => {
       try {
-        const fs = await import('fs');
+        const fs = await import('node:fs');
+        const path = await import('node:path');
         if (win && !win.isDestroyed()) {
           const html = await win.webContents.executeJavaScript('document.documentElement.outerHTML');
-          const htmlPath = 'C:/Users/Williany/.gemini/antigravity/brain/23cc081b-d3e4-4dfc-89c1-1197113f0a2c/scratch/' + name + '.html';
+          const debugDirectory = path.resolve(process.cwd(), 'logs', 'scraper-debug');
+          const safeName = String(name || 'scraper').replace(/[^a-z0-9._-]+/gi, '_');
+          fs.mkdirSync(debugDirectory, { recursive: true });
+          const htmlPath = path.join(debugDirectory, `${safeName}.html`);
           fs.writeFileSync(htmlPath, html);
           logger.info(`Saved debug HTML to: ${htmlPath}`);
 
           try {
             const image = await win.webContents.capturePage();
             const buffer = image.toPNG();
-            const pngPath = 'C:/Users/Williany/.gemini/antigravity/brain/23cc081b-d3e4-4dfc-89c1-1197113f0a2c/scratch/' + name + '.png';
+            const pngPath = path.join(debugDirectory, `${safeName}.png`);
             fs.writeFileSync(pngPath, buffer);
             logger.info(`Saved debug screenshot to: ${pngPath}`);
           } catch (shotErr) {
@@ -199,8 +272,10 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
     let injectedLogin = false;
     let submittedSearch = false;
     let submittedSearchAt = 0;
+    let preSearchSignature = '';
     let typedSearch = false;
     let lastPromoClickTime = 0;
+    let promoOpenAttempts = 0;
     let stateMachineRunning = false;
 
     const runStateMachine = async () => {
@@ -360,7 +435,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
             const overlay = Array.from(document.querySelectorAll(
               '[role="dialog"], .mat-dialog-container, .cdk-overlay-pane, .modal, .modal-content, .swal2-popup, .MuiDialog-root'
-            )).find(isVisible);
+            )).find(el => isVisible(el) && !el.querySelector('mat-option, [role="option"]'));
 
             if (!overlay) return false;
 
@@ -459,26 +534,58 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
             })()
           `);
 
-          if (promoState === 'OVERLAY_CLOSED') {
+          if (!submittedSearch && promoState === 'OVERLAY_CLOSED') {
             const now = Date.now();
             if (now - lastPromoClickTime > 4000) {
               lastPromoClickTime = now;
+              promoOpenAttempts++;
+              if (promoOpenAttempts > 8) {
+                hasResolved = true;
+                clearInterval(pollInterval);
+                saveDebugArtifacts(`commercial_condition_blocked_supplier_${supplierId}`).finally(() => {
+                  cleanup();
+                  reject(new Error('Supplier commercial condition selector did not open.'));
+                });
+                return;
+              }
               logger.info('Promotion dropdown is closed. Clicking to open...');
-              await win.webContents.executeJavaScript(`
+              const promoPoint = await win.webContents.executeJavaScript(`
                 (() => {
                   const promoInp = document.querySelector('#Promo');
-                  if (promoInp) promoInp.click();
+                  const target = promoInp?.querySelector('.mat-select-trigger') || promoInp;
+                  if (!target) return null;
+                  target.focus();
+                  target.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+                  target.dispatchEvent(new KeyboardEvent('keydown', {
+                    bubbles: true,
+                    cancelable: true,
+                    key: 'ArrowDown',
+                    code: 'ArrowDown',
+                    keyCode: 40
+                  }));
+                  const rect = target.getBoundingClientRect();
+                  return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
                 })()
-              `).catch(() => {});
+              `).catch(() => null);
+              if (promoPoint) {
+                win.webContents.sendInputEvent({ type: 'mouseDown', ...promoPoint, button: 'left', clickCount: 1 });
+                win.webContents.sendInputEvent({ type: 'mouseUp', ...promoPoint, button: 'left', clickCount: 1 });
+                win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ARROWDOWN' });
+                win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ARROWDOWN' });
+              }
             }
             return;
           }
 
-          if (promoState === 'OVERLAY_OPEN') {
-            logger.info('Promotion dropdown is open. Clicking first option...');
+          if (!submittedSearch && promoState === 'OVERLAY_OPEN') {
+            promoOpenAttempts = 0;
+            logger.info('Promotion dropdown is open. Selecting the configured commercial condition...');
             await win.webContents.executeJavaScript(`
               (() => {
-                const option = document.querySelector('mat-option') || document.querySelector('.mat-option');
+                const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+                const desired = normalize(${JSON.stringify(process.env.ANB_COMMERCIAL_CONDITION || '')});
+                const options = Array.from(document.querySelectorAll('mat-option, .mat-option'));
+                const option = (desired && options.find(item => normalize(item.innerText || item.textContent).includes(desired))) || options[0];
                 if (option) option.click();
               })()
             `).catch(() => {});
@@ -486,7 +593,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           }
 
           // If catalog is unlocked (PROMO_SELECTED or not applicable), handle searching
-          if (promoState === 'PROMO_SELECTED' || promoState === 'NO_PROMO_FIELD') {
+          if (submittedSearch || promoState === 'PROMO_SELECTED' || promoState === 'NO_PROMO_FIELD') {
             if (!submittedSearch) {
               const searchInpVal = await win.webContents.executeJavaScript(`
                 (() => {
@@ -545,30 +652,20 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 if (typedSearch && !submittedSearch) {
                   submittedSearch = true;
                   submittedSearchAt = Date.now();
+                  preSearchSignature = await win.webContents.executeJavaScript(`
+                    (() => Array.from(document.querySelectorAll('table tr, .table tr, mat-row'))
+                      .filter(row => row.querySelector('td') || row.querySelector('mat-cell'))
+                      .map(row => (row.innerText || '').trim())
+                      .join('||'))()
+                  `).catch(() => '');
                   logger.info('Submitting product search...');
                   await win.webContents.executeJavaScript(`
                     (() => {
-                      const supplierId = ${Number(supplierId)};
                       const searchInp = document.querySelector('#inputPP') || 
                                         document.querySelector('input[data-placeholder*="Pesquisar"]') ||
                                         document.querySelector('input[placeholder*="Pesquisar"]') ||
                                         document.querySelector('input[placeholder*="buscando"]') ||
                                         document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
-                      if (searchInp) {
-                        searchInp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
-                        searchInp.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
-                        searchInp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
-                      }
-
-                      const searchIcon = supplierId === 2 || supplierId === 4 ? null : (
-                        document.querySelector('mat-icon[matsuffix]') ||
-                        document.querySelector('.mat-form-field-suffix mat-icon') ||
-                        document.querySelector('mat-icon')
-                      );
-                      if (searchIcon) {
-                        searchIcon.click();
-                      }
-
                       if (searchInp) {
                         const inputRect = searchInp.getBoundingClientRect();
                         const nearbyButton = Array.from(document.querySelectorAll('button')).find(button => {
@@ -577,7 +674,13 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                             Math.abs(rect.top - inputRect.top) < 20 &&
                             rect.left >= inputRect.right - 10 && rect.left <= inputRect.right + 120;
                         });
-                        if (nearbyButton) nearbyButton.click();
+                        if (nearbyButton) {
+                          nearbyButton.click();
+                          return;
+                        }
+
+                        searchInp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
+                        searchInp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
                       }
                     })()
                   `).catch(() => {});
@@ -588,13 +691,34 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
             // Extract results if search is submitted
             if (submittedSearch) {
+              if (supplierId === 1) {
+                const gridState = await win.webContents.executeJavaScript(`
+                  (() => {
+                    const rows = Array.from(document.querySelectorAll('table tr, .table tr, mat-row'))
+                      .filter(row => row.querySelector('td') || row.querySelector('mat-cell'));
+                    const signature = rows.map(row => (row.innerText || '').trim()).join('||');
+                    const body = (document.body?.innerText || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+                    return {
+                      signature,
+                      loading: body.includes('carregando') || body.includes('aguarde'),
+                      explicitlyEmpty: body.includes('nenhum produto') || body.includes('nao encontramos') || body.includes('sem produtos encontrados')
+                    };
+                  })()
+                `).catch(() => null);
+                const elapsed = Date.now() - submittedSearchAt;
+                if (!gridState || elapsed < 1200 || gridState.loading) return;
+                if (!gridState.explicitlyEmpty && gridState.signature === preSearchSignature) return;
+              }
+
               const results = await win.webContents.executeJavaScript(`
                 (async () => {
                   const wait = ms => new Promise(r => setTimeout(r, ms));
-                  const results = [];
-                  const visitedEans = new Set();
-                  const supplierId = ${Number(supplierId)};
-                  const parseProfarmaRow = ${parseProfarmaTableRow.toString()};
+                   const results = [];
+                   const visitedEans = new Set();
+                   const supplierId = ${Number(supplierId)};
+                   const parsePositiveCurrency = ${parsePositiveCurrency.toString()};
+                   const parseAnbRow = ${parseAnbTableRow.toString()};
+                   const parseProfarmaRow = ${parseProfarmaTableRow.toString()};
                   const parseDmParanaCardFn = ${parseDmParanaCard.toString()};
 
                   const nextSelectors = [
@@ -624,11 +748,23 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                     const searchSettled = ${Date.now() - submittedSearchAt} >= 3000;
                     return paginationReady && searchSettled ? [] : null;
                   }
-                  if (supplierId !== 4 && initialRows.length === 0) return null;
+                  if (supplierId !== 4 && initialRows.length === 0) {
+                    const bodyText = (document.body?.innerText || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+                    const explicitlyEmpty = bodyText.includes('nenhum produto') || bodyText.includes('nao encontramos') || bodyText.includes('sem produtos encontrados');
+                    const searchSettled = ${Date.now() - submittedSearchAt} >= 3000;
+                    return explicitlyEmpty && searchSettled ? [] : null;
+                  }
 
                   while (hasNext && pageCount < maxPages) {
                     pageCount++;
                     const rows = Array.from(document.querySelectorAll('table tr, .table tr, mat-row')).filter(row => row.querySelector('td') || row.querySelector('mat-cell'));
+                    const headers = Array.from(document.querySelectorAll('table th, .table th, mat-header-cell'))
+                      .map(header => (header.innerText || header.textContent || '').trim());
+                    const selectedCommercialCondition = (() => {
+                      const promo = document.querySelector('#Promo');
+                      if (!promo) return '';
+                      return (promo.querySelector('.mat-select-value-text, .mat-select-value')?.innerText || promo.innerText || '').trim();
+                    })();
 
                     if (supplierId === 4) {
                       const priceNodes = Array.from(document.querySelectorAll('span'))
@@ -680,6 +816,20 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                         continue;
                       }
 
+                      if (supplierId === 1) {
+                        const parsedRow = parseAnbRow(headers, cols);
+                        if (!parsedRow) continue;
+                        const dedupeKey = parsedRow.ean || (parsedRow.supplierProductName + '|' + parsedRow.price);
+                        if (visitedEans.has(dedupeKey)) continue;
+                        visitedEans.add(dedupeKey);
+                        results.push({
+                          ...parsedRow,
+                          commercialCondition: selectedCommercialCondition,
+                          debugColumns: ${includeDebugColumns ? 'cols' : 'undefined'}
+                        });
+                        continue;
+                      }
+
                       const nameCol = cols[1] || '';
                       const eanMatch = nameCol.match(/\\d{13}/);
                       const ean = eanMatch ? eanMatch[0] : '';
@@ -715,15 +865,12 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       const qtyMatch = nameCol.match(/(\\d+)\\s*(cpr|comp|caps|frascos|un|cp|cps|cpr)/i);
                       const quantity = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
-                      const basePriceValues = parseCurrencyValues(cols[3]);
                       const stValues = parseCurrencyValues(cols[6]);
                       const unitWithStValues = parseCurrencyValues(cols[7]);
 
-                      const basePriceFloat = basePriceValues[0] || 0;
                       const stFloat = stValues[0] || 0;
                       const unitWithStFloat = unitWithStValues[0] || 0;
-                      const priceWithAddedSt = stFloat > 0 ? basePriceFloat + stFloat : 0;
-                      const finalPriceFloat = unitWithStFloat || priceWithAddedSt || basePriceFloat;
+                      const finalPriceFloat = unitWithStFloat;
                       const hasST = stFloat > 0;
 
                       results.push({
@@ -732,12 +879,14 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                         dosage: dosage,
                         presentation: presentation,
                         price: Number(finalPriceFloat.toFixed(2)),
+                        stAmount: Number(stFloat.toFixed(2)),
                         stStatus: hasST ? 'COM_ST' : 'SEM_ST',
                         availability: isAvailable ? 'disponível' : 'sem estoque',
                         ean: ean,
                         packaging: nameCol,
                         quantity: quantity,
                         unitPrice: Number(finalPriceFloat.toFixed(4)),
+                        priceSourceLabel: 'Unit c/ST',
                         debugColumns: ${includeDebugColumns ? 'cols' : 'undefined'}
                       });
                     }
@@ -778,7 +927,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                         }
                       }
                       if (!pageChanged) {
-                        await wait(1500);
+                        hasNext = false;
                       }
                     } else {
                       hasNext = false;
@@ -801,7 +950,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
               `);
 
               if (results !== null) {
-                if ((supplierId === 2 || supplierId === 4) && results.length > 0) {
+                if ((supplierId === 1 || supplierId === 2 || supplierId === 4) && results.length > 0) {
                   const normalize = value => String(value || '')
                     .normalize('NFD')
                     .replace(/[\u0300-\u036f]/g, '')
@@ -809,7 +958,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   const normalizedSearch = normalize(searchTerm);
                   const searchToken = normalizedSearch.split(/\s+/).find(token => token.length >= 4) || normalizedSearch;
                   const matchesSearch = results.some(result =>
-                    (normalizedSearch.match(/^\d{13}$/) && result.ean === normalizedSearch) ||
+                    (normalizedSearch.match(/^\d{13}$/) && (result.ean === normalizedSearch || supplierId === 1)) ||
                     normalize(result.supplierProductName).includes(searchToken)
                   );
                   if (!matchesSearch) return;

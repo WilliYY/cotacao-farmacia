@@ -133,6 +133,14 @@ Extracts structured terms from unstructured text lines using regular expressions
 - Treats `xarope` and `suspensao oral` as equivalent while excluding ophthalmic, injectable, nasal, otologic, and other non-oral solutions.
 - The same helpers are used by the parser, recommendation pre-check, and final quote auditor to prevent contradictory decisions.
 
+#### Contextual Search Intelligence (`search-intelligence.js`)
+- `analyzeQuoteBatch()` evaluates the complete list before any supplier is opened, preserving safe context from the preceding line.
+- A unique short continuation can inherit its ingredient (`metformina 500` followed by `met 850`), while an ambiguous prefix is returned as `NEEDS_INFO` and is not sent to a portal.
+- Known compact strengths are expanded into independent plans, so `sinvastatina 20 40` means 20 mg and 40 mg rather than quantity 40.
+- Controlled spelling corrections and unique DCB prefixes are applied before the live search and persisted with original text, resolved text, reason, and confidence.
+- `QueryCorrection` learns aliases only after a successful live result and only at high confidence or after repeated confirmation. It never stores or supplies price, stock, ST, or a recommendation.
+- For input containing EAN plus description, the connector tries EAN first and retries by name only after a genuine empty response. Infrastructure errors stay blocked.
+
 ### 2. Substituição Tributária (ST) Rules Engine (`st-rules.js`)
 Classifies tax conditions into four operational categories:
 
@@ -163,33 +171,35 @@ Validates whether each supplier result is safe to use in the quotation:
 - Persists the outcome in `QuoteResult.auditStatus` and `QuoteResult.auditSummary`; the UI and XLSX export show these fields and route non-OK rows to review.
 
 ### 5. Real Supplier Extraction Rules
-- **ANB:** searches with EAN when available; otherwise sends name + dosage + presentation. The captured quote price must come directly from the `Unit c/St.` grid column. Do not rank ANB rows from `Preço`, `Preço + St.`, or package-multiplied values.
-- **Profarma:** uses the same Electron BrowserWindow scraper path as ANB and normalizes old portal addresses to `https://pedido.profarma.com.br/`. Login rejection, page failure, and timeout return a blocked supplier-unavailable row instead of an empty/zero-price quote.
-- **Santa Cruz:** uses `src/lib/santacruz-search.ps1` for the local JavaFX program. Discovery checks an optional environment override, a validated machine-local path cache, running processes, Desktop/Start Menu shortcuts, uninstall registry entries, standard install folders, and finally a time-bounded fixed-drive scan. It opens the app, handles login, waits for updates, writes the medicine in the live search control, submits the query, waits for the grid to change, and extracts only the visible live result grid.
+- **ANB:** searches with EAN when available; otherwise sends name + dosage + presentation. The captured quote price must come directly from the literal `Unit c/ST` grid column. Required headers are validated before extraction, the previous grid signature cannot satisfy a new search, and missing/zero `Unit c/ST` blocks the row. Never fall back to `Preço`, `Preço + ST`, or a package calculation.
+- **Profarma:** uses the Electron BrowserWindow scraper, normalizes old addresses to `https://pedido.profarma.com.br/`, opens `Novo Pedido`, and accepts only `Preço Final`. A medicine with `ST R$ -` is blocked unless its category is explicitly ST-exempt.
+- **Santa Cruz:** uses `src/lib/santacruz-search.ps1` for the local JavaFX program. Discovery checks an optional environment override, a validated machine-local path cache, Desktop/Start Menu shortcuts, uninstall registry entries, standard install folders, and finally a time-bounded fixed-drive scan. It opens the app, handles login, waits for updates, enters Digitalizador/Novo Pedido, writes the medication, requires a changed live grid, extracts only column `Preço NF`, and requires accessible stock evidence from `Disp.`.
 - **DM Paraná:** opens only `https://portal.dmparana.com.br/login`, searches by medication name, scans all result pages, ignores cards without active purchase stock, and accepts only the literal card field `Preço final: R$`. The bold `R$ .../cada` amount is the raw price and must never be ranked. Each row carries `priceSourceLabel='Preço final: R$'` so the origin remains visible.
 - **No stored-price fallback:** `santacruz-h2-reader.js` was removed. The recommendation engine also no longer caches unavailable searches. Historical SQLite rows are output/history only and are never inputs to `processQuoteQuery()`.
 - **Freshness gate:** in real mode, every supplier row must have a valid `capturedAt` no older than five minutes. Missing or stale timestamps are blocked before ranking.
 - **Fail-closed mode selection:** real operation requires `ENABLE_REAL_CONNECTORS=true`; test mocks require the separate explicit `ENABLE_MOCK_CONNECTORS=true`. When neither is enabled, quotation execution stops instead of silently selecting mocks. Browser UI mocks also require `VITE_ENABLE_UI_MOCKS=true`.
 
 Operational notes added after the 2026-07-17 live tests:
-- **ANB promotion gate:** if `#Promo` exists, select the first available promotion/condition before typing the product. The search input being visible is not enough evidence that the product grid is unlocked.
+- **ANB promotion gate:** if `#Promo` exists, select `ANB_COMMERCIAL_CONDITION` before typing the product. The condition is not reselected after submission, preventing a second grid refresh from replacing the requested result.
 - **ANB popups:** close visible dialogs/overlays before search or extraction, because promotional banners can block the result grid and cause false timeouts.
 - **Profarma active route:** use `https://pedido.profarma.com.br/` for ProfarmaOn. Old `portal.profarma.com.br` URLs should be normalized there. If login is rejected or the page stays on login, treat Profarma as unavailable instead of returning zero-price products.
 - **Santa Cruz update state:** `SANTACRUZ_STARTUP_WAIT_SECONDS` controls normal startup, while `SANTACRUZ_UPDATE_WAIT_SECONDS` extends the first-run wait when the JavaFX updater is visible. If it still does not expose the live search field, return a blocked unavailable result; never read local product data.
-- **Santa Cruz headless process:** if a matching `javaw`/launcher is already running but no UI Automation window exists, do not start a duplicate instance. `SANTACRUZ_HEADLESS_GRACE_SECONDS` allows normal startup briefly; after that, return `running-without-window` as a blocked supplier state.
+- **Santa Cruz headless process:** if a matching `javaw` is active without a UI Automation window, the validated launcher is invoked once to recover/activate it. `SANTACRUZ_HEADLESS_GRACE_SECONDS` allows the slow Java/tax-rule startup; after the configured limit, return `running-without-window` as a blocked supplier state.
 - **Scraper timeout:** `SCRAPER_TIMEOUT_MS` controls the BrowserWindow scraper timeout for live diagnostics and long supplier pages.
-- **Live diagnostic shutdown:** `scratch/codex-live-quote-losartana.mjs` prints the payload before requesting Electron shutdown; it must not call `process.exit()` while native SQLite handles are active.
+- **Network retry:** only `retryable` transient portal failures are attempted once more (`CONNECTOR_RETRY_COUNT=1`). Configuration failures and local GUI failures are not retried.
+- **Diagnostic circuit breaker:** `npm run diagnose:live` stops repeating terms for a supplier after an infrastructure failure and records the same blocked reason for the remaining checks.
+- **Live diagnostic shutdown:** `npm run diagnose:live` writes a sanitized JSON report, closes SQLite, and requests Electron shutdown without terminating native handles abruptly.
+- **Diagnostic lifecycle:** closing an individual hidden scraper window does not trigger Electron shutdown while `--live-diagnostic` is still running; this allows the Santa Cruz child process and later suppliers to finish.
 - **DM search contract:** use only the normalized medication name in the portal input. Dosage, presentation, package quantity, EAN, ST and combination checks remain in the auditor; sending the full parsed phrase can produce a false empty search on this portal.
 - **DM pagination and stock:** traverse `Go to next page` while enabled, deduplicate by EAN, require an enabled `Comprar` button, and stop after ten pages as a defensive limit.
 - **DM final-price proof:** results without the exact `Preço final: R$` label are discarded instead of falling back to the bold raw amount.
 
-### 6. Credentials Security Vault (`database.js`)
-- Enters supplier credentials using Electron's native `safeStorage` API.
-- Criptographs passwords at operating system level using **Windows DPAPI** before saving them as Base64 strings in SQLite.
-- Seamlessly falls back to transparent UTF-8 conversion in testing/terminal contexts where Electron bindings are unavailable.
-- Supports prefixed credential formats (`dpapi:` and `plain:`) so Electron can read credentials created in local terminal diagnostics and legacy Base64 rows.
-- Real connectors read credentials from `SupplierCredentials`: ANB (`supplierId=1`), Profarma (`supplierId=2`), Santa Cruz (`supplierId=3`), and DM Paraná (`supplierId=4`). Quote persistence resolves the supplier ID by name instead of assuming the insertion order.
-- On a new Windows computer, re-enter credentials in the settings screen. DPAPI-protected password blobs are machine-bound and must not be copied through Git.
+### 6. Credentials Storage and Portability (`database.js`)
+- The settings view exposes URL/program path, login, password, and optional client code for all four suppliers.
+- `CREDENTIAL_STORAGE_MODE=plain` stores a `plain:` Base64 payload in local SQLite. This is portable but not encrypted and is the intended mode for this internal installation.
+- `CREDENTIAL_STORAGE_MODE=dpapi` remains available for machine-bound Windows protection through Electron `safeStorage`.
+- Credential rows are resolved and reconciled by canonical supplier name. ANB/Profarma/Santa Cruz/DM can use canonical UI IDs `1..4` even when SQLite assigned another internal ID (observed with DM ID `286`).
+- `.env`, SQLite databases, logs, screenshots, and supplier credentials must remain outside Git in both modes.
 
 ---
 
@@ -198,6 +208,8 @@ Operational notes added after the 2026-07-17 live tests:
 The React frontend is an operational workspace with a dark navigation rail and a neutral, high-contrast content surface:
 - **View state:** switches among medication search, consolidated results, and supplier credential settings without changing the Electron IPC contracts.
 - **Search workspace:** displays item and supplier counts, one-query-per-line input, quick examples, and explicit supplier selection before starting a live quote.
+- **Input interpretation:** a preview shows inherited context, spelling corrections and expanded strengths. `NEEDS_INFO` rows stay red and remain visible even under the normal ST filters.
+- **History:** the full local history is collapsed by default and searchable through medication terms aggregated from `QuoteItem`.
 - **Result traceability:** the recommendation cards and detail table show the exact accepted field for each supplier: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final`, and DM Paraná `Preço final: R$`.
 - **Responsive table:** below 900 px, every result row becomes a labeled card while preserving EAN, package, distributor, final price source, ST, stock, audit, recommendation, and review action.
 - **Status semantics:** green is reserved for valid ST/recommendations, red for blocked without ST, amber for review, and blue for informational/secondary states.
@@ -228,15 +240,22 @@ APP_ENV=development
 LOG_LEVEL=info
 
 # Scrapers Toggles
-ENABLE_MOCK_CONNECTORS=true
-ENABLE_REAL_CONNECTORS=false
-SHOW_SCRAPER_WINDOW=true
+ENABLE_MOCK_CONNECTORS=false
+ENABLE_REAL_CONNECTORS=true
+SHOW_SCRAPER_WINDOW=false
+ANB_COMMERCIAL_CONDITION=PREMIUM TOP 7 DIAS
 SCRAPER_TIMEOUT_MS=300000
-SANTACRUZ_STARTUP_WAIT_SECONDS=180
+CONNECTOR_RETRY_COUNT=1
+CONNECTOR_RETRY_DELAY_MS=1000
+SANTACRUZ_STARTUP_WAIT_SECONDS=240
+SANTACRUZ_UPDATE_WAIT_SECONDS=600
+SANTACRUZ_HEADLESS_GRACE_SECONDS=240
+SANTACRUZ_RESTORE_FOCUS=true
 
 # Database Switch (sqlite or postgres)
 DB_TYPE=sqlite
 DATABASE_PATH=local
+CREDENTIAL_STORAGE_MODE=plain
 
 # If postgres is chosen, specify credentials:
 PG_HOST=localhost
@@ -253,6 +272,7 @@ PG_DATABASE=cotador_st
 - **Prepare and Start:** `npm run dev` (Git seguro, dependências e aplicativo)
 - **Preparation Only:** `node scripts/bootstrap.mjs --prepare-only`
 - **Startup Diagnostics:** `node scripts/bootstrap.mjs --diagnose`
+- **Live Supplier Audit:** `npm run diagnose:live -- "losartana 50mg"`
 - **Unit Testing:** `npm run test`
 - **Windows Packaging:** `npm run build` followed by `npm run package`
 

@@ -15,6 +15,9 @@ public static class SantaCruzMouse {
     public static extern bool SetForegroundWindow(System.IntPtr handle);
 
     [DllImport("user32.dll")]
+    public static extern System.IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
     public static extern bool ShowWindow(System.IntPtr handle, int command);
 
     [DllImport("user32.dll")]
@@ -31,7 +34,7 @@ $SantaPassword = if ($args.Count -gt 2) { [string]$args[2] } else { "" }
 $SantaClientCode = if ($args.Count -gt 3) { [string]$args[3] } else { "" }
 $DiscoveryOnly = $SearchQuery -eq "--discover-only" -or $env:SANTACRUZ_DISCOVERY_ONLY -eq "true"
 
-$StartupWaitSeconds = 180
+$StartupWaitSeconds = 240
 if ($env:SANTACRUZ_STARTUP_WAIT_SECONDS) {
     $parsedWait = 0
     if ([int]::TryParse($env:SANTACRUZ_STARTUP_WAIT_SECONDS, [ref]$parsedWait) -and $parsedWait -gt 0) {
@@ -55,7 +58,7 @@ if ($env:SANTACRUZ_UPDATE_WAIT_SECONDS) {
     }
 }
 
-$HeadlessGraceSeconds = 90
+$HeadlessGraceSeconds = 240
 if ($env:SANTACRUZ_HEADLESS_GRACE_SECONDS) {
     $parsedHeadlessGrace = 0
     if ([int]::TryParse($env:SANTACRUZ_HEADLESS_GRACE_SECONDS, [ref]$parsedHeadlessGrace) -and $parsedHeadlessGrace -gt 0) {
@@ -67,6 +70,7 @@ $desktop = [System.Windows.Automation.AutomationElement]::RootElement
 $cacheDirectory = Join-Path $env:LOCALAPPDATA "WimifarmaCotacao"
 $discoveryCachePath = Join-Path $cacheDirectory "santacruz-install.json"
 $tracePath = [string]$env:SANTACRUZ_TRACE_PATH
+$originalForegroundWindow = [SantaCruzMouse]::GetForegroundWindow()
 
 function Write-SantaCruzTrace {
     param([string]$Message)
@@ -93,6 +97,9 @@ function Complete-SantaCruzResult {
         launchPath = $LaunchPath
         discoverySource = $DiscoverySource
         results = @($Results)
+    }
+    if ($env:SANTACRUZ_RESTORE_FOCUS -ne "false" -and $originalForegroundWindow -ne [System.IntPtr]::Zero) {
+        try { [SantaCruzMouse]::SetForegroundWindow($originalForegroundWindow) | Out-Null } catch {}
     }
     Write-Output ($payload | ConvertTo-Json -Depth 8 -Compress)
     exit 0
@@ -496,6 +503,13 @@ function Type-AutomationValue {
     param($Element, [string]$Value)
     if (-not $Element) { return $false }
     try {
+        $valuePattern = $null
+        if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
+            $valuePattern.SetValue($Value)
+            return $true
+        }
+    } catch {}
+    try {
         $Element.SetFocus()
         [System.Windows.Forms.SendKeys]::SendWait("^a")
         [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
@@ -755,6 +769,27 @@ function Get-GridCellText {
     return ""
 }
 
+function Get-GridCellStatus {
+    param($Grid, [int]$Row, [int]$Column)
+    try {
+        $cell = $Grid.GetItem($Row, $Column)
+        $parts = New-Object System.Collections.Generic.List[string]
+        foreach ($value in @($cell.Current.Name, $cell.Current.ItemStatus, $cell.Current.HelpText, $cell.Current.AutomationId)) {
+            if ($value) { $parts.Add([string]$value) }
+        }
+        $descendants = $cell.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.PropertyCondition]::TrueCondition
+        )
+        foreach ($element in $descendants) {
+            foreach ($value in @($element.Current.Name, $element.Current.ItemStatus, $element.Current.HelpText, $element.Current.AutomationId)) {
+                if ($value) { $parts.Add([string]$value) }
+            }
+        }
+        return ($parts | Select-Object -Unique) -join " "
+    } catch { return "" }
+}
+
 function Parse-DoubleSafe {
     param([string]$Value)
     if (-not $Value) { return 0 }
@@ -783,6 +818,15 @@ function Read-SantaCruzRows {
             $name = Get-GridCellText $grid $row 2
             $priceNf = Parse-DoubleSafe (Get-GridCellText $grid $row 13)
             if ($ean -notmatch '^\d{13}$' -or -not $name -or $priceNf -le 0) { continue }
+            $availabilityEvidence = Get-GridCellStatus $grid $row 3
+            $normalizedAvailability = ConvertTo-NormalizedText $availabilityEvidence
+            $stock = if ($normalizedAvailability -match 'indispon|sem estoque|vermelh|nao dispon') {
+                "sem estoque"
+            } elseif ($normalizedAvailability -match 'dispon|verde|em estoque') {
+                "Disponivel"
+            } else {
+                "estoque desconhecido"
+            }
             $output.Add([PSCustomObject]@{
                 ean = $ean
                 name = $name
@@ -791,9 +835,11 @@ function Read-SantaCruzRows {
                 factoryPrice = Parse-DoubleSafe (Get-GridCellText $grid $row 6)
                 st = Parse-DoubleSafe (Get-GridCellText $grid $row 12)
                 unitCostWithSt = $priceNf
-                stock = "Disponivel"
+                stock = $stock
+                stockEvidence = $availabilityEvidence
                 laboratory = Get-GridCellText $grid $row 17
                 quantityBox = Get-GridCellText $grid $row 5
+                category = Get-GridCellText $grid $row 14
                 listType = Get-GridCellText $grid $row 15
             })
         }
@@ -817,7 +863,8 @@ if (-not $SearchQuery) {
 
 $window = Find-SantaCruzWindow
 $existingProcess = Find-SantaCruzProcess
-if (-not $window -and -not $existingProcess -and $installation) {
+$launchAttempted = $false
+if (-not $window -and $installation) {
     try {
         $startArguments = @{
             FilePath = $installation.LaunchPath
@@ -826,6 +873,7 @@ if (-not $window -and -not $existingProcess -and $installation) {
         }
         if ($installation.Arguments) { $startArguments.ArgumentList = $installation.Arguments }
         Start-Process @startArguments | Out-Null
+        $launchAttempted = $true
     } catch {
         Complete-SantaCruzResult "launch-failed" "Falha ao abrir o aplicativo Santa Cruz" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
     }
@@ -837,7 +885,7 @@ if (-not $window -and -not $installation) {
 
 $readyWindow = $null
 $searchControl = $null
-$lastState = if ($existingProcess -and -not $window) { "running-without-window" } else { "starting" }
+$lastState = if ($existingProcess -and -not $window -and -not $launchAttempted) { "running-without-window" } else { "starting" }
 $loginSubmitted = $false
 $updateDeadlineExtended = $false
 $digitadorOpened = $false
@@ -936,12 +984,6 @@ if (-not $readyWindow -or -not $searchControl) {
     }
     Complete-SantaCruzResult $status $reason @() $installation.InstallRoot $installation.LaunchPath $installation.Source
 }
-
-try {
-    $shell = New-Object -ComObject WScript.Shell
-    $shell.AppActivate($readyWindow.Current.ProcessId) | Out-Null
-    Start-Sleep -Milliseconds 250
-} catch {}
 
 $table = Find-TableControl $readyWindow
 $searchSubmitControl = Find-SearchSubmitControl $readyWindow $searchControl

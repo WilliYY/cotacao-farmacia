@@ -22,9 +22,13 @@ import {
   saveSupplierCredentials,
   getSupplierCredentials,
   getAllSupplierCredentials,
-  getSupplierIdByName
+  getSupplierIdByName,
+  getLearnedCorrections,
+  recordQueryCorrection,
+  closeDatabase
 } from './src/lib/database.js';
 import { processQuoteQuery } from './src/lib/recommendation.js';
+import { analyzeQuoteBatch, INPUT_STATUS } from './src/lib/search-intelligence.js';
 import { generateExcelBuffer } from './src/lib/exporter.js';
 import { logger } from './src/lib/logger.js';
 
@@ -32,6 +36,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow = null;
+const isLiveDiagnostic = process.argv.includes('--live-diagnostic');
+
+if (String(process.env.DISABLE_HARDWARE_ACCELERATION || 'true').toLowerCase() !== 'false') {
+  app.disableHardwareAcceleration();
+}
 
 function checkGitUpdates() {
   if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
@@ -102,28 +111,13 @@ app.whenReady().then(async () => {
   console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
   await initDatabase(userDataPath);
 
-  // Clean up temporary debug/scratch files older than 24 hours on startup
-  try {
-    const scratchDir = 'C:/Users/Williany/.gemini/antigravity/brain/23cc081b-d3e4-4dfc-89c1-1197113f0a2c/scratch';
-    if (fs.existsSync(scratchDir)) {
-      const files = fs.readdirSync(scratchDir);
-      const now = Date.now();
-      const cutoff = 24 * 60 * 60 * 1000;
-      let deletedCount = 0;
-      for (const file of files) {
-        const filePath = path.join(scratchDir, file);
-        const stats = fs.statSync(filePath);
-        if (now - stats.mtimeMs > cutoff) {
-          fs.unlinkSync(filePath);
-          deletedCount++;
-        }
-      }
-      if (deletedCount > 0) {
-        logger.info(`Cleaned up ${deletedCount} temporary debug/scratch files older than 24h.`);
-      }
-    }
-  } catch (cleanErr) {
-    logger.warn(`Temp cleanup bypassed: ${cleanErr.message}`);
+  if (isLiveDiagnostic) {
+    const { runLiveDiagnostic } = await import('./scripts/live-diagnostic.mjs');
+    const diagnosticArgs = process.argv.slice(2).filter(value => value !== '--live-diagnostic');
+    const diagnostic = await runLiveDiagnostic(diagnosticArgs);
+    await closeDatabase();
+    app.exit(diagnostic.exitCode);
+    return;
   }
 
   createWindow();
@@ -136,7 +130,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (!isLiveDiagnostic && process.platform !== 'darwin') {
     app.quit();
   }
 });
@@ -144,15 +138,36 @@ app.on('window-all-closed', () => {
 // IPC Handler: Run Quote Process
 ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
   try {
-    logger.info(`Starting new Quote process for ${rawTextList.length} items`);
+    const learnedAliases = await getLearnedCorrections();
+    const searchPlans = analyzeQuoteBatch(rawTextList, { learnedAliases });
+    logger.info(`Starting new Quote process for ${rawTextList.length} input lines and ${searchPlans.length} planned searches`);
     const quoteId = await createQuote('processing');
+    const blockedSupplierReasons = {};
 
-    for (const rawText of rawTextList) {
-      const quote = await processQuoteQuery(rawText, activeSuppliers);
-      const itemId = await createQuoteItem(quoteId, rawText, quote.parsed, 'completed');
+    for (const plan of searchPlans) {
+      if (plan.status === INPUT_STATUS.NEEDS_INFO) {
+        await createQuoteItem(quoteId, plan.originalText, plan.parsed, 'needs_info', plan);
+        await saveSearch(plan.originalText, plan.parsed);
+        continue;
+      }
+
+      const quote = await processQuoteQuery(plan.searchText, activeSuppliers, {
+        blockedSupplierReasons,
+        parsedQuery: plan.parsed
+      });
+      for (const result of quote.results) {
+        if (result.source && result.liveFailureReason) {
+          blockedSupplierReasons[result.source] = result.liveFailureReason;
+        }
+      }
+
+      const hasLiveEvidence = quote.results.some(result => result.source !== 'N/A' && !result.liveFailureReason);
+      const allSupplierFailures = quote.results.length > 0 && quote.results.every(result => Boolean(result.liveFailureReason));
+      const itemStatus = hasLiveEvidence ? 'completed' : (allSupplierFailures ? 'supplier_error' : 'not_found');
+      const itemId = await createQuoteItem(quoteId, plan.originalText, quote.parsed, itemStatus, plan);
 
       // Save search term for self-learning metrics
-      await saveSearch(rawText, quote.parsed);
+      await saveSearch(plan.originalText, quote.parsed);
 
       for (const res of quote.results) {
         await saveQuoteResult({
@@ -160,6 +175,12 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
           ...res,
           supplierId: await getSupplierIdByName(res.source)
         });
+      }
+
+      const hasConfirmedMatch = quote.results.some(result => result.isValidOption && result.price > 0);
+      if (hasConfirmedMatch && plan.alias && plan.canonicalName && plan.alias !== plan.canonicalName) {
+        const confidence = plan.correctionType === 'BATCH_CONTEXT' ? 0.75 : 1;
+        await recordQueryCorrection(plan.alias, plan.canonicalName, plan.correctionType, confidence);
       }
     }
 

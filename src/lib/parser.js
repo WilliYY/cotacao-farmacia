@@ -120,7 +120,7 @@ export function parseSearchQuery(rawText) {
   let dosage = '';
   if (dosageMatch) {
     dosage = dosageMatch[0].trim();
-    if (/^\d+$/.test(dosage) && !eanMatch) {
+    if (/^\d+$/.test(dosage)) {
       dosage = dosage + 'mg'; 
     }
   }

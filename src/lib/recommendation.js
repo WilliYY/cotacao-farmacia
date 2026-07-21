@@ -25,16 +25,33 @@ export function matchesSupplierProduct(left, right) {
     Number(left?.price || 0) === Number(right?.price || 0);
 }
 
-const callWithRetry = async (connector, parsedQuery, retries = 2) => {
+function getBoundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
+}
+
+export function shouldRetryLiveResults(results) {
+  return Array.isArray(results) && results.length > 0 && results.every(result => result?.retryable === true);
+}
+
+export async function callWithRetry(connector, parsedQuery, options = {}) {
+  const retries = options.retries ?? getBoundedInteger(process.env.CONNECTOR_RETRY_COUNT, 1, 0, 2);
+  const delayMs = options.delayMs ?? getBoundedInteger(process.env.CONNECTOR_RETRY_DELAY_MS, 1000, 100, 5000);
   let lastErr = null;
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     try {
-      return await connector.searchProduct(parsedQuery);
+      const results = await connector.searchProduct(parsedQuery);
+      if (attempt <= retries && shouldRetryLiveResults(results)) {
+        logger.warn(`Transient live failure for ${connector.supplierName}; retrying once.`);
+        await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+        continue;
+      }
+      return results;
     } catch (err) {
       lastErr = err;
       logger.warn(`Attempt ${attempt} failed for connector ${connector.supplierName}: ${err.message}`);
       if (attempt <= retries) {
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
       }
     }
   }
@@ -45,10 +62,25 @@ const callWithRetry = async (connector, parsedQuery, retries = 2) => {
   return [];
 };
 
-export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná']) {
+export async function callWithEanFallback(connector, parsedQuery, options = {}) {
+  const firstResults = await callWithRetry(connector, parsedQuery, options);
+  const canFallbackByName = Boolean(parsedQuery.ean && parsedQuery.name);
+  if (!canFallbackByName || !Array.isArray(firstResults) || firstResults.length > 0) {
+    return firstResults;
+  }
+
+  logger.info(`EAN ${parsedQuery.ean} not found at ${connector.supplierName}; retrying with the supplied product name.`);
+  const nameResults = await callWithRetry(connector, { ...parsedQuery, ean: '' }, options);
+  return nameResults.map(result => ({
+    ...result,
+    searchFallback: 'EAN_NAO_ENCONTRADO_NOME'
+  }));
+}
+
+export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'], options = {}) {
   logger.info(`Processing search query: "${rawText}" with suppliers: ${activeSuppliers.join(', ')}`);
   
-  const parsed = parseSearchQuery(rawText);
+  const parsed = options.parsedQuery || parseSearchQuery(rawText);
   logger.debug(`Parsed query details: ${JSON.stringify(parsed)}`);
 
   // Bypass scrapers if description is insufficient/vague
@@ -60,19 +92,24 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
     };
   }
 
-  const activeConnectors = getActiveConnectors(activeSuppliers);
+  const blockedSupplierReasons = options.blockedSupplierReasons || {};
+  const suppliersToCall = activeSuppliers.filter(supplier => !blockedSupplierReasons[supplier]);
+  const activeConnectors = suppliersToCall.length > 0 ? getActiveConnectors(suppliersToCall) : [];
   const connectorMode = getConnectorMode();
   const searchPromises = [];
 
   for (const connector of activeConnectors) {
     if (connector) {
       logger.debug(`Calling connector for ${connector.supplierName}...`);
-      searchPromises.push(callWithRetry(connector, parsed));
+      searchPromises.push(callWithEanFallback(connector, parsed));
     }
   }
 
   const allResultsLists = await Promise.all(searchPromises);
-  const rawResults = allResultsLists.flat();
+  const blockedResults = activeSuppliers
+    .filter(supplier => blockedSupplierReasons[supplier])
+    .map(supplier => createLiveUnavailableResult(supplier, parsed, blockedSupplierReasons[supplier]));
+  const rawResults = [...allResultsLists.flat(), ...blockedResults];
 
   logger.info(`Found ${rawResults.length} raw results across suppliers.`);
 
@@ -158,15 +195,17 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       ignoreReason: ignoreReason,
       recommendationStatus: recStatus,
       reviewStatus: 'PENDENTE',
-      notes: '',
+      notes: res.commercialCondition ? `Condicao comercial: ${res.commercialCondition}` : '',
       confidence: res.confidence ?? parsed.confidence,
       capturedAt: res.capturedAt || new Date().toISOString(),
       source: res.source,
-      ean: res.ean || parsed.ean || null,
+      ean: res.ean || null,
       packaging: res.packaging || `${qty} ${res.presentation || parsed.presentation || 'unidades'}`,
       quantity: qty,
       unitPrice: unitPrice,
       priceSourceLabel: res.priceSourceLabel || null,
+      liveFailureReason: res.liveFailureReason || null,
+      searchFallback: res.searchFallback || null,
       debugColumns: res.debugColumns
     };
   });
@@ -244,7 +283,7 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       confidence: parsed.confidence,
       capturedAt: new Date().toISOString(),
       source: 'N/A',
-      ean: parsed.ean || null,
+      ean: null,
       packaging: 'N/A',
       quantity: 1,
       unitPrice: 0,

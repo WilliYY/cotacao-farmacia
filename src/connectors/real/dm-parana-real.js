@@ -2,7 +2,7 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials, getSupplierIdByName } from '../../lib/database.js';
 import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
-import { createLiveUnavailableResult } from './live-result.js';
+import { createLiveUnavailableResult, isRetryablePortalError } from './live-result.js';
 
 const DM_PARANA_PORTAL_URL = 'https://portal.dmparana.com.br/login';
 
@@ -59,7 +59,9 @@ export class DmParanaRealConnector extends SupplierConnector {
       }));
     } catch (error) {
       logger.error('DM Parana portal search failed: ' + error.message);
-      return [createLiveUnavailableResult('DM Paraná', parsedQuery, 'consulta ao portal falhou')];
+      return [createLiveUnavailableResult('DM Paraná', parsedQuery, 'consulta ao portal falhou', {
+        retryable: isRetryablePortalError(error)
+      })];
     }
   }
 }

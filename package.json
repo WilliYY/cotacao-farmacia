@@ -10,6 +10,7 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:5173 && electron .",
     "build": "vite build",
+    "diagnose:live": "electron . --live-diagnostic",
     "package": "electron-builder",
     "test": "node --test tests/all.test.js",
     "lint": "oxlint",

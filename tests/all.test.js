@@ -6,13 +6,16 @@ import path from 'node:path';
 import XLSX from 'xlsx';
 
 import { parseSearchQuery, levenshteinDistance, fuzzyMatch } from '../src/lib/parser.js';
+import { analyzeQuoteBatch, INPUT_STATUS } from '../src/lib/search-intelligence.js';
 import { isValidST, getVisualStatusLabel, getSTPriority } from '../src/lib/st-rules.js';
-import { isFreshLiveCapture, matchesSupplierProduct, processQuoteQuery } from '../src/lib/recommendation.js';
+import { callWithEanFallback, callWithRetry, isFreshLiveCapture, matchesSupplierProduct, processQuoteQuery, shouldRetryLiveResults } from '../src/lib/recommendation.js';
+import { createLiveUnavailableResult } from '../src/connectors/real/live-result.js';
 import { AUDIT_STATUS, auditQuoteResult } from '../src/lib/quote-auditor.js';
-import { getSantaCruzFinalPrice, normalizeSantaCruzGuiPayload } from '../src/connectors/real/santacruz-real.js';
+import { createSantaCruzProcessEnvironment, getSantaCruzFinalPrice, normalizeSantaCruzGuiPayload } from '../src/connectors/real/santacruz-real.js';
 import { normalizeProfarmaUrl } from '../src/connectors/real/profarma-real.js';
 import { normalizeDmParanaUrl } from '../src/connectors/real/dm-parana-real.js';
-import { parseDmParanaCard, parseProfarmaTableRow } from '../src/lib/electron-scraper.js';
+import { parseAnbTableRow, parseDmParanaCard, parseProfarmaTableRow } from '../src/lib/electron-scraper.js';
+import { isRetryableAnbError, normalizeAnbUrl } from '../src/connectors/real/anb-real.js';
 import { resolveConnectorMode } from '../src/connectors/connector-registry.js';
 import {
   initDatabase,
@@ -21,10 +24,14 @@ import {
   createQuoteItem,
   saveQuoteResult,
   getQuoteDetails,
-  updateQuoteResult
+  getQuotes,
+  getLearnedCorrections,
+  recordQueryCorrection,
+  updateQuoteResult,
+  getDb
 } from '../src/lib/database.js';
 import { generateExcelBuffer } from '../src/lib/exporter.js';
-import { getUpdateBlockReason } from '../scripts/bootstrap.mjs';
+import { getUpdateBlockReason, isElectronRuntimeReady } from '../scripts/bootstrap.mjs';
 
 process.env.ENABLE_REAL_CONNECTORS = 'false';
 process.env.ENABLE_MOCK_CONNECTORS = 'true';
@@ -63,6 +70,21 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
   await t.test('allows a clean tracked repository', () => {
     assert.strictEqual(getUpdateBlockReason(cleanRepository, {}), '');
   });
+
+  await t.test('detects whether the Electron executable is actually installed', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cotacao-electron-runtime-test-'));
+    try {
+      const electronDir = path.join(tempDir, 'node_modules', 'electron');
+      const executableDir = path.join(electronDir, 'dist');
+      fs.mkdirSync(executableDir, { recursive: true });
+      fs.writeFileSync(path.join(electronDir, 'path.txt'), 'electron.exe');
+      assert.strictEqual(isElectronRuntimeReady(tempDir), false);
+      fs.writeFileSync(path.join(executableDir, 'electron.exe'), 'test');
+      assert.strictEqual(isElectronRuntimeReady(tempDir), true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 test('Parser Utility - EAN, Quantities and Presentations', async (t) => {
@@ -73,6 +95,13 @@ test('Parser Utility - EAN, Quantities and Presentations', async (t) => {
     assert.strictEqual(res.presentation, 'comprimido');
     assert.strictEqual(res.quantity, 30);
     assert.strictEqual(res.ean, '7896004719016');
+  });
+
+  await t.test('keeps a dosage without unit distinct from quantity in an EAN search', () => {
+    const res = parseSearchQuery('7896004719016 losartana 50');
+    assert.strictEqual(res.ean, '7896004719016');
+    assert.strictEqual(res.dosage, '50mg');
+    assert.strictEqual(res.quantity, 1);
   });
 
   await t.test('Extracts new presentations like creams, liquids', () => {
@@ -135,6 +164,42 @@ test('Parser Utility - Levenshtein and Fuzzy Matching', async (t) => {
   });
 });
 
+test('Search Intelligence - contextual batches and corrections', async (t) => {
+  await t.test('inherits a safe short prefix from the preceding medication', () => {
+    const plans = analyzeQuoteBatch(['metformina 500', 'met 850']);
+    assert.strictEqual(plans.length, 2);
+    assert.strictEqual(plans[1].parsed.name, 'metformina');
+    assert.strictEqual(plans[1].parsed.dosage, '850mg');
+    assert.strictEqual(plans[1].status, INPUT_STATUS.CORRECTED);
+    assert.match(plans[1].correctionMessage, /metformina/);
+  });
+
+  await t.test('expands compact multiple strengths into separate searches', () => {
+    const plans = analyzeQuoteBatch(['sinvastatina 20 40']);
+    assert.deepStrictEqual(plans.map(plan => plan.parsed.dosage), ['20mg', '40mg']);
+    assert.ok(plans.every(plan => plan.correctionType === 'MULTI_STRENGTH'));
+  });
+
+  await t.test('corrects a unique DCB typo before opening supplier portals', () => {
+    const [plan] = analyzeQuoteBatch(['dapaglifozina 10']);
+    assert.strictEqual(plan.parsed.name, 'dapagliflozina');
+    assert.strictEqual(plan.searchText, 'dapagliflozina 10');
+    assert.match(plan.correctionMessage, /dapaglifozina.*dapagliflozina/);
+  });
+
+  await t.test('keeps a unique official prefix correction visible', () => {
+    const [plan] = analyzeQuoteBatch(['dapagli 10']);
+    assert.strictEqual(plan.parsed.name, 'dapagliflozina');
+    assert.strictEqual(plan.status, INPUT_STATUS.CORRECTED);
+  });
+
+  await t.test('blocks an ambiguous short prefix without batch context', () => {
+    const [plan] = analyzeQuoteBatch(['met 850']);
+    assert.strictEqual(plan.status, INPUT_STATUS.NEEDS_INFO);
+    assert.match(plan.correctionMessage, /metformina.*metoprolol/);
+  });
+});
+
 test('ST Rules Engine', async (t) => {
   await t.test('Validates ST active statuses including ST_INCLUSO and ST_SEPARADO', () => {
     assert.strictEqual(isValidST('COM_ST'), true);
@@ -177,6 +242,14 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.strictEqual(getSantaCruzFinalPrice({ unitCostWithSt: 71.13, price: 116.15 }), 71.13);
   });
 
+  await t.test('Uses a configured local path before portable discovery', () => {
+    const configuredPath = 'C:\\Program Files (x86)\\Pe - SantaCruz\\digitador-sd.exe';
+    const environment = createSantaCruzProcessEnvironment({ url: configuredPath }, { TEST_FLAG: 'ok' });
+    assert.strictEqual(environment.TEST_FLAG, 'ok');
+    assert.strictEqual(environment.SANTACRUZ_APP_PATH, configuredPath);
+    assert.strictEqual(createSantaCruzProcessEnvironment({ url: 'https://example.com' }, {}).SANTACRUZ_APP_PATH, undefined);
+  });
+
   await t.test('Keeps Profarma credentials on the approved sales portal only', () => {
     assert.strictEqual(normalizeProfarmaUrl('https://portal.profarma.com.br/portal/'), 'https://pedido.profarma.com.br/');
     assert.strictEqual(normalizeProfarmaUrl('https://pedido.profarma.com.br/login'), 'https://pedido.profarma.com.br/');
@@ -192,6 +265,7 @@ test('Profarma Novo Pedido Parser', async (t) => {
       '76.6%', '8,11', '8,51%', '0,96', '11,18', '50', 'BIOSINTETICA GENERIC', 'Generico', 'Nao'
     ], true);
     assert.strictEqual(withSt.price, 2.70);
+    assert.strictEqual(withSt.priceSourceLabel, 'Preço Final');
     assert.strictEqual(withSt.stStatus, 'COM_ST');
     assert.strictEqual(withSt.availability, 'disponivel');
 
@@ -215,6 +289,35 @@ test('Profarma Novo Pedido Parser', async (t) => {
       '20,00', '12', 'LAB TESTE', 'Cosmeticos', 'Nao'
     ], false);
     assert.strictEqual(unavailable.availability, 'sem estoque');
+  });
+});
+
+test('ANB product grid contract', async (t) => {
+  const headers = ['Selecao', 'Codigo', 'Nome', 'Preco', 'Desc.', 'Rep.', 'St.', 'Unit c/St.', 'Estoque', 'Categoria', 'Laboratorio'];
+  const columns = ['', '943975', 'LOSARTANA 50MG 30CPR REV - GEN BIO', '8,11', '75,00', '8,52', '0,95', '2,80', '+ 100', 'GEN', 'ACHE GEN'];
+
+  await t.test('uses the literal Unit c/ST header instead of positional price guesses', () => {
+    const result = parseAnbTableRow(headers, columns);
+    assert.strictEqual(result.price, 2.8);
+    assert.strictEqual(result.stAmount, 0.95);
+    assert.strictEqual(result.priceSourceLabel, 'Unit c/ST');
+    assert.strictEqual(result.availability, 'disponivel');
+    assert.strictEqual(result.laboratory, 'ACHE GEN');
+  });
+
+  await t.test('fails closed when the authoritative price header is absent', () => {
+    assert.strictEqual(parseAnbTableRow(headers.filter(value => value !== 'Unit c/St.'), columns), null);
+  });
+
+  await t.test('keeps credentials on the approved ANB sales portal', () => {
+    assert.strictEqual(normalizeAnbUrl('https://pedido.anbfarma.com.br/dashboard/produtos'), 'https://pedido.anbfarma.com.br/login');
+    assert.throws(() => normalizeAnbUrl('https://example.com/login'), /dominio permitido/);
+  });
+
+  await t.test('retries network failures without looping on deterministic portal UI failures', () => {
+    assert.strictEqual(isRetryableAnbError(new Error('net::ERR_CONNECTION_RESET')), true);
+    assert.strictEqual(isRetryableAnbError(new Error('Timed out waiting for the product grid')), true);
+    assert.strictEqual(isRetryableAnbError(new Error('Supplier commercial condition selector did not open.')), false);
   });
 });
 
@@ -277,6 +380,77 @@ test('Live Quote Source Safety', async (t) => {
     assert.strictEqual(isFreshLiveCapture({ capturedAt: '2026-07-17T11:59:00.000Z' }, now), true);
     assert.strictEqual(isFreshLiveCapture({ capturedAt: '2026-07-17T11:50:00.000Z' }, now), false);
     assert.strictEqual(isFreshLiveCapture({}, now), false);
+  });
+
+  await t.test('Retries transient portal failures once without retrying configuration failures', async () => {
+    const parsed = parseSearchQuery('losartana 50mg');
+    const transient = createLiveUnavailableResult('ANB', parsed, 'consulta ao portal falhou', { retryable: true });
+    const credentialsMissing = createLiveUnavailableResult('ANB', parsed, 'credenciais nao configuradas');
+    assert.strictEqual(shouldRetryLiveResults([transient]), true);
+    assert.strictEqual(shouldRetryLiveResults([credentialsMissing]), false);
+
+    let transientCalls = 0;
+    const recovered = await callWithRetry({
+      supplierName: 'ANB',
+      async searchProduct() {
+        transientCalls++;
+        return transientCalls === 1 ? [transient] : [{ price: 2.71 }];
+      }
+    }, parsed, { retries: 1, delayMs: 0 });
+    assert.strictEqual(transientCalls, 2);
+    assert.strictEqual(recovered[0].price, 2.71);
+
+    let configurationCalls = 0;
+    await callWithRetry({
+      supplierName: 'ANB',
+      async searchProduct() {
+        configurationCalls++;
+        return [credentialsMissing];
+      }
+    }, parsed, { retries: 1, delayMs: 0 });
+    assert.strictEqual(configurationCalls, 1);
+  });
+
+  await t.test('Keeps a failed supplier circuit open across a multi-item quotation', async () => {
+    const quote = await processQuoteQuery('losartana 50mg', ['Santa Cruz'], {
+      blockedSupplierReasons: { 'Santa Cruz': 'processo ativo sem janela' }
+    });
+    assert.strictEqual(quote.results.length, 1);
+    assert.strictEqual(quote.results[0].source, 'Santa Cruz');
+    assert.strictEqual(quote.results[0].liveFailureReason, 'processo ativo sem janela');
+    assert.strictEqual(quote.results[0].isValidOption, false);
+  });
+
+  await t.test('falls back from EAN to the supplied name only after an empty result', async () => {
+    const calls = [];
+    const connector = {
+      supplierName: 'ANB',
+      searchProduct: async parsed => {
+        calls.push({ ean: parsed.ean, name: parsed.name });
+        return parsed.ean ? [] : [{ source: 'ANB', supplierProductName: 'Losartana 50mg', price: 2.8 }];
+      }
+    };
+    const parsed = parseSearchQuery('7896004719016 losartana 50mg');
+    const results = await callWithEanFallback(connector, parsed, { retries: 0 });
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls[0].ean, '7896004719016');
+    assert.strictEqual(calls[1].ean, '');
+    assert.strictEqual(results[0].searchFallback, 'EAN_NAO_ENCONTRADO_NOME');
+  });
+
+  await t.test('does not hide a portal failure behind an EAN name fallback', async () => {
+    let callCount = 0;
+    const parsed = parseSearchQuery('7896004719016 losartana 50mg');
+    const connector = {
+      supplierName: 'ANB',
+      searchProduct: async () => {
+        callCount++;
+        return [createLiveUnavailableResult('ANB', parsed, 'sem internet')];
+      }
+    };
+    const results = await callWithEanFallback(connector, parsed, { retries: 0 });
+    assert.strictEqual(callCount, 1);
+    assert.strictEqual(results[0].liveFailureReason, 'sem internet');
   });
 });
 
@@ -611,7 +785,10 @@ test('Database Flow - Supplier Credentials Roundtrip', async () => {
     const {
       saveSupplierCredentials,
       getSupplierCredentials,
-      getSupplierIdByName
+      getSupplierIdByName,
+      getAllSupplierCredentials,
+      resolveSupplierDatabaseId,
+      reconcileCanonicalSupplierReferences
     } = await import('../src/lib/database.js');
 
     await saveSupplierCredentials(
@@ -629,18 +806,71 @@ test('Database Flow - Supplier Credentials Roundtrip', async () => {
     assert.strictEqual(creds.password, 'senha-teste');
     assert.strictEqual(creds.clientCode, '48');
 
+    const db = getDb();
+    await db.run('UPDATE Supplier SET id = 286 WHERE name = ?', 'DM Paraná');
     const dmSupplierId = await getSupplierIdByName('DM Paraná');
-    assert.strictEqual(dmSupplierId, 4);
+    assert.strictEqual(dmSupplierId, 286);
+    assert.strictEqual(await resolveSupplierDatabaseId(4), 286);
+    await db.run(
+      `INSERT INTO SupplierCredentials (supplierId, url, username, password, clientCode)
+       VALUES (?, ?, ?, ?, ?)`,
+      4,
+      'https://portal.dmparana.com.br/login',
+      'cnpj-legado',
+      `plain:${Buffer.from('senha-legada', 'utf8').toString('base64')}`,
+      ''
+    );
+    await reconcileCanonicalSupplierReferences();
+    const migratedCredentials = await getSupplierCredentials(4);
+    assert.strictEqual(migratedCredentials.supplierId, 286);
+    assert.strictEqual(migratedCredentials.username, 'cnpj-legado');
+
     await saveSupplierCredentials(
-      dmSupplierId,
+      4,
       'https://portal.dmparana.com.br/login',
       'cnpj-teste',
       'senha-dm-teste',
       ''
     );
-    const dmCredentials = await getSupplierCredentials(dmSupplierId);
+    const dmCredentials = await getSupplierCredentials(4);
     assert.strictEqual(dmCredentials.username, 'cnpj-teste');
     assert.strictEqual(dmCredentials.password, 'senha-dm-teste');
+    assert.strictEqual(dmCredentials.supplierId, 286);
+    assert.strictEqual(dmCredentials.canonicalSupplierId, 4);
+
+    const allCredentials = await getAllSupplierCredentials();
+    const dmCredentialSummary = allCredentials.find(item => item.supplierName === 'DM Paraná');
+    assert.strictEqual(dmCredentialSummary.canonicalSupplierId, 4);
+  } finally {
+    await closeDatabase();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Database Flow - Safe linguistic learning and complete history', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cotacao-intelligence-test-'));
+
+  try {
+    await initDatabase(tempDir);
+    await recordQueryCorrection('dapaglifozina', 'dapagliflozina', 'LIVE_RESULT', 0.95);
+    await recordQueryCorrection('dapaglifozina', 'dapagliflozina', 'LIVE_RESULT', 0.95);
+
+    const corrections = await getLearnedCorrections();
+    assert.strictEqual(corrections.length, 1);
+    assert.strictEqual(corrections[0].alias, 'dapaglifozina');
+    assert.strictEqual(corrections[0].canonicalName, 'dapagliflozina');
+    assert.strictEqual(corrections[0].confirmations, 2);
+    assert.strictEqual(Object.hasOwn(corrections[0], 'price'), false);
+
+    for (let index = 0; index < 31; index++) {
+      const quoteId = await createQuote('completed');
+      const parsed = parseSearchQuery(`losartana ${index + 1}mg`);
+      await createQuoteItem(quoteId, `losartana ${index + 1}`, parsed, 'completed');
+    }
+
+    const history = await getQuotes();
+    assert.strictEqual(history.length, 31);
+    assert.match(history[0].searchTerms, /losartana/);
   } finally {
     await closeDatabase();
     fs.rmSync(tempDir, { recursive: true, force: true });

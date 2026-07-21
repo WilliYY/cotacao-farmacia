@@ -156,6 +156,28 @@ function installDependencies() {
   }
 }
 
+export function isElectronRuntimeReady(rootDirectory = projectRoot) {
+  const electronDirectory = path.join(rootDirectory, 'node_modules', 'electron');
+  const pathFile = path.join(electronDirectory, 'path.txt');
+  if (!fs.existsSync(pathFile)) return false;
+
+  const executableName = fs.readFileSync(pathFile, 'utf8').trim();
+  return executableName.length > 0 && fs.existsSync(path.join(electronDirectory, 'dist', executableName));
+}
+
+function ensureElectronRuntime() {
+  if (isElectronRuntimeReady()) return;
+
+  console.log('[DEPENDENCIAS] Baixando o executavel oficial do Electron...');
+  const installElectron = runNpm(['exec', 'install-electron', '--', '--no'], {
+    stdio: 'inherit',
+    timeout: 10 * 60_000
+  });
+  if (!installElectron.ok || !isElectronRuntimeReady()) {
+    throw new Error('O executavel do Electron nao foi instalado corretamente.');
+  }
+}
+
 function startApplication() {
   console.log('[APP] Iniciando Wimifarma Cotacao...');
   const application = runNpm(['run', 'dev:app'], { stdio: 'inherit' });
@@ -169,6 +191,7 @@ function printDiagnostics(environment) {
     node: process.version,
     npmAvailable: npmExists(),
     gitAvailable: commandExists('git'),
+    electronRuntimeReady: isElectronRuntimeReady(),
     autoUpdateEnabled: String(environment.AUTO_UPDATE_ON_STARTUP || '').toLowerCase() !== 'false',
     configuredBranch: String(environment.AUTO_UPDATE_BRANCH || ''),
     ...state
@@ -184,6 +207,7 @@ if (isMainModule) {
     try {
       updateRepository(environment);
       installDependencies();
+      ensureElectronRuntime();
       if (process.argv.includes('--prepare-only')) {
         console.log('[APP] Preparacao concluida; abertura ignorada por --prepare-only.');
       } else {

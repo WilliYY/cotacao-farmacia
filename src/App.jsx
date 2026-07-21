@@ -9,6 +9,8 @@ import {
   FileSpreadsheet,
   History,
   PackageSearch,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   RotateCcw,
@@ -20,6 +22,7 @@ import {
   Trash2,
   TrendingDown
 } from 'lucide-react';
+import { analyzeQuoteBatch, INPUT_STATUS } from './lib/search-intelligence.js';
 
 // Browser mocks are available only through an explicit development opt-in.
 const mockApi = {
@@ -461,6 +464,7 @@ const api = window.api || (allowUiMocks ? mockApi : unavailableApi);
 
 function App() {
   const [history, setHistory] = useState([]);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [activeQuote, setActiveQuote] = useState(null);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -613,9 +617,9 @@ function App() {
         } else {
           // Pre-populate default URLs for safety
           const defaultUrls = {
-            1: 'https://portal.anbfarma.com.br/login',
+            1: 'https://pedido.anbfarma.com.br/login',
             2: 'https://pedido.profarma.com.br/',
-            3: 'https://www.santacruz.com.br/login',
+            3: '',
             4: 'https://portal.dmparana.com.br/login'
           };
           setSettingsUrl(defaultUrls[supplierId] || '');
@@ -636,7 +640,7 @@ function App() {
         const configMap = {};
         allCreds.forEach(c => {
           if (c.username && c.password) {
-            configMap[c.supplierId] = true;
+            configMap[c.canonicalSupplierId || c.supplierId] = true;
           }
         });
         setConfiguredSuppliers(configMap);
@@ -650,13 +654,14 @@ function App() {
     setLoading(true);
     try {
       if (api.saveSupplierCredentials) {
-        await api.saveSupplierCredentials(
+        const response = await api.saveSupplierCredentials(
           selectedSettingSupplier,
           settingsUrl,
           settingsUsername,
           settingsPassword,
           settingsClientCode
         );
+        if (!response?.success) throw new Error(response?.error || 'Falha ao salvar credenciais');
         alert('Credenciais salvas com sucesso localmente!');
         loadAllConfiguredSuppliers();
       }
@@ -848,16 +853,18 @@ function App() {
       if (!item.results) return;
 
       item.results.forEach(res => {
+        const forceVisible = ['needs_info', 'not_found', 'supplier_error'].includes(item.status);
         // Filter by supplier
-        if (filterSupplier !== 'All' && res.source !== filterSupplier) return;
+        if (!forceVisible && filterSupplier !== 'All' && res.source !== filterSupplier) return;
 
         // Apply ST-specific filters
-        if (filterOnlyST && !(res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_SEPARADO')) return;
-        if (!filterShowIgnored && res.stStatus === 'SEM_ST') return;
-        if (!filterShowUnknown && res.stStatus === 'ST_DESCONHECIDO') return;
+        if (!forceVisible && filterOnlyST && !(res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_SEPARADO')) return;
+        if (!forceVisible && !filterShowIgnored && res.stStatus === 'SEM_ST') return;
+        if (!forceVisible && !filterShowUnknown && res.stStatus === 'ST_DESCONHECIDO') return;
 
         rows.push({
           itemId: item.id,
+          itemStatus: item.status,
           rawText: item.rawText,
           ...res
         });
@@ -901,7 +908,7 @@ function App() {
     return history.filter(item => {
       const matchText = historySearchTerm.trim() === '' || 
         String(item.id).includes(historySearchTerm) ||
-        item.items?.some(i => i.rawText.toLowerCase().includes(historySearchTerm.toLowerCase()));
+        String(item.searchTerms || '').toLowerCase().includes(historySearchTerm.toLowerCase());
       return matchText;
     });
   };
@@ -910,11 +917,14 @@ function App() {
   const topRecs = getTopRecommendations();
   const metrics = getSummaryMetrics();
   const filteredHistory = getFilteredHistory();
-  const inputItemCount = inputText.split('\n').filter(line => line.trim()).length;
+  const rawInputLines = inputText.split('\n').map(line => line.trim()).filter(Boolean);
+  const inputAnalysis = analyzeQuoteBatch(rawInputLines);
+  const inputItemCount = inputAnalysis.length;
+  const inputNeedsInfo = inputAnalysis.filter(plan => plan.status === INPUT_STATUS.NEEDS_INFO).length;
   const selectedSupplierCount = Object.values(selectedSuppliers).filter(Boolean).length;
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${isHistoryOpen ? '' : 'history-collapsed'}`}>
       {/* Top update notification banner */}
       {updateAvailable && (
         <div className="update-banner">
@@ -924,13 +934,22 @@ function App() {
       )}
 
       {/* Sidebar: Logo + History */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${isHistoryOpen ? '' : 'is-collapsed'}`}>
         <div className="logo-container">
           <div className="logo-icon" aria-hidden="true"><PackageSearch size={20} /></div>
-          <div>
+          <div className="logo-copy">
             <div className="logo-text">Wimifarma</div>
             <div className="logo-caption">Cotação inteligente</div>
           </div>
+          <button
+            className="history-toggle"
+            type="button"
+            onClick={() => setIsHistoryOpen(open => !open)}
+            aria-label={isHistoryOpen ? 'Recolher histórico' : 'Abrir histórico'}
+            title={isHistoryOpen ? 'Recolher histórico' : 'Abrir histórico'}
+          >
+            {isHistoryOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+          </button>
         </div>
 
         <div className="sidebar-section-heading">
@@ -1069,14 +1088,14 @@ function App() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 <div>
                   <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '0.4rem', fontWeight: 600 }}>
-                    URL do Portal de Login
+                    {selectedSettingSupplier === 3 ? 'Caminho do programa (opcional)' : 'URL do Portal de Login'}
                   </label>
                   <input
                     type="text"
                     value={settingsUrl}
                     onChange={(e) => setSettingsUrl(e.target.value)}
                     className="search-textarea"
-                    placeholder="https://..."
+                    placeholder={selectedSettingSupplier === 3 ? 'Detectado automaticamente ou C:\\...\\digitador-sd.exe' : 'https://...'}
                     style={{ height: '38px', padding: '0.6rem', fontSize: '0.85rem', color: '#fff', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', width: '100%' }}
                   />
                 </div>
@@ -1190,6 +1209,29 @@ function App() {
               />
             </div>
 
+            {inputAnalysis.length > 0 && (
+              <div className="intelligence-preview" aria-live="polite">
+                <div className="intelligence-preview__header">
+                  <span>Como a lista será pesquisada</span>
+                  <span>{inputNeedsInfo > 0 ? `${inputNeedsInfo} precisa de informação` : 'Lista pronta'}</span>
+                </div>
+                <div className="intelligence-preview__list">
+                  {inputAnalysis.map((plan, index) => (
+                    <div
+                      key={`${plan.originalText}-${plan.searchText}-${index}`}
+                      className={`intelligence-line intelligence-line--${plan.status.toLowerCase()}`}
+                    >
+                      <span className="intelligence-line__status" aria-hidden="true" />
+                      <div>
+                        <strong>{plan.searchText}</strong>
+                        <span>{plan.correctionMessage || `Entrada reconhecida: ${plan.parsed.name || plan.originalText}${plan.parsed.dosage ? ` ${plan.parsed.dosage}` : ''}`}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Clickable example queries */}
             <div className="example-box">
               <div className="example-title">
@@ -1289,6 +1331,39 @@ function App() {
                 <div><span>Economia estimada</span><strong>R$ {metrics.savings.toFixed(2).replace('.', ',')}</strong></div>
               </div>
             </div>
+
+            {activeQuote.items?.some(item => item.correctionMessage || item.status !== 'completed') && (
+              <section className="interpretation-panel" aria-labelledby="interpretation-title">
+                <div className="interpretation-panel__header">
+                  <ShieldCheck size={17} aria-hidden="true" />
+                  <h3 id="interpretation-title">Interpretação da lista</h3>
+                </div>
+                <div className="interpretation-panel__list">
+                  {activeQuote.items
+                    .filter(item => item.correctionMessage || item.status !== 'completed')
+                    .map(item => {
+                      const isProblem = ['needs_info', 'not_found', 'supplier_error'].includes(item.status);
+                      const statusText = item.status === 'needs_info'
+                        ? item.refinementSuggestion || 'Informe mais detalhes para pesquisar.'
+                        : item.status === 'not_found'
+                          ? 'Não encontrado nas distribuidoras consultadas. Revise nome, dose ou EAN.'
+                          : item.status === 'supplier_error'
+                            ? 'A consulta ao portal falhou. Nenhum preço antigo foi reutilizado.'
+                            : item.correctionMessage;
+                      return (
+                        <div key={item.id} className={`interpretation-item ${isProblem ? 'is-problem' : 'is-corrected'}`}>
+                          <span className="interpretation-item__status" aria-hidden="true" />
+                          <div>
+                            <strong>{item.rawText}</strong>
+                            <span>{statusText}</span>
+                            {item.searchText && item.searchText !== item.rawText && <small>Busca enviada: {item.searchText}</small>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </section>
+            )}
 
             {/* Recommendations Highlight */}
             {topRecs.length > 0 && (
@@ -1602,7 +1677,11 @@ function App() {
                   </thead>
                   <tbody>
                     {filteredRows.map((row, index) => (
-                      <tr key={index} style={{ opacity: row.reviewStatus === 'REJEITADO' ? 0.45 : 1 }}>
+                      <tr
+                        key={index}
+                        className={['not_found', 'supplier_error'].includes(row.itemStatus) ? 'result-row--problem' : ''}
+                        style={{ opacity: row.reviewStatus === 'REJEITADO' ? 0.45 : 1 }}
+                      >
                         <td className="searched-query-cell" data-label="Busca">"{row.rawText}"</td>
                         <td className="ean-cell" data-label="EAN">{row.ean || '-'}</td>
                         <td data-label="Produto encontrado">
@@ -1618,7 +1697,7 @@ function App() {
                         </td>
                         <td data-label="Preço final">
                           <span className={`text-price ${row.isValidOption ? 'highlight' : ''}`}>
-                            R$ {row.price.toFixed(2).replace('.', ',')}
+                            {row.price > 0 ? `R$ ${row.price.toFixed(2).replace('.', ',')}` : '-'}
                           </span>
                           <div className="price-source-label">{getPriceSourceLabel(row)}</div>
                         </td>

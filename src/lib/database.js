@@ -10,6 +10,17 @@ let isPostgres = false;
 let pgPool = null;
 let sqliteDb = null;
 
+const CANONICAL_SUPPLIER_NAMES = new Map([
+  [1, 'ANB'],
+  [2, 'Profarma'],
+  [3, 'Santa Cruz'],
+  [4, 'DM Paraná']
+]);
+
+const CANONICAL_SUPPLIER_IDS = new Map(
+  Array.from(CANONICAL_SUPPLIER_NAMES, ([id, name]) => [name, id])
+);
+
 function resolveSqliteDirectory(userDataPath) {
   const configuredPath = (process.env.DATABASE_PATH || '').trim();
 
@@ -157,6 +168,9 @@ export async function initDatabase(userDataPath) {
         presentation TEXT,
         ean TEXT,
         quantity INTEGER DEFAULT 1,
+        searchText TEXT,
+        correctionType TEXT,
+        correctionMessage TEXT,
         status TEXT,
         confidenceStatus TEXT,
         refinementSuggestion TEXT,
@@ -207,6 +221,16 @@ export async function initDatabase(userDataPath) {
         lastSearchedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS QueryCorrection (
+        id SERIAL PRIMARY KEY,
+        alias TEXT UNIQUE,
+        canonicalName TEXT,
+        source TEXT,
+        confidence REAL DEFAULT 1,
+        confirmations INTEGER DEFAULT 1,
+        lastConfirmedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS SupplierCredentials (
         id SERIAL PRIMARY KEY,
         supplierId INTEGER UNIQUE,
@@ -249,6 +273,9 @@ export async function initDatabase(userDataPath) {
         presentation TEXT,
         ean TEXT,
         quantity INTEGER DEFAULT 1,
+        searchText TEXT,
+        correctionType TEXT,
+        correctionMessage TEXT,
         status TEXT,
         confidenceStatus TEXT,
         refinementSuggestion TEXT,
@@ -297,6 +324,16 @@ export async function initDatabase(userDataPath) {
         query TEXT UNIQUE,
         searchCount INTEGER DEFAULT 1,
         lastSearchedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS QueryCorrection (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        alias TEXT UNIQUE,
+        canonicalName TEXT,
+        source TEXT,
+        confidence REAL DEFAULT 1,
+        confirmations INTEGER DEFAULT 1,
+        lastConfirmedAt DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
       CREATE TABLE IF NOT EXISTS SupplierCredentials (
@@ -406,6 +443,29 @@ export async function initDatabase(userDataPath) {
       `);
       logger.info('Quote audit database migration completed successfully.');
     }
+
+    let hasSearchText = true;
+    if (isPostgres) {
+      const colCheck = await dbInstance.all(`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name='quoteitem' AND column_name='searchtext'
+      `);
+      hasSearchText = colCheck.length > 0;
+    } else {
+      const itemColumns = await dbInstance.all("PRAGMA table_info(QuoteItem)");
+      hasSearchText = itemColumns.some(c => c.name === 'searchText');
+    }
+
+    if (!hasSearchText) {
+      logger.info('Migrating tables to contextual query intelligence schema...');
+      await dbInstance.exec(`
+        ALTER TABLE QuoteItem ADD COLUMN searchText TEXT;
+        ALTER TABLE QuoteItem ADD COLUMN correctionType TEXT;
+        ALTER TABLE QuoteItem ADD COLUMN correctionMessage TEXT;
+      `);
+      logger.info('Contextual query intelligence migration completed successfully.');
+    }
   } catch (err) {
     logger.error(`Database migration checking failed: ${err.message}`);
   }
@@ -425,6 +485,8 @@ export async function initDatabase(userDataPath) {
     );
   }
 
+  await reconcileCanonicalSupplierReferences();
+
   return dbInstance;
 }
 
@@ -442,6 +504,75 @@ export async function getSupplierIdByName(name) {
     name
   );
   return supplier?.id || null;
+}
+
+export async function resolveSupplierDatabaseId(supplierReference) {
+  if (!dbInstance) return null;
+
+  const numericReference = Number.parseInt(String(supplierReference), 10);
+  const isNumericReference = Number.isInteger(numericReference) && String(numericReference) === String(supplierReference);
+  const supplierName = isNumericReference
+    ? CANONICAL_SUPPLIER_NAMES.get(numericReference)
+    : String(supplierReference || '').trim();
+
+  if (supplierName) {
+    const supplierId = await getSupplierIdByName(supplierName);
+    if (supplierId) return supplierId;
+  }
+
+  if (!isNumericReference) return null;
+  const supplier = await dbInstance.get('SELECT id FROM Supplier WHERE id = ? AND active = 1', numericReference);
+  return supplier?.id || null;
+}
+
+export async function reconcileCanonicalSupplierReferences() {
+  if (!dbInstance) return;
+
+  for (const [canonicalId, supplierName] of CANONICAL_SUPPLIER_NAMES) {
+    const databaseId = await getSupplierIdByName(supplierName);
+    if (!databaseId || databaseId === canonicalId) continue;
+
+    const canonicalIdOwner = await dbInstance.get('SELECT name FROM Supplier WHERE id = ?', canonicalId);
+    if (canonicalIdOwner && canonicalIdOwner.name !== supplierName) continue;
+
+    const orphanCredentials = await dbInstance.get(
+      'SELECT * FROM SupplierCredentials WHERE supplierId = ?',
+      canonicalId
+    );
+    const currentCredentials = await dbInstance.get(
+      'SELECT * FROM SupplierCredentials WHERE supplierId = ?',
+      databaseId
+    );
+
+    if (orphanCredentials && !currentCredentials) {
+      await dbInstance.run(
+        'UPDATE SupplierCredentials SET supplierId = ? WHERE supplierId = ?',
+        databaseId,
+        canonicalId
+      );
+    } else if (orphanCredentials && currentCredentials) {
+      if (String(orphanCredentials.updatedAt || '') > String(currentCredentials.updatedAt || '')) {
+        await dbInstance.run(
+          `UPDATE SupplierCredentials
+           SET url = ?, username = ?, password = ?, clientCode = ?, updatedAt = ?
+           WHERE supplierId = ?`,
+          orphanCredentials.url,
+          orphanCredentials.username,
+          orphanCredentials.password,
+          orphanCredentials.clientCode,
+          orphanCredentials.updatedAt,
+          databaseId
+        );
+      }
+      await dbInstance.run('DELETE FROM SupplierCredentials WHERE supplierId = ?', canonicalId);
+    }
+
+    await dbInstance.run(
+      'UPDATE QuoteResult SET supplierId = ? WHERE supplierId = ?',
+      databaseId,
+      canonicalId
+    );
+  }
 }
 
 export async function saveSearch(rawText, parsed) {
@@ -499,9 +630,9 @@ export async function updateQuoteStatus(quoteId, status) {
   );
 }
 
-export async function createQuoteItem(quoteId, rawText, parsed, status = 'pending') {
+export async function createQuoteItem(quoteId, rawText, parsed, status = 'pending', intelligence = {}) {
   const result = await dbInstance.run(
-    'INSERT INTO QuoteItem (quoteId, rawText, normalizedName, dosage, presentation, ean, quantity, status, confidenceStatus, refinementSuggestion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO QuoteItem (quoteId, rawText, normalizedName, dosage, presentation, ean, quantity, searchText, correctionType, correctionMessage, status, confidenceStatus, refinementSuggestion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     quoteId,
     rawText,
     parsed.name,
@@ -509,11 +640,18 @@ export async function createQuoteItem(quoteId, rawText, parsed, status = 'pendin
     parsed.presentation,
     parsed.ean || null,
     parsed.quantity || 1,
+    intelligence.searchText || parsed.originalTerms || rawText,
+    intelligence.correctionType || null,
+    intelligence.correctionMessage || null,
     status,
     parsed.confidenceStatus || 'ALTA',
     parsed.refinementSuggestion || ''
   );
   return result.lastID;
+}
+
+export async function updateQuoteItemStatus(quoteItemId, status) {
+  await dbInstance.run('UPDATE QuoteItem SET status = ? WHERE id = ?', status, quoteItemId);
 }
 
 export async function saveQuoteResult(result) {
@@ -555,7 +693,53 @@ export async function saveQuoteResult(result) {
 }
 
 export async function getQuotes() {
-  return await dbInstance.all('SELECT * FROM Quote ORDER BY createdAt DESC LIMIT 30');
+  if (isPostgres) {
+    return await dbInstance.all(`
+      SELECT q.*, COALESCE(STRING_AGG(qi.rawText, ' | ' ORDER BY qi.id), '') AS searchTerms
+      FROM Quote q
+      LEFT JOIN QuoteItem qi ON qi.quoteId = q.id
+      GROUP BY q.id, q.createdAt, q.status
+      ORDER BY q.createdAt DESC
+    `);
+  }
+
+  return await dbInstance.all(`
+    SELECT q.*, COALESCE(GROUP_CONCAT(qi.rawText, ' | '), '') AS searchTerms
+    FROM Quote q
+    LEFT JOIN QuoteItem qi ON qi.quoteId = q.id
+    GROUP BY q.id
+    ORDER BY q.createdAt DESC
+  `);
+}
+
+export async function getLearnedCorrections() {
+  try {
+    return await dbInstance.all(`
+      SELECT alias, canonicalName, source, confidence, confirmations
+      FROM QueryCorrection
+      ORDER BY confirmations DESC, lastConfirmedAt DESC
+    `);
+  } catch (error) {
+    logger.error(`Failed to load learned query corrections: ${error.message}`);
+    return [];
+  }
+}
+
+export async function recordQueryCorrection(alias, canonicalName, source = 'LIVE_RESULT', confidence = 1) {
+  const normalizedAlias = String(alias || '').trim().toLowerCase();
+  const normalizedCanonical = String(canonicalName || '').trim().toLowerCase();
+  if (!normalizedAlias || !normalizedCanonical || normalizedAlias === normalizedCanonical) return;
+
+  await dbInstance.run(`
+    INSERT INTO QueryCorrection (alias, canonicalName, source, confidence, confirmations, lastConfirmedAt)
+    VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+    ON CONFLICT(alias) DO UPDATE SET
+      canonicalName = excluded.canonicalName,
+      source = excluded.source,
+      confidence = excluded.confidence,
+      confirmations = QueryCorrection.confirmations + 1,
+      lastConfirmedAt = CURRENT_TIMESTAMP
+  `, normalizedAlias, normalizedCanonical, source, confidence);
 }
 
 export async function getQuoteDetails(quoteId) {
@@ -784,10 +968,18 @@ async function decryptStoredPassword(value) {
   }
 }
 
-export async function saveSupplierCredentials(supplierId, url, username, password, clientCode) {
+export async function saveSupplierCredentials(supplierReference, url, username, password, clientCode) {
   if (!dbInstance) return;
-  const storage = await getSafeStorage();
-  const encryptedPassword = `${storage.storageMode}:${storage.encryptString(password).toString('base64')}`;
+  const supplierId = await resolveSupplierDatabaseId(supplierReference);
+  if (!supplierId) throw new Error(`Distribuidora nao encontrada: ${supplierReference}`);
+
+  let encryptedPassword;
+  if (String(process.env.CREDENTIAL_STORAGE_MODE || '').toLowerCase() === 'plain') {
+    encryptedPassword = `plain:${Buffer.from(password || '', 'utf8').toString('base64')}`;
+  } else {
+    const storage = await getSafeStorage();
+    encryptedPassword = `${storage.storageMode}:${storage.encryptString(password || '').toString('base64')}`;
+  }
   await dbInstance.run(
     `INSERT INTO SupplierCredentials (supplierId, url, username, password, clientCode) 
      VALUES (?, ?, ?, ?, ?)
@@ -801,15 +993,21 @@ export async function saveSupplierCredentials(supplierId, url, username, passwor
   );
 }
 
-export async function getSupplierCredentials(supplierId) {
+export async function getSupplierCredentials(supplierReference) {
   if (!dbInstance) return null;
+  const supplierId = await resolveSupplierDatabaseId(supplierReference);
+  if (!supplierId) return null;
   const row = await dbInstance.get('SELECT * FROM SupplierCredentials WHERE supplierId = ?', supplierId);
   if (!row) return null;
+  row.canonicalSupplierId = CANONICAL_SUPPLIER_IDS.get(CANONICAL_SUPPLIER_NAMES.get(Number(supplierReference)) || '') ||
+    CANONICAL_SUPPLIER_IDS.get(String(supplierReference || '').trim()) || null;
   if (row.password) {
     try {
       row.password = await decryptStoredPassword(row.password);
     } catch (err) {
-      // Bypassed if key changed or incompatible context
+      logger.warn(`Stored credentials could not be read for supplierId ${supplierId}.`);
+      row.password = '';
+      row.passwordUnreadable = true;
     }
   }
   return row;
@@ -817,13 +1015,20 @@ export async function getSupplierCredentials(supplierId) {
 
 export async function getAllSupplierCredentials() {
   if (!dbInstance) return [];
-  const rows = await dbInstance.all('SELECT * FROM SupplierCredentials');
+  const rows = await dbInstance.all(`
+    SELECT c.*, s.name AS supplierName
+    FROM SupplierCredentials c
+    INNER JOIN Supplier s ON s.id = c.supplierId
+  `);
   for (const row of rows) {
+    row.canonicalSupplierId = CANONICAL_SUPPLIER_IDS.get(row.supplierName) || null;
     if (row.password) {
       try {
         row.password = await decryptStoredPassword(row.password);
       } catch (err) {
-        // Bypassed
+        logger.warn(`Stored credentials could not be read for supplierId ${row.supplierId}.`);
+        row.password = '';
+        row.passwordUnreadable = true;
       }
     }
   }

@@ -1,6 +1,6 @@
 const MIN_SAFE_PREFIX_LENGTH = 6;
 
-const ACTIVE_INGREDIENTS = [
+export const ACTIVE_INGREDIENTS = [
   'acetilcisteina',
   'aciclovir',
   'amitriptilina',
@@ -15,6 +15,7 @@ const ACTIVE_INGREDIENTS = [
   'ciprofloxacino',
   'clavulanato',
   'cloreto de sodio',
+  'clonazepam',
   'dapagliflozina',
   'dexametasona',
   'diclofenaco',

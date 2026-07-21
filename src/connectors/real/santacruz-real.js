@@ -15,6 +15,12 @@ function getPositiveInteger(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+export function createSantaCruzProcessEnvironment(credentials = {}, baseEnvironment = process.env) {
+  const configuredPath = String(credentials?.url || '').trim();
+  if (!configuredPath || /^https?:\/\//i.test(configuredPath)) return { ...baseEnvironment };
+  return { ...baseEnvironment, SANTACRUZ_APP_PATH: configuredPath };
+}
+
 export function normalizeSantaCruzGuiPayload(stdout) {
   const cleanOutput = String(stdout || '').replace(/^\uFEFF/, '').trim();
   if (!cleanOutput) {
@@ -82,7 +88,8 @@ function runSantaCruzGuiSearch(scriptPath, searchTerm, credentials) {
     ], {
       windowsHide: true,
       timeout,
-      maxBuffer: 4 * 1024 * 1024
+      maxBuffer: 4 * 1024 * 1024,
+      env: createSantaCruzProcessEnvironment(credentials)
     }, (error, stdout, stderr) => {
       const payload = normalizeSantaCruzGuiPayload(stdout);
       if (error && payload.status === 'automation-failed') {
@@ -153,7 +160,12 @@ export class SantaCruzRealConnector extends SupplierConnector {
 
     return rawResults.map(result => {
       if (result.source === 'Santa Cruz' && result.supplierProductName && !result.name) {
-        return result;
+        return {
+          ...result,
+          price: getSantaCruzFinalPrice(result),
+          priceSourceLabel: 'Preço NF',
+          capturedAt: result.capturedAt || new Date().toISOString()
+        };
       }
 
       let parsedQuantity = 1;
@@ -174,6 +186,7 @@ export class SantaCruzRealConnector extends SupplierConnector {
         availability: result.stock || 'disponivel',
         quantity: parsedQuantity,
         unitPrice: finalPrice / parsedQuantity,
+        priceSourceLabel: 'Preço NF',
         source: 'Santa Cruz',
         capturedAt: new Date().toISOString()
       };

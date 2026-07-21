@@ -13,16 +13,16 @@ O sistema roda localmente no computador da farmácia. Certifique-se de possuir o
    ```bash
    copy .env.example .env
    ```
-3. Abra `cotacao.bat`. O inicializador verifica uma versão remota segura, instala ou atualiza as dependências necessárias e então abre o aplicativo.
+3. Abra `wimi cotacao.bat`. O inicializador verifica uma versão remota segura, instala ou atualiza as dependências necessárias, garante o runtime do Electron e então abre o aplicativo.
 
 ### Configuração em outro computador
 
-1. Clone o projeto e abra `cotacao.bat`; o bootstrap instala as dependências compatíveis antes de iniciar.
+1. Clone o projeto e abra `wimi cotacao.bat`; o bootstrap instala as dependências compatíveis antes de iniciar.
 2. Abra **Configurar Logins das Distribuidoras** no aplicativo.
 3. Cadastre ANB, Profarma, Santa Cruz e **DM Paraná**. A URL da DM é `https://portal.dmparana.com.br/login`.
 4. Faça uma cotação curta e confira se cada fonte aparece como consultada ao vivo.
 
-As senhas não ficam no Git. O Windows protege os acessos com DPAPI, portanto uma senha protegida em uma máquina não deve ser copiada como arquivo para outra: cadastre novamente pela tela de configurações em cada computador. O banco e o histórico podem permanecer locais, mas nunca são usados como fonte de preço para uma nova cotação.
+As senhas não ficam no Git. Com `CREDENTIAL_STORAGE_MODE=plain`, configuração operacional padrão, elas ficam codificadas no SQLite local e podem acompanhar uma cópia autorizada do banco para outro computador. Esse modo não é criptografia: limite o acesso à pasta e nunca envie `.env` ou `data/cotador-st.db` ao repositório. O histórico pode permanecer local, mas nunca é usado como fonte de preço para uma nova cotação.
 
 ---
 
@@ -46,6 +46,12 @@ Para rodar a suite de testes unitários local (alimentada pelo runner nativo do 
 ```bash
 npm run test
 ```
+
+Para auditar os conectores reais com captura datada e sem gravar preços no histórico:
+```bash
+npm run diagnose:live -- "losartana 50mg" "amitriptilina 25mg" "clonazepam 2mg"
+```
+O relatório sanitizado fica em `logs/live-diagnostic-latest.json`. Use `--suppliers=ANB,Profarma` para limitar fornecedores e `--output=logs/arquivo.json` para preservar uma rodada específica.
 
 ### 3. Gerar o Build Desktop (Instalador para Windows)
 Para gerar o executável instalável (.exe) para distribuição interna no Windows:
@@ -74,6 +80,12 @@ Antes de abrir cada fornecedor, a descricao recebe uma normalizacao compartilhad
 - `xarope` e `suspensao oral` sao equivalentes no contexto oral. Solucoes oftalmicas, injetaveis, nasais e otologicas nao entram nessa equivalencia.
 - `soro fisiologico` e `solucao fisiologica` sao normalizados para `cloreto de sodio`, permitindo localizar a mesma descricao comercial.
 - Prefixos curtos ou ambiguos, como `hidro`, nao sao expandidos automaticamente.
+- O lote mantem contexto entre linhas. Depois de `metformina 500`, por exemplo, `met 850` e entendido como `metformina 850mg`.
+- Dosagens compactadas conhecidas sao separadas: `sinvastatina 20 40` gera pesquisas independentes para 20 mg e 40 mg.
+- Erros inequivocos e prefixos unicos, como `dapaglifozina` ou `dapagli`, sao corrigidos para `dapagliflozina` antes de abrir os portais, e a alteracao fica visivel na tela.
+- Termos ambiguos ou sem informacao suficiente ficam vermelhos e nao abrem os fornecedores ate receberem complemento.
+- Quando a linha contem EAN e nome, o sistema tenta o EAN primeiro. Somente um retorno realmente vazio permite nova busca pelo nome; falha de portal nunca e mascarada pelo fallback.
+- O aprendizado local guarda apenas correcoes de escrita confirmadas por resultado real. Precos, estoque e ST antigos nunca alimentam uma nova cotacao.
 
 ### 2. Regra de ST (Fase 2)
 O sistema trabalha apenas com produtos que possuem Substituição Tributária. Os retornos são divididos em:
@@ -100,8 +112,10 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - **Mocks somente em testes:** Dados simulados exigem `ENABLE_MOCK_CONNECTORS=true`. Sem uma das duas configurações explícitas, o sistema interrompe a cotação para não apresentar valores fictícios.
 - **Frescor obrigatório:** Resultados reais sem horário de captura ou com mais de cinco minutos são bloqueados e não participam do melhor preço.
 - **Banco local portátil:** Com `DATABASE_PATH=local`, o SQLite fica em `data/cotador-st.db`, junto do projeto, permitindo reaproveitar credenciais e histórico locais.
-- **Histórico não é fonte:** O SQLite serve para reabrir/exportar cotações anteriores e guardar credenciais protegidas; uma nova cotação nunca consulta preços desse banco.
-- **Janelas visíveis:** `SHOW_SCRAPER_WINDOW=true` mantém o navegador do robô visível para login/captcha e conferência visual.
+- **IDs portáteis:** Credenciais são reconciliadas pelo nome canônico do fornecedor; a DM Paraná continua funcionando mesmo se o ID interno do SQLite não for `4`.
+- **Histórico não é fonte:** O SQLite serve para reabrir/exportar cotações anteriores e guardar credenciais locais; uma nova cotação nunca consulta preços desse banco.
+- **Falha de internet:** Erros transitórios de portal recebem uma única nova tentativa. Credencial ausente, aplicativo sem janela e falha persistente ficam bloqueados; não há fallback para preço antigo.
+- **Automação discreta:** `SHOW_SCRAPER_WINDOW=false` mantém ANB, Profarma e DM ocultas e fora da barra de tarefas. A Santa Cruz tenta escrever pelo controle de acessibilidade e restaura o foco anterior; por ser um aplicativo Java local, uma sessão Windows/VM dedicada é a única garantia de interferência visual zero.
 - **Privacidade Local:** O sistema grava histórico local em banco SQLite (`cotador-st.db`) na pasta de dados do usuário e gera logs limpos em `logs/app.log` sem armazenar dados de cookies, senhas, tokens ou contas de acesso.
 
 ### 5. Regra de preço da DM Paraná
@@ -117,6 +131,8 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 
 - No uso diário, abra **`wimi cotacao.bat`**. Esse atalho chama `cotacao.bat`, que valida o Node.js e executa o bootstrap seguro de atualização e dependências antes de iniciar o Electron.
 - A pesquisa mostra quantos itens serão cotados e quais distribuidoras estão selecionadas antes de iniciar o robô.
+- A prévia explica cada correção ou herança de contexto antes da cotação. Linhas incompletas permanecem vermelhas e visíveis para ajuste.
 - Cada resultado exibe a origem exata do valor utilizado: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final` e DM Paraná `Preço final: R$`.
 - Os indicadores de ST, auditoria, estoque e recomendação permanecem visíveis tanto no painel quanto na tabela detalhada.
+- O histórico completo fica recolhido por padrão, pode ser aberto por um único botão e aceita busca pelos medicamentos cotados.
 - Em telas menores, a tabela vira uma sequência de cartões com os rótulos de cada coluna, sem esconder o preço final ou a origem.

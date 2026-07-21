@@ -1,4 +1,4 @@
-export function createLiveUnavailableResult(supplierName, parsedQuery, reason) {
+export function createLiveUnavailableResult(supplierName, parsedQuery, reason, options = {}) {
   return {
     ean: '',
     supplierProductName: `${supplierName} nao consultada: ${reason}`,
@@ -11,6 +11,12 @@ export function createLiveUnavailableResult(supplierName, parsedQuery, reason) {
     quantity: 1,
     unitPrice: 0,
     source: supplierName,
-    capturedAt: new Date().toISOString()
+    capturedAt: new Date().toISOString(),
+    liveFailureReason: reason,
+    retryable: options.retryable === true
   };
+}
+
+export function isRetryablePortalError(error) {
+  return /timeout|timed out|err_|network|net::|connection|conexao/i.test(String(error?.message || error || ''));
 }
