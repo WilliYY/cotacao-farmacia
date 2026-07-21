@@ -131,6 +131,7 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 
 - No uso diário, abra **`wimi cotacao.bat`**. Esse atalho chama `cotacao.bat`, que valida o Node.js e executa o bootstrap seguro de atualização e dependências antes de iniciar o Electron.
 - O processo técnico permanece oculto e grava sua saída em `logs/startup.log`; a janela preta do CMD não fica aberta junto do aplicativo.
+- Uma cotação nunca permanece carregando indefinidamente: por padrão, portais web têm limite de 5 minutos, enquanto Santa Cruz e a cotação completa têm limite de 10 minutos. Ao atingir o limite, processos pendentes são cancelados, resultados reais já obtidos são preservados e as fontes incompletas ficam sinalizadas.
 - A pesquisa mostra quantos itens serão cotados e quais distribuidoras estão selecionadas antes de iniciar o robô.
 - A prévia explica cada correção ou herança de contexto antes da cotação. Linhas incompletas permanecem vermelhas e visíveis para ajuste.
 - Cada resultado exibe a origem exata do valor utilizado: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final` e DM Paraná `Preço final: R$`.

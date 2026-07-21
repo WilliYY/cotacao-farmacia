@@ -33,7 +33,7 @@ export class ProfarmaRealConnector extends SupplierConnector {
   /**
    * Performs autonomous browser-based search on Profarma portal.
    */
-  async searchProduct(parsedQuery) {
+  async searchProduct(parsedQuery, options = {}) {
     const creds = await getSupplierCredentials(2); // Profarma supplierId = 2
     if (!creds || !creds.username || !creds.password) {
       logger.warn('Real credentials not configured for Profarma.');
@@ -50,7 +50,8 @@ export class ProfarmaRealConnector extends SupplierConnector {
         creds.username, 
         creds.password, 
         creds.clientCode, 
-        searchTerm
+        searchTerm,
+        { signal: options.signal }
       );
       
       return results.map(res => ({
@@ -59,6 +60,7 @@ export class ProfarmaRealConnector extends SupplierConnector {
         capturedAt: new Date().toISOString()
       }));
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
       logger.error(`Profarma Portal search failed: ${error.message}`);
       return [createLiveUnavailableResult('Profarma', parsedQuery, 'consulta ao portal falhou', {
         retryable: isRetryablePortalError(error)

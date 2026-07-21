@@ -70,7 +70,7 @@ export function getSantaCruzFinalPrice(result = {}) {
   return Number.isFinite(price) && price > 0 ? price : 0;
 }
 
-function runSantaCruzGuiSearch(scriptPath, searchTerm, credentials) {
+function runSantaCruzGuiSearch(scriptPath, searchTerm, credentials, options = {}) {
   const startupSeconds = getPositiveInteger(process.env.SANTACRUZ_STARTUP_WAIT_SECONDS, 180);
   const updateSeconds = getPositiveInteger(process.env.SANTACRUZ_UPDATE_WAIT_SECONDS, 600);
   const resultSeconds = getPositiveInteger(process.env.SANTACRUZ_RESULT_WAIT_SECONDS, 20);
@@ -89,13 +89,18 @@ function runSantaCruzGuiSearch(scriptPath, searchTerm, credentials) {
       windowsHide: true,
       timeout,
       maxBuffer: 4 * 1024 * 1024,
-      env: createSantaCruzProcessEnvironment(credentials)
+      env: createSantaCruzProcessEnvironment(credentials),
+      signal: options.signal
     }, (error, stdout, stderr) => {
       const payload = normalizeSantaCruzGuiPayload(stdout);
       if (error && payload.status === 'automation-failed') {
         logger.warn(`Santa Cruz GUI automation failed: ${error.message}`);
         if (stderr) logger.debug(`Santa Cruz PowerShell diagnostic: ${String(stderr).trim()}`);
-        return resolve({ ...payload, reason: error.killed ? 'Tempo limite da automacao excedido' : payload.reason });
+        const aborted = error.name === 'AbortError' || error.code === 'ABORT_ERR';
+        return resolve({
+          ...payload,
+          reason: aborted || error.killed ? 'Tempo limite da automacao excedido' : payload.reason
+        });
       }
       resolve(payload);
     });
@@ -129,7 +134,7 @@ export class SantaCruzRealConnector extends SupplierConnector {
     return !!(credentials && credentials.username && credentials.password);
   }
 
-  async searchProduct(parsedQuery) {
+  async searchProduct(parsedQuery, options = {}) {
     const searchTerm = parsedQuery.ean || [parsedQuery.name, parsedQuery.dosage, parsedQuery.presentation]
       .filter(Boolean)
       .join(' ');
@@ -143,7 +148,7 @@ export class SantaCruzRealConnector extends SupplierConnector {
     logger.info(`Searching Santa Cruz for: "${searchTerm}"...`);
     logger.info('Locating the Santa Cruz installation and starting autonomous GUI search...');
 
-    const guiPayload = await runSantaCruzGuiSearch(scriptPath, searchTerm, credentials);
+    const guiPayload = await runSantaCruzGuiSearch(scriptPath, searchTerm, credentials, options);
     let rawResults = [];
 
     if (guiPayload.status === 'ok') {

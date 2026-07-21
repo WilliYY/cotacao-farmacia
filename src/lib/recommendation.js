@@ -10,6 +10,9 @@ import { logger } from './logger.js';
 dotenv.config();
 
 const MAX_LIVE_CAPTURE_AGE_MS = 5 * 60 * 1000;
+const DEFAULT_CONNECTOR_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_SANTACRUZ_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_QUOTE_TIMEOUT_MS = 10 * 60 * 1000;
 
 export function isFreshLiveCapture(result, now = Date.now(), maxAgeMs = MAX_LIVE_CAPTURE_AGE_MS) {
   const capturedAt = Date.parse(result?.capturedAt || '');
@@ -30,6 +33,53 @@ function getBoundedInteger(value, fallback, minimum, maximum) {
   return Number.isInteger(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
 }
 
+export function getQuoteTimeoutMs(environment = process.env) {
+  return getBoundedInteger(environment.QUOTE_TIMEOUT_MS, DEFAULT_QUOTE_TIMEOUT_MS, 60_000, 30 * 60 * 1000);
+}
+
+export function getConnectorTimeoutMs(supplierName, options = {}, environment = process.env) {
+  const explicitTimeout = Number.parseInt(options.timeoutMs, 10);
+  if (Number.isInteger(explicitTimeout) && explicitTimeout > 0) return explicitTimeout;
+
+  const quoteTimeoutMs = getQuoteTimeoutMs(environment);
+  const isSantaCruz = supplierName === 'Santa Cruz';
+  const configuredValue = isSantaCruz
+    ? environment.SANTACRUZ_TIMEOUT_MS
+    : environment.CONNECTOR_TIMEOUT_MS;
+  const fallback = isSantaCruz ? DEFAULT_SANTACRUZ_TIMEOUT_MS : DEFAULT_CONNECTOR_TIMEOUT_MS;
+  return getBoundedInteger(configuredValue, Math.min(fallback, quoteTimeoutMs), 30_000, quoteTimeoutMs);
+}
+
+export function isTimeoutFailure(result) {
+  return result?.timedOut === true || result?.failureCode === 'TIMEOUT' ||
+    /tempo limite|timed out|timeout/i.test(String(result?.liveFailureReason || ''));
+}
+
+function createAbortError() {
+  const error = new Error('Quotation operation aborted by timeout.');
+  error.name = 'AbortError';
+  return error;
+}
+
+function waitForRetry(delayMs, signal) {
+  if (!delayMs) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let abortHandler = null;
+    const timeoutId = setTimeout(() => {
+      if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
+      resolve();
+    }, delayMs);
+    if (!signal) return;
+
+    abortHandler = () => {
+      clearTimeout(timeoutId);
+      reject(createAbortError());
+    };
+    if (signal.aborted) return abortHandler();
+    signal.addEventListener('abort', abortHandler, { once: true });
+  });
+}
+
 export function shouldRetryLiveResults(results) {
   return Array.isArray(results) && results.length > 0 && results.every(result => result?.retryable === true);
 }
@@ -40,18 +90,21 @@ export async function callWithRetry(connector, parsedQuery, options = {}) {
   let lastErr = null;
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     try {
-      const results = await connector.searchProduct(parsedQuery);
+      if (options.signal?.aborted) throw createAbortError();
+      const results = await connector.searchProduct(parsedQuery, { signal: options.signal });
+      if (options.signal?.aborted) throw createAbortError();
       if (attempt <= retries && shouldRetryLiveResults(results)) {
         logger.warn(`Transient live failure for ${connector.supplierName}; retrying once.`);
-        await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+        await waitForRetry(delayMs * attempt, options.signal);
         continue;
       }
       return results;
     } catch (err) {
+      if (options.signal?.aborted || err?.name === 'AbortError') throw createAbortError();
       lastErr = err;
       logger.warn(`Attempt ${attempt} failed for connector ${connector.supplierName}: ${err.message}`);
       if (attempt <= retries) {
-        await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+        await waitForRetry(delayMs * attempt, options.signal);
       }
     }
   }
@@ -64,6 +117,7 @@ export async function callWithRetry(connector, parsedQuery, options = {}) {
 
 export async function callWithEanFallback(connector, parsedQuery, options = {}) {
   const firstResults = await callWithRetry(connector, parsedQuery, options);
+  if (options.signal?.aborted) throw createAbortError();
   const canFallbackByName = Boolean(parsedQuery.ean && parsedQuery.name);
   if (!canFallbackByName || !Array.isArray(firstResults) || firstResults.length > 0) {
     return firstResults;
@@ -75,6 +129,57 @@ export async function callWithEanFallback(connector, parsedQuery, options = {}) 
     ...result,
     searchFallback: 'EAN_NAO_ENCONTRADO_NOME'
   }));
+}
+
+export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
+  const timeoutMs = getConnectorTimeoutMs(connector.supplierName, options);
+  const timeoutMinutes = Math.max(1, Math.ceil(timeoutMs / 60_000));
+  const supplierReason = `tempo limite de ${timeoutMinutes} minuto${timeoutMinutes === 1 ? '' : 's'} excedido`;
+  const totalReason = options.totalTimeoutReason || 'tempo limite total da cotacao excedido';
+  const controller = new AbortController();
+  const externalSignal = options.signal;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeoutId = null;
+    let externalAbortHandler = null;
+
+    const finish = (results) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (externalSignal && externalAbortHandler) {
+        externalSignal.removeEventListener('abort', externalAbortHandler);
+      }
+      resolve(results);
+    };
+
+    const finishAsTimeout = (reason) => {
+      if (settled) return;
+      controller.abort(createAbortError());
+      logger.warn(`${connector.supplierName} stopped: ${reason}.`);
+      finish([createLiveUnavailableResult(connector.supplierName, parsedQuery, reason, {
+        failureCode: 'TIMEOUT',
+        timedOut: true
+      })]);
+    };
+
+    externalAbortHandler = () => finishAsTimeout(totalReason);
+    if (externalSignal?.aborted) {
+      finishAsTimeout(totalReason);
+      return;
+    }
+    externalSignal?.addEventListener('abort', externalAbortHandler, { once: true });
+
+    timeoutId = setTimeout(() => finishAsTimeout(supplierReason), timeoutMs);
+    callWithEanFallback(connector, parsedQuery, { ...options, signal: controller.signal })
+      .then(finish)
+      .catch((error) => {
+        if (controller.signal.aborted || externalSignal?.aborted) return;
+        logger.error(`Unexpected connector failure for ${connector.supplierName}: ${error.message}`);
+        finish([createLiveUnavailableResult(connector.supplierName, parsedQuery, 'falha interna na consulta ao vivo')]);
+      });
+  });
 }
 
 export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'], options = {}) {
@@ -101,7 +206,11 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
   for (const connector of activeConnectors) {
     if (connector) {
       logger.debug(`Calling connector for ${connector.supplierName}...`);
-      searchPromises.push(callWithEanFallback(connector, parsed));
+      searchPromises.push(callConnectorWithTimeout(connector, parsed, {
+        signal: options.signal,
+        timeoutMs: options.connectorTimeoutMs?.[connector.supplierName],
+        totalTimeoutReason: options.totalTimeoutReason
+      }));
     }
   }
 
@@ -205,6 +314,8 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       unitPrice: unitPrice,
       priceSourceLabel: res.priceSourceLabel || null,
       liveFailureReason: res.liveFailureReason || null,
+      failureCode: res.failureCode || null,
+      timedOut: res.timedOut === true,
       searchFallback: res.searchFallback || null,
       debugColumns: res.debugColumns
     };

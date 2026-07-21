@@ -200,11 +200,18 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
  * Headless/Headed Scraping Engine using Electron's BrowserWindow.
  * Bypasses bot detection by using the app's native Chrome engine.
  */
-export async function scrapePortal(supplierId, loginUrl, username, password, clientCode, searchTerm) {
+export async function scrapePortal(supplierId, loginUrl, username, password, clientCode, searchTerm, options = {}) {
   const showWindow = process.env.SHOW_SCRAPER_WINDOW !== 'false';
   const includeDebugColumns = process.env.DEBUG_SCRAPER_COLUMNS === 'true';
   const scraperTimeoutMs = Number.parseInt(process.env.SCRAPER_TIMEOUT_MS || '300000', 10);
+  const signal = options.signal;
   logger.info(`Launching BrowserWindow scraper for supplier ${supplierId} (${searchTerm})`);
+
+  if (signal?.aborted) {
+    const error = new Error('Scraping session aborted by quotation timeout.');
+    error.name = 'AbortError';
+    throw error;
+  }
 
   const { BrowserWindow } = await import('electron');
 
@@ -227,16 +234,16 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
     });
 
     let hasResolved = false;
+    let pollInterval = null;
+    let abortHandler = null;
 
     // Timeout safety guard (5 minutes max by default)
     const timeoutId = setTimeout(() => {
       if (!hasResolved) {
         hasResolved = true;
-        clearInterval(pollInterval);
-        saveDebugArtifacts('timeout').finally(() => {
-          cleanup();
-          reject(new Error('Scraping session timed out.'));
-        });
+        logger.warn(`Scraping session timed out after ${scraperTimeoutMs}ms.`);
+        cleanup();
+        reject(new Error('Scraping session timed out.'));
       }
     }, Number.isFinite(scraperTimeoutMs) && scraperTimeoutMs > 0 ? scraperTimeoutMs : 300000);
 
@@ -268,8 +275,15 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
       }
     };
 
+    const saveDebugArtifactsBounded = (name) => Promise.race([
+      saveDebugArtifacts(name),
+      new Promise(resolveArtifacts => setTimeout(resolveArtifacts, 2000))
+    ]);
+
     const cleanup = () => {
       clearTimeout(timeoutId);
+      if (pollInterval) clearInterval(pollInterval);
+      if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
       if (win) {
         try {
           win.webContents.removeAllListeners('console-message');
@@ -283,6 +297,20 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
         win = null;
       }
     };
+
+    abortHandler = () => {
+      if (hasResolved) return;
+      hasResolved = true;
+      cleanup();
+      const error = new Error('Scraping session aborted by quotation timeout.');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    signal?.addEventListener('abort', abortHandler, { once: true });
+    if (signal?.aborted) {
+      abortHandler();
+      return;
+    }
 
     let injectedLogin = false;
     let submittedSearch = false;
@@ -423,7 +451,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           logger.warn('Supplier portal rejected the configured login credentials.');
           hasResolved = true;
           clearInterval(pollInterval);
-          saveDebugArtifacts(`login_rejected_supplier_${supplierId}`).finally(() => {
+          saveDebugArtifactsBounded(`login_rejected_supplier_${supplierId}`).finally(() => {
             cleanup();
             reject(new Error('Supplier portal rejected the configured login credentials.'));
           });
@@ -558,7 +586,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
               if (promoOpenAttempts > 8) {
                 hasResolved = true;
                 clearInterval(pollInterval);
-                saveDebugArtifacts(`commercial_condition_blocked_supplier_${supplierId}`).finally(() => {
+                saveDebugArtifactsBounded(`commercial_condition_blocked_supplier_${supplierId}`).finally(() => {
                   cleanup();
                   reject(new Error('Supplier commercial condition selector did not open.'));
                 });
@@ -789,7 +817,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
                   hasResolved = true;
                   clearInterval(pollInterval);
-                  saveDebugArtifacts('dm_stale_product_grid').finally(() => {
+                  saveDebugArtifactsBounded('dm_stale_product_grid').finally(() => {
                     cleanup();
                     reject(new Error('DM result grid did not update for the requested product.'));
                   });
@@ -1065,13 +1093,13 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                     setTimeout(cleanup, 2000);
                   };
                   if (process.env.DEBUG_SCRAPER_COLUMNS === 'true') {
-                    saveDebugArtifacts(`success_supplier_${supplierId}`).finally(finish);
+                    saveDebugArtifactsBounded(`success_supplier_${supplierId}`).finally(finish);
                   } else {
                     finish();
                   }
                 } else {
                   logger.warn('No items found or parsing returned empty list.');
-                  saveDebugArtifacts(`empty_results_supplier_${supplierId}`).finally(() => {
+                  saveDebugArtifactsBounded(`empty_results_supplier_${supplierId}`).finally(() => {
                     resolve([]);
                     setTimeout(cleanup, 2000);
                   });
@@ -1091,7 +1119,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
       }
     };
 
-    const pollInterval = setInterval(runStateMachine, 1000);
+    pollInterval = setInterval(runStateMachine, 1000);
 
     win.webContents.on('did-finish-load', runStateMachine);
 

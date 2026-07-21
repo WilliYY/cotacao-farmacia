@@ -13,7 +13,9 @@ export function createLiveUnavailableResult(supplierName, parsedQuery, reason, o
     source: supplierName,
     capturedAt: new Date().toISOString(),
     liveFailureReason: reason,
-    retryable: options.retryable === true
+    retryable: options.retryable === true,
+    failureCode: options.failureCode || null,
+    timedOut: options.timedOut === true
   };
 }
 

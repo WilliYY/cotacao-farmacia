@@ -9,7 +9,7 @@ import XLSX from 'xlsx';
 import { parseSearchQuery, levenshteinDistance, fuzzyMatch } from '../src/lib/parser.js';
 import { analyzeQuoteBatch, INPUT_STATUS } from '../src/lib/search-intelligence.js';
 import { isValidST, getVisualStatusLabel, getSTPriority } from '../src/lib/st-rules.js';
-import { callWithEanFallback, callWithRetry, isFreshLiveCapture, matchesSupplierProduct, processQuoteQuery, shouldRetryLiveResults } from '../src/lib/recommendation.js';
+import { callConnectorWithTimeout, callWithEanFallback, callWithRetry, isFreshLiveCapture, isTimeoutFailure, matchesSupplierProduct, processQuoteQuery, shouldRetryLiveResults } from '../src/lib/recommendation.js';
 import { createLiveUnavailableResult } from '../src/connectors/real/live-result.js';
 import { AUDIT_STATUS, auditQuoteResult } from '../src/lib/quote-auditor.js';
 import { createSantaCruzProcessEnvironment, getSantaCruzFinalPrice, normalizeSantaCruzGuiPayload } from '../src/connectors/real/santacruz-real.js';
@@ -431,6 +431,33 @@ test('Live Quote Source Safety', async (t) => {
       }
     }, parsed, { retries: 1, delayMs: 0 });
     assert.strictEqual(configurationCalls, 1);
+  });
+
+  await t.test('Stops a stuck supplier and returns a structured timeout result', async () => {
+    const parsed = parseSearchQuery('losartana 50mg');
+    let connectorWasAborted = false;
+    const connector = {
+      supplierName: 'ANB',
+      searchProduct: async (query, options = {}) => new Promise(resolve => {
+        options.signal.addEventListener('abort', () => {
+          connectorWasAborted = true;
+          resolve([]);
+        }, { once: true });
+      })
+    };
+
+    const results = await callConnectorWithTimeout(connector, parsed, {
+      retries: 0,
+      timeoutMs: 25
+    });
+
+    assert.strictEqual(connectorWasAborted, true);
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0].source, 'ANB');
+    assert.strictEqual(results[0].timedOut, true);
+    assert.strictEqual(results[0].failureCode, 'TIMEOUT');
+    assert.match(results[0].liveFailureReason, /tempo limite/i);
+    assert.strictEqual(isTimeoutFailure(results[0]), true);
   });
 
   await t.test('Keeps a failed supplier circuit open across a multi-item quotation', async () => {

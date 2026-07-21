@@ -27,7 +27,7 @@ import {
   recordQueryCorrection,
   closeDatabase
 } from './src/lib/database.js';
-import { processQuoteQuery } from './src/lib/recommendation.js';
+import { getQuoteTimeoutMs, isTimeoutFailure, processQuoteQuery } from './src/lib/recommendation.js';
 import { analyzeQuoteBatch, INPUT_STATUS } from './src/lib/search-intelligence.js';
 import { generateExcelBuffer } from './src/lib/exporter.js';
 import { logger } from './src/lib/logger.js';
@@ -143,49 +143,69 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     logger.info(`Starting new Quote process for ${rawTextList.length} input lines and ${searchPlans.length} planned searches`);
     const quoteId = await createQuote('processing');
     const blockedSupplierReasons = {};
+    const quoteTimeoutMs = getQuoteTimeoutMs();
+    const quoteTimeoutMinutes = Math.max(1, Math.ceil(quoteTimeoutMs / 60_000));
+    const quoteController = new AbortController();
+    let quoteReachedTimeout = false;
+    const quoteTimeoutId = setTimeout(() => {
+      quoteReachedTimeout = true;
+      logger.warn(`Quote #${quoteId} reached the ${quoteTimeoutMinutes}-minute total limit; stopping pending suppliers.`);
+      quoteController.abort();
+    }, quoteTimeoutMs);
 
-    for (const plan of searchPlans) {
-      if (plan.status === INPUT_STATUS.NEEDS_INFO) {
-        await createQuoteItem(quoteId, plan.originalText, plan.parsed, 'needs_info', plan);
-        await saveSearch(plan.originalText, plan.parsed);
-        continue;
-      }
+    try {
+      for (const plan of searchPlans) {
+        if (plan.status === INPUT_STATUS.NEEDS_INFO) {
+          await createQuoteItem(quoteId, plan.originalText, plan.parsed, 'needs_info', plan);
+          await saveSearch(plan.originalText, plan.parsed);
+          continue;
+        }
 
-      const quote = await processQuoteQuery(plan.searchText, activeSuppliers, {
-        blockedSupplierReasons,
-        parsedQuery: plan.parsed
-      });
-      for (const result of quote.results) {
-        if (result.source && result.liveFailureReason) {
-          blockedSupplierReasons[result.source] = result.liveFailureReason;
+        const quote = await processQuoteQuery(plan.searchText, activeSuppliers, {
+          blockedSupplierReasons,
+          parsedQuery: plan.parsed,
+          signal: quoteController.signal,
+          totalTimeoutReason: `tempo limite total de ${quoteTimeoutMinutes} minutos excedido`
+        });
+        for (const result of quote.results) {
+          if (result.source && result.liveFailureReason) {
+            blockedSupplierReasons[result.source] = result.liveFailureReason;
+          }
+        }
+
+        const hasLiveEvidence = quote.results.some(result => result.source !== 'N/A' && !result.liveFailureReason);
+        const hasTimeout = quote.results.some(isTimeoutFailure);
+        const allSupplierFailures = quote.results.length > 0 && quote.results.every(result => Boolean(result.liveFailureReason));
+        const itemStatus = hasTimeout
+          ? (hasLiveEvidence ? 'completed_with_timeout' : 'supplier_timeout')
+          : (hasLiveEvidence ? 'completed' : (allSupplierFailures ? 'supplier_error' : 'not_found'));
+        quoteReachedTimeout = quoteReachedTimeout || hasTimeout;
+        const itemId = await createQuoteItem(quoteId, plan.originalText, quote.parsed, itemStatus, plan);
+
+        // Save search term for self-learning metrics
+        await saveSearch(plan.originalText, quote.parsed);
+
+        for (const res of quote.results) {
+          await saveQuoteResult({
+            quoteItemId: itemId,
+            ...res,
+            supplierId: await getSupplierIdByName(res.source)
+          });
+        }
+
+        const hasConfirmedMatch = quote.results.some(result => result.isValidOption && result.price > 0);
+        if (hasConfirmedMatch && plan.alias && plan.canonicalName && plan.alias !== plan.canonicalName) {
+          const confidence = plan.correctionType === 'BATCH_CONTEXT' ? 0.75 : 1;
+          await recordQueryCorrection(plan.alias, plan.canonicalName, plan.correctionType, confidence);
         }
       }
-
-      const hasLiveEvidence = quote.results.some(result => result.source !== 'N/A' && !result.liveFailureReason);
-      const allSupplierFailures = quote.results.length > 0 && quote.results.every(result => Boolean(result.liveFailureReason));
-      const itemStatus = hasLiveEvidence ? 'completed' : (allSupplierFailures ? 'supplier_error' : 'not_found');
-      const itemId = await createQuoteItem(quoteId, plan.originalText, quote.parsed, itemStatus, plan);
-
-      // Save search term for self-learning metrics
-      await saveSearch(plan.originalText, quote.parsed);
-
-      for (const res of quote.results) {
-        await saveQuoteResult({
-          quoteItemId: itemId,
-          ...res,
-          supplierId: await getSupplierIdByName(res.source)
-        });
-      }
-
-      const hasConfirmedMatch = quote.results.some(result => result.isValidOption && result.price > 0);
-      if (hasConfirmedMatch && plan.alias && plan.canonicalName && plan.alias !== plan.canonicalName) {
-        const confidence = plan.correctionType === 'BATCH_CONTEXT' ? 0.75 : 1;
-        await recordQueryCorrection(plan.alias, plan.canonicalName, plan.correctionType, confidence);
-      }
+    } finally {
+      clearTimeout(quoteTimeoutId);
     }
 
-    await updateQuoteStatus(quoteId, 'completed');
-    logger.info(`Quote process completed for ID: ${quoteId}`);
+    const finalStatus = quoteReachedTimeout ? 'completed_with_timeout' : 'completed';
+    await updateQuoteStatus(quoteId, finalStatus);
+    logger.info(`Quote process completed for ID: ${quoteId} with status ${finalStatus}`);
     return await getQuoteDetails(quoteId);
   } catch (error) {
     logger.error(`Quote execution failed: ${error.message}`);

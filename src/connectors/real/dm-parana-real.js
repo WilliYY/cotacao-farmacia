@@ -31,7 +31,7 @@ export class DmParanaRealConnector extends SupplierConnector {
     return !!(credentials?.username && credentials?.password);
   }
 
-  async searchProduct(parsedQuery) {
+  async searchProduct(parsedQuery, options = {}) {
     const supplierId = await getSupplierIdByName('DM Paraná');
     const credentials = supplierId ? await getSupplierCredentials(supplierId) : null;
     if (!credentials?.username || !credentials?.password) {
@@ -49,7 +49,8 @@ export class DmParanaRealConnector extends SupplierConnector {
         credentials.username,
         credentials.password,
         credentials.clientCode,
-        searchTerm
+        searchTerm,
+        { signal: options.signal }
       );
 
       return results.map(result => ({
@@ -58,6 +59,7 @@ export class DmParanaRealConnector extends SupplierConnector {
         capturedAt: new Date().toISOString()
       }));
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
       logger.error('DM Parana portal search failed: ' + error.message);
       return [createLiveUnavailableResult('DM Paraná', parsedQuery, 'consulta ao portal falhou', {
         retryable: isRetryablePortalError(error)

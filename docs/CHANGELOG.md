@@ -10,6 +10,11 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Uma única interface visível:** `wimi cotacao.bat`, `cotação.bat` e `start-app.bat` iniciam o bootstrap por `wimi cotacao.vbs`, mantendo o CMD oculto enquanto o Electron permanece aberto.
 - **Erros preservados:** toda a saída do inicializador oculto fica em `logs/startup.log`, sem perder diagnóstico de atualização, dependências ou abertura do aplicativo.
 
+### Limite de duração da cotação
+- **Sem espera infinita:** portais web são interrompidos após 5 minutos; Santa Cruz e a cotação completa são encerradas após 10 minutos por padrão.
+- **Cancelamento real:** BrowserWindow, espera de nova tentativa e automação PowerShell recebem sinal de cancelamento, evitando que o trabalho continue escondido depois da resposta.
+- **Resposta parcial segura:** preços ao vivo concluídos permanecem salvos; fontes que excederam o limite ficam em vermelho como `supplier_timeout` ou `completed_with_timeout`, sem consulta a preço histórico.
+
 ### Inteligência de pesquisa
 - **Contexto entre linhas:** `metformina 500` seguido de `met 850` gera `metformina 850mg`; termos curtos sem contexto seguro ficam vermelhos e não chegam aos fornecedores.
 - **Várias dosagens:** `sinvastatina 20 40` é expandida em duas pesquisas independentes, sem confundir 40 com quantidade.
@@ -37,7 +42,7 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Diagnóstico resiliente:** o fechamento de uma janela web oculta não encerra mais a auditoria enquanto um conector local ainda está trabalhando.
 
 ### Validação
-- `npm test`: 79/79 testes aprovados.
+- `npm test`: 80/80 testes aprovados.
 - Build, lint, sintaxe PowerShell, inspeção visual e diagnóstico real ANB executados antes da publicação.
 
 ### Teste real de hidroclorotiazida 25 mg - 2026-07-21

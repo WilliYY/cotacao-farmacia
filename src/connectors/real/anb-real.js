@@ -31,7 +31,7 @@ export class ANBRealConnector extends SupplierConnector {
   /**
    * Performs autonomous browser-based search on ANB Farma portal.
    */
-  async searchProduct(parsedQuery) {
+  async searchProduct(parsedQuery, options = {}) {
     const creds = await getSupplierCredentials(1); // ANB supplierId = 1
     if (!creds || !creds.username || !creds.password) {
       logger.warn('Real credentials not configured for ANB Farma.');
@@ -48,7 +48,8 @@ export class ANBRealConnector extends SupplierConnector {
         creds.username, 
         creds.password, 
         creds.clientCode, 
-        searchTerm
+        searchTerm,
+        { signal: options.signal }
       );
       
       if (parsedQuery.ean && !results.some(result => String(result.ean || '') === String(parsedQuery.ean))) {
@@ -62,6 +63,7 @@ export class ANBRealConnector extends SupplierConnector {
         capturedAt: new Date().toISOString()
       }));
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
       logger.error(`ANB Portal search failed: ${error.message}`);
       return [createLiveUnavailableResult('ANB', parsedQuery, 'consulta ao portal falhou', {
         retryable: isRetryableAnbError(error)

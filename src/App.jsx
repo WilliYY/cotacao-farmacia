@@ -853,7 +853,7 @@ function App() {
       if (!item.results) return;
 
       item.results.forEach(res => {
-        const forceVisible = ['needs_info', 'not_found', 'supplier_error'].includes(item.status);
+        const forceVisible = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(item.status);
         // Filter by supplier
         if (!forceVisible && filterSupplier !== 'All' && res.source !== filterSupplier) return;
 
@@ -1041,7 +1041,7 @@ function App() {
             <div className="spinner"></div>
             <h3>Processando Cotação...</h3>
             <p>
-              Pesquisando e calculando melhor preço por unidade de comprimido/embalagem.
+              Pesquisando e calculando melhor preço por unidade de comprimido/embalagem. A cotação será encerrada automaticamente em até 10 minutos.
             </p>
           </div>
         ) : isSettingsOpen ? (
@@ -1308,6 +1308,16 @@ function App() {
               </div>
             </div>
 
+            {activeQuote.status === 'completed_with_timeout' && (
+              <section className="quote-timeout-notice" role="status" aria-label="Cotação encerrada pelo limite de tempo">
+                <CircleAlert size={19} aria-hidden="true" />
+                <div>
+                  <strong>Cotação concluída com limite de tempo</strong>
+                  <span>O sistema atingiu o limite configurado e parou automaticamente. Os preços já capturados foram preservados e as fontes pendentes estão sinalizadas abaixo.</span>
+                </div>
+              </section>
+            )}
+
             {/* Metrics Dashboard Cards */}
             <div className="metrics-grid">
               <div className="metric-card">
@@ -1342,11 +1352,15 @@ function App() {
                   {activeQuote.items
                     .filter(item => item.correctionMessage || item.status !== 'completed')
                     .map(item => {
-                      const isProblem = ['needs_info', 'not_found', 'supplier_error'].includes(item.status);
+                      const isProblem = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(item.status);
                       const statusText = item.status === 'needs_info'
                         ? item.refinementSuggestion || 'Informe mais detalhes para pesquisar.'
                         : item.status === 'not_found'
                           ? 'Não encontrado nas distribuidoras consultadas. Revise nome, dose ou EAN.'
+                          : item.status === 'supplier_timeout'
+                            ? 'Tempo limite atingido. Nenhuma fonte respondeu a tempo e nenhum preço antigo foi reutilizado.'
+                            : item.status === 'completed_with_timeout'
+                              ? 'Resultado parcial: algumas distribuidoras responderam e outras atingiram o tempo limite.'
                           : item.status === 'supplier_error'
                             ? 'A consulta ao portal falhou. Nenhum preço antigo foi reutilizado.'
                             : item.correctionMessage;
@@ -1679,7 +1693,7 @@ function App() {
                     {filteredRows.map((row, index) => (
                       <tr
                         key={index}
-                        className={['not_found', 'supplier_error'].includes(row.itemStatus) ? 'result-row--problem' : ''}
+                        className={['not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(row.itemStatus) ? 'result-row--problem' : ''}
                         style={{ opacity: row.reviewStatus === 'REJEITADO' ? 0.45 : 1 }}
                       >
                         <td className="searched-query-cell" data-label="Busca">"{row.rawText}"</td>

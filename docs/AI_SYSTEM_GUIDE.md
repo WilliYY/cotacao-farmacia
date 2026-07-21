@@ -185,7 +185,8 @@ Operational notes added after the 2026-07-17 live tests:
 - **Profarma active route:** use `https://pedido.profarma.com.br/` for ProfarmaOn. Old `portal.profarma.com.br` URLs should be normalized there. If login is rejected or the page stays on login, treat Profarma as unavailable instead of returning zero-price products.
 - **Santa Cruz update state:** `SANTACRUZ_STARTUP_WAIT_SECONDS` controls normal startup, while `SANTACRUZ_UPDATE_WAIT_SECONDS` extends the first-run wait when the JavaFX updater is visible. If it still does not expose the live search field, return a blocked unavailable result; never read local product data.
 - **Santa Cruz headless process:** if a matching `javaw` is active without a UI Automation window, the validated launcher is invoked once to recover/activate it. `SANTACRUZ_HEADLESS_GRACE_SECONDS` allows the slow Java/tax-rule startup; after the configured limit, return `running-without-window` as a blocked supplier state.
-- **Scraper timeout:** `SCRAPER_TIMEOUT_MS` controls the BrowserWindow scraper timeout for live diagnostics and long supplier pages.
+- **Bounded quotation:** `CONNECTOR_TIMEOUT_MS` limits each web supplier (default 5 minutes), `SANTACRUZ_TIMEOUT_MS` limits the local GUI route (default 10 minutes), and `QUOTE_TIMEOUT_MS` stops the complete batch after 10 minutes. Pending BrowserWindows and PowerShell automation receive a real abort signal; completed live rows remain saved and timed-out sources return a blocked result.
+- **Scraper timeout:** `SCRAPER_TIMEOUT_MS` remains the inner BrowserWindow safety guard and must not exceed the operational connector budget without a documented reason.
 - **Network retry:** only `retryable` transient portal failures are attempted once more (`CONNECTOR_RETRY_COUNT=1`). Configuration failures and local GUI failures are not retried.
 - **Diagnostic circuit breaker:** `npm run diagnose:live` stops repeating terms for a supplier after an infrastructure failure and records the same blocked reason for the remaining checks.
 - **Live diagnostic shutdown:** `npm run diagnose:live` writes a sanitized JSON report, closes SQLite, and requests Electron shutdown without terminating native handles abruptly.
@@ -246,6 +247,9 @@ ENABLE_REAL_CONNECTORS=true
 SHOW_SCRAPER_WINDOW=false
 ANB_COMMERCIAL_CONDITION=PREMIUM TOP 7 DIAS
 SCRAPER_TIMEOUT_MS=300000
+CONNECTOR_TIMEOUT_MS=300000
+SANTACRUZ_TIMEOUT_MS=600000
+QUOTE_TIMEOUT_MS=600000
 CONNECTOR_RETRY_COUNT=1
 CONNECTOR_RETRY_DELAY_MS=1000
 SANTACRUZ_STARTUP_WAIT_SECONDS=240
