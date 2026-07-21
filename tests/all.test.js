@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import XLSX from 'xlsx';
 
 import { parseSearchQuery, levenshteinDistance, fuzzyMatch } from '../src/lib/parser.js';
@@ -85,6 +86,19 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  await t.test('uses a hidden Windows launcher while preserving startup logs', () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const launcherBatch = fs.readFileSync(path.join(root, 'wimi cotacao.bat'), 'utf8');
+    const hiddenLauncher = fs.readFileSync(path.join(root, 'wimi cotacao.vbs'), 'utf8');
+    const technicalBatch = fs.readFileSync(path.join(root, 'cotacao.bat'), 'utf8');
+
+    assert.match(launcherBatch, /wscript\.exe/i);
+    assert.match(hiddenLauncher, /shell\.Run\(command, 0, waitForExit\)/i);
+    assert.match(hiddenLauncher, /logs["']?\)/i);
+    assert.match(hiddenLauncher, /startup\.log/i);
+    assert.match(technicalBatch, /npm run dev -- %\*/i);
   });
 });
 

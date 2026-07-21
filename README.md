@@ -13,7 +13,7 @@ O sistema roda localmente no computador da farmácia. Certifique-se de possuir o
    ```bash
    copy .env.example .env
    ```
-3. Abra `wimi cotacao.bat`. O inicializador verifica uma versão remota segura, instala ou atualiza as dependências necessárias, garante o runtime do Electron e então abre o aplicativo.
+3. Abra `wimi cotacao.bat`. O inicializador roda oculto, verifica uma versão remota segura, instala ou atualiza as dependências necessárias, garante o runtime do Electron e então abre somente o aplicativo.
 
 ### Configuração em outro computador
 
@@ -130,6 +130,7 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 ### 6. Interface e conferência do preço
 
 - No uso diário, abra **`wimi cotacao.bat`**. Esse atalho chama `cotacao.bat`, que valida o Node.js e executa o bootstrap seguro de atualização e dependências antes de iniciar o Electron.
+- O processo técnico permanece oculto e grava sua saída em `logs/startup.log`; a janela preta do CMD não fica aberta junto do aplicativo.
 - A pesquisa mostra quantos itens serão cotados e quais distribuidoras estão selecionadas antes de iniciar o robô.
 - A prévia explica cada correção ou herança de contexto antes da cotação. Linhas incompletas permanecem vermelhas e visíveis para ajuste.
 - Cada resultado exibe a origem exata do valor utilizado: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final` e DM Paraná `Preço final: R$`.

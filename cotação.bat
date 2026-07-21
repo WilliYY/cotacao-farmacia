@@ -1,2 +1,2 @@
 @echo off
-@call "%~dp0cotacao.bat"
+@call "%~dp0wimi cotacao.bat" %*

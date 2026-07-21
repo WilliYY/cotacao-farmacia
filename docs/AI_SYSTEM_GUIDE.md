@@ -269,7 +269,7 @@ PG_DATABASE=cotador_st
 `ENABLE_REAL_CONNECTORS=false` is a deterministic mock mode and must be treated as business-rule testing only. It returns catalog fixtures instantly and does not represent live supplier pricing. For pharmacy price quotation, use `ENABLE_REAL_CONNECTORS=true` with saved supplier credentials. When `DATABASE_PATH=local`, SQLite is opened from `data/cotador-st.db`; this is the portable database used for local credentials and quote history.
 
 ### Running Commands
-- **Daily Windows launcher:** `wimi cotacao.bat` (delegates to `cotacao.bat` and the same bootstrap below)
+- **Daily Windows launcher:** `wimi cotacao.bat` delegates to `wimi cotacao.vbs`, which starts `cotacao.bat` with window style `0` and redirects output to `logs/startup.log`.
 - **Prepare and Start:** `npm run dev` (Git seguro, dependências e aplicativo)
 - **Preparation Only:** `node scripts/bootstrap.mjs --prepare-only`
 - **Startup Diagnostics:** `node scripts/bootstrap.mjs --diagnose`
@@ -278,7 +278,7 @@ PG_DATABASE=cotador_st
 - **Windows Packaging:** `npm run build` followed by `npm run package`
 
 ### Startup Bootstrap and Updates
-- `cotacao.bat`, `cotação.bat`, `start-app.bat` e `wimi cotacao.bat` convergem para o mesmo bootstrap Node, evitando rotas de inicialização com comportamentos diferentes.
+- `cotação.bat`, `start-app.bat` e `wimi cotacao.bat` convergem para o launcher oculto; `cotacao.bat` permanece como entrada técnica e todos executam o mesmo bootstrap Node.
 - Antes do Electron, o bootstrap consulta o estado Git. Uma atualização só é aceita com worktree limpa, upstream conhecido ou branch idêntica ao padrão de `origin`, `git fetch` bem-sucedido e `git merge --ff-only`.
 - Alterações locais em arquivos rastreados, ausência de referência remota segura, falta de Git ou indisponibilidade de rede não apagam arquivos nem bloqueiam a versão instalada; nesses casos a atualização de código é ignorada. Arquivos locais não rastreados são preservados e qualquer conflito faz o `merge --ff-only` abortar.
 - `npm install --no-audit --no-fund` reconcilia as dependências declaradas antes de iniciar `dev:app`.

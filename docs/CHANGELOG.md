@@ -6,6 +6,10 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.0] - 2026-07-21
 
+### Inicialização sem console
+- **Uma única interface visível:** `wimi cotacao.bat`, `cotação.bat` e `start-app.bat` iniciam o bootstrap por `wimi cotacao.vbs`, mantendo o CMD oculto enquanto o Electron permanece aberto.
+- **Erros preservados:** toda a saída do inicializador oculto fica em `logs/startup.log`, sem perder diagnóstico de atualização, dependências ou abertura do aplicativo.
+
 ### Inteligência de pesquisa
 - **Contexto entre linhas:** `metformina 500` seguido de `met 850` gera `metformina 850mg`; termos curtos sem contexto seguro ficam vermelhos e não chegam aos fornecedores.
 - **Várias dosagens:** `sinvastatina 20 40` é expandida em duas pesquisas independentes, sem confundir 40 com quantidade.
@@ -33,7 +37,7 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Diagnóstico resiliente:** o fechamento de uma janela web oculta não encerra mais a auditoria enquanto um conector local ainda está trabalhando.
 
 ### Validação
-- `npm test`: 78/78 testes aprovados.
+- `npm test`: 79/79 testes aprovados.
 - Build, lint, sintaxe PowerShell, inspeção visual e diagnóstico real ANB executados antes da publicação.
 
 ### Teste real de hidroclorotiazida 25 mg - 2026-07-21

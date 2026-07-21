@@ -18,7 +18,7 @@ cd /d "%~dp0"
 
 echo Verificando versao, dependencias e iniciando o aplicativo...
 echo =======================================================
-call npm run dev
+call npm run dev -- %*
 
 if %errorlevel% neq 0 (
     echo.

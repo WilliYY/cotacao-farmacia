@@ -1,2 +1,3 @@
 @echo off
-@call "%~dp0cotacao.bat"
+wscript.exe "%~dp0wimi cotacao.vbs" %*
+exit /b %errorlevel%
