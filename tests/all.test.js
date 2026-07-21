@@ -14,7 +14,7 @@ import { AUDIT_STATUS, auditQuoteResult } from '../src/lib/quote-auditor.js';
 import { createSantaCruzProcessEnvironment, getSantaCruzFinalPrice, normalizeSantaCruzGuiPayload } from '../src/connectors/real/santacruz-real.js';
 import { normalizeProfarmaUrl } from '../src/connectors/real/profarma-real.js';
 import { normalizeDmParanaUrl } from '../src/connectors/real/dm-parana-real.js';
-import { parseAnbTableRow, parseDmParanaCard, parseProfarmaTableRow } from '../src/lib/electron-scraper.js';
+import { isDirectDmProductMatch, parseAnbTableRow, parseDmParanaCard, parseProfarmaTableRow } from '../src/lib/electron-scraper.js';
 import { isRetryableAnbError, normalizeAnbUrl } from '../src/connectors/real/anb-real.js';
 import { resolveConnectorMode } from '../src/connectors/connector-registry.js';
 import {
@@ -32,6 +32,7 @@ import {
 } from '../src/lib/database.js';
 import { generateExcelBuffer } from '../src/lib/exporter.js';
 import { getUpdateBlockReason, isElectronRuntimeReady } from '../scripts/bootstrap.mjs';
+import { classifyDiagnosticResults } from '../scripts/live-diagnostic.mjs';
 
 process.env.ENABLE_REAL_CONNECTORS = 'false';
 process.env.ENABLE_MOCK_CONNECTORS = 'true';
@@ -366,6 +367,13 @@ test('DM Parana Card Parser', async (t) => {
     assert.strictEqual(normalizeDmParanaUrl('https://portal.dmparana.com.br/home'), 'https://portal.dmparana.com.br/login');
     assert.throws(() => normalizeDmParanaUrl('https://dmparana.example/login'), /dominio permitido/);
   });
+
+  await t.test('rejects an unfiltered catalog and single-ingredient combination matches', () => {
+    assert.strictEqual(isDirectDmProductMatch('hidroclorotiazida', 'Gen Hidroclorotiazida 25mg 30cpr'), true);
+    assert.strictEqual(isDirectDmProductMatch('hidroclorotiazida', 'Amilorida+hidroclorotiazida 5/50mg'), false);
+    assert.strictEqual(isDirectDmProductMatch('hidroclorotiazida', 'Gen Diclor Hidroxizina 25mg'), false);
+    assert.strictEqual(isDirectDmProductMatch('olmesartana hidroclorotiazida', 'Olmesartana+Hidroclorotiazida 20/12,5mg'), true);
+  });
 });
 
 test('Live Quote Source Safety', async (t) => {
@@ -452,6 +460,27 @@ test('Live Quote Source Safety', async (t) => {
     assert.strictEqual(callCount, 1);
     assert.strictEqual(results[0].liveFailureReason, 'sem internet');
   });
+});
+
+test('Live diagnostic distinguishes route failure from rejected commercial options', () => {
+  const noSt = classifyDiagnosticResults([
+    {
+      source: 'Profarma',
+      price: 1.97,
+      isValidOption: false,
+      ignoreReason: 'Sem ST',
+      auditSummary: 'Produto sem ST'
+    }
+  ]);
+  assert.strictEqual(noSt.status, 'no_valid_option');
+  assert.match(noSt.failureReason, /Sem ST/);
+  assert.strictEqual(noSt.infrastructureFailure, false);
+
+  const routeFailure = classifyDiagnosticResults([
+    createLiveUnavailableResult('Santa Cruz', parseSearchQuery('hidroclorotiazida 25mg'), 'processo sem janela')
+  ]);
+  assert.strictEqual(routeFailure.status, 'blocked');
+  assert.strictEqual(routeFailure.infrastructureFailure, true);
 });
 
 test('Recommendation Engine - Cost Efficiency Unit Price Sorting', async (t) => {

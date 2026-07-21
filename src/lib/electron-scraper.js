@@ -10,6 +10,21 @@ function parsePositiveCurrency(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+export function isDirectDmProductMatch(searchTerm, productName) {
+  const normalize = value => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9+]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const query = normalize(searchTerm);
+  const product = normalize(productName);
+  const queryWords = query.split(/\s+/).filter(word => word.length >= 3);
+  if (queryWords.length === 0 || !queryWords.every(word => product.includes(word))) return false;
+  return queryWords.length > 1 || !product.includes('+');
+}
+
 export function parseAnbTableRow(headers, columns) {
   const normalize = value => String(value || '')
     .normalize('NFD')
@@ -276,6 +291,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
     let typedSearch = false;
     let lastPromoClickTime = 0;
     let promoOpenAttempts = 0;
+    let dmGridRetries = 0;
     let stateMachineRunning = false;
 
     const runStateMachine = async () => {
@@ -667,6 +683,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                                         document.querySelector('input[placeholder*="buscando"]') ||
                                         document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
                       if (searchInp) {
+                        searchInp.focus();
                         const inputRect = searchInp.getBoundingClientRect();
                         const nearbyButton = Array.from(document.querySelectorAll('button')).find(button => {
                           const rect = button.getBoundingClientRect();
@@ -684,6 +701,10 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       }
                     })()
                   `).catch(() => {});
+                  if (supplierId === 4) {
+                    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ENTER' });
+                    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ENTER' });
+                  }
                   return;
                 }
               }
@@ -710,6 +731,72 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 if (!gridState.explicitlyEmpty && gridState.signature === preSearchSignature) return;
               }
 
+              if (supplierId === 4) {
+                const dmGridState = await win.webContents.executeJavaScript(`
+                  (() => {
+                    const isDirectMatch = ${isDirectDmProductMatch.toString()};
+                    const prices = Array.from(document.querySelectorAll('span'))
+                      .filter(el => /^pre[cç]o\\s*final:\\s*R\\$/i.test((el.textContent || '').trim()));
+                    const names = prices.map(priceNode => {
+                      let card = priceNode;
+                      while (card && card !== document.body) {
+                        const text = card.innerText || '';
+                        if (/EAN:\\s*\\d{13}/i.test(text) && card.querySelector('button')) break;
+                        card = card.parentElement;
+                      }
+                      const image = card && card !== document.body
+                        ? Array.from(card.querySelectorAll('img[alt]')).find(img => {
+                            const alt = (img.getAttribute('alt') || '').trim();
+                            return alt && !/^brasil$/i.test(alt) && !/^logo/i.test(alt);
+                          })
+                        : null;
+                      return image?.getAttribute('alt')?.trim() || '';
+                    }).filter(Boolean);
+                    const body = (document.body?.innerText || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+                    const input = document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
+                    return {
+                      inputValue: input?.value || '',
+                      hasDirectMatch: names.some(name => isDirectMatch(${JSON.stringify(searchTerm)}, name)),
+                      loading: body.includes('carregando') || body.includes('aguarde'),
+                      explicitlyEmpty: body.includes('nenhum produto') || body.includes('nao encontramos') || body.includes('sem produtos encontrados')
+                    };
+                  })()
+                `).catch(() => null);
+                const elapsed = Date.now() - submittedSearchAt;
+                if (!dmGridState || elapsed < 2500 || dmGridState.loading) return;
+                const inputMatches = String(dmGridState.inputValue).trim().toLowerCase() === String(searchTerm).trim().toLowerCase();
+                if (!dmGridState.explicitlyEmpty && (!inputMatches || !dmGridState.hasDirectMatch)) {
+                  if (elapsed < 7000) return;
+                  if (dmGridRetries < 1) {
+                    dmGridRetries++;
+                    logger.warn('DM result grid did not match the requested product; clearing and submitting once more.');
+                    await win.webContents.executeJavaScript(`
+                      (() => {
+                        const input = document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
+                        if (!input) return;
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (setter) setter.call(input, '');
+                        else input.value = '';
+                        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                      })()
+                    `).catch(() => {});
+                    typedSearch = false;
+                    submittedSearch = false;
+                    submittedSearchAt = 0;
+                    return;
+                  }
+
+                  hasResolved = true;
+                  clearInterval(pollInterval);
+                  saveDebugArtifacts('dm_stale_product_grid').finally(() => {
+                    cleanup();
+                    reject(new Error('DM result grid did not update for the requested product.'));
+                  });
+                  return;
+                }
+              }
+
               const results = await win.webContents.executeJavaScript(`
                 (async () => {
                   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -719,7 +806,8 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                    const parsePositiveCurrency = ${parsePositiveCurrency.toString()};
                    const parseAnbRow = ${parseAnbTableRow.toString()};
                    const parseProfarmaRow = ${parseProfarmaTableRow.toString()};
-                  const parseDmParanaCardFn = ${parseDmParanaCard.toString()};
+                   const parseDmParanaCardFn = ${parseDmParanaCard.toString()};
+                   const isDirectDmProductMatchFn = ${isDirectDmProductMatch.toString()};
 
                   const nextSelectors = [
                     'button.mat-paginator-navigation-next',
@@ -934,7 +1022,11 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                     }
                   }
 
-                  if ((supplierId === 2 || supplierId === 4) && results.length === 0) {
+                  const finalResults = supplierId === 4
+                    ? results.filter(result => isDirectDmProductMatchFn(${JSON.stringify(searchTerm)}, result.supplierProductName))
+                    : results;
+
+                  if ((supplierId === 2 || supplierId === 4) && finalResults.length === 0) {
                     const bodyText = (document.body?.innerText || '')
                       .normalize('NFD')
                       .replace(/[\u0300-\u036f]/g, '')
@@ -945,7 +1037,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                     return explicitlyEmpty ? [] : null;
                   }
 
-                  return results;
+                  return finalResults;
                 })()
               `);
 

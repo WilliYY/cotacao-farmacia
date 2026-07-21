@@ -191,6 +191,7 @@ Operational notes added after the 2026-07-17 live tests:
 - **Live diagnostic shutdown:** `npm run diagnose:live` writes a sanitized JSON report, closes SQLite, and requests Electron shutdown without terminating native handles abruptly.
 - **Diagnostic lifecycle:** closing an individual hidden scraper window does not trigger Electron shutdown while `--live-diagnostic` is still running; this allows the Santa Cruz child process and later suppliers to finish.
 - **DM search contract:** use only the normalized medication name in the portal input. Dosage, presentation, package quantity, EAN, ST and combination checks remain in the auditor; sending the full parsed phrase can produce a false empty search on this portal.
+- **DM stale-catalog gate:** the live grid must contain a direct non-combination match for a single-ingredient query. If the portal keeps the general catalog, the scraper clears and submits once more, then fails closed instead of accepting unrelated cards.
 - **DM pagination and stock:** traverse `Go to next page` while enabled, deduplicate by EAN, require an enabled `Comprar` button, and stop after ten pages as a defensive limit.
 - **DM final-price proof:** results without the exact `Preço final: R$` label are discarded instead of falling back to the bold raw amount.
 

@@ -57,6 +57,42 @@ function sanitizeResult(result) {
   };
 }
 
+export function classifyDiagnosticResults(results = []) {
+  const rows = Array.isArray(results) ? results : [];
+  const validRows = rows.filter(result => result.isValidOption && Number(result.price) > 0);
+  const infrastructureFailure = rows.length > 0 && rows.every(result => result.liveFailureReason);
+
+  if (infrastructureFailure) {
+    return {
+      status: 'blocked',
+      failureReason: rows[0].liveFailureReason,
+      infrastructureFailure: true
+    };
+  }
+  if (validRows.length > 0) {
+    return { status: 'ok', failureReason: '', infrastructureFailure: false };
+  }
+
+  const supplierRows = rows.filter(result => result.source && result.source !== 'N/A');
+  if (supplierRows.length === 0) {
+    return {
+      status: 'not_found',
+      failureReason: 'Nenhum produto retornado pelo fornecedor.',
+      infrastructureFailure: false
+    };
+  }
+
+  const reasons = [...new Set(supplierRows
+    .map(result => result.ignoreReason || result.auditSummary || result.recommendationStatus)
+    .filter(Boolean))]
+    .slice(0, 3);
+  return {
+    status: 'no_valid_option',
+    failureReason: `Fornecedor respondeu, mas nenhuma opcao ficou elegivel${reasons.length ? `: ${reasons.join('; ')}` : '.'}`,
+    infrastructureFailure: false
+  };
+}
+
 function writeReport(args, report) {
   const requestedPath = getFlag(args, 'output');
   const outputPath = path.resolve(requestedPath || path.join('logs', 'live-diagnostic-latest.json'));
@@ -121,12 +157,11 @@ export async function runLiveDiagnostic(args = []) {
 
       try {
         const quote = await processQuoteQuery(term, [supplier], { parsedQuery: plan.parsed });
+        const outcome = classifyDiagnosticResults(quote.results);
         const results = quote.results.map(sanitizeResult);
         const validResults = results.filter(result => result.isValidOption && Number(result.price) > 0);
-        const infrastructureFailure = results.length > 0 && results.every(result => result.liveFailureReason);
-        const failureReason = infrastructureFailure ? results[0].liveFailureReason : '';
-        if (infrastructureFailure) {
-          blockedSuppliers.set(supplier, failureReason);
+        if (outcome.infrastructureFailure) {
+          blockedSuppliers.set(supplier, outcome.failureReason);
           exitCode = 1;
         }
         report.checks.push({
@@ -134,12 +169,12 @@ export async function runLiveDiagnostic(args = []) {
           originalTerm: plan.originalText,
           correctionMessage: plan.correctionMessage || undefined,
           supplier,
-          status: validResults.length > 0 ? 'ok' : 'blocked',
+          status: outcome.status,
           durationMs: Date.now() - startedAt,
           parsed: quote.parsed,
           resultCount: results.length,
           validResultCount: validResults.length,
-          failureReason: failureReason || undefined,
+          failureReason: outcome.failureReason || undefined,
           lowestValidPrice: validResults.length > 0
             ? Math.min(...validResults.map(result => Number(result.price)))
             : null,

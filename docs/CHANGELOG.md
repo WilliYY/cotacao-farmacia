@@ -33,8 +33,16 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Diagnóstico resiliente:** o fechamento de uma janela web oculta não encerra mais a auditoria enquanto um conector local ainda está trabalhando.
 
 ### Validação
-- `npm test`: 76/76 testes aprovados.
+- `npm test`: 78/78 testes aprovados.
 - Build, lint, sintaxe PowerShell, inspeção visual e diagnóstico real ANB executados antes da publicação.
+
+### Teste real de hidroclorotiazida 25 mg - 2026-07-21
+- **DM Paraná:** `R$ 1,50`, Teuto, com estoque e ST, capturado exclusivamente de `Preço final: R$`.
+- **ANB:** `R$ 1,55`, Medquímica, com estoque e ST, capturado exclusivamente de `Unit c/ST`. A linha de `R$ 1,48` foi rejeitada por falta de estoque.
+- **Profarma:** encontrou EMS `R$ 1,97`, Germed `R$ 1,98` e Medley `R$ 2,15` em `Preço Final`, mas todas vieram sem ST e foram corretamente excluídas.
+- **Santa Cruz:** o executável foi localizado, porém o processo Java permaneceu sem janela pesquisável; nenhum `Preço NF` foi aceito.
+- **Diagnóstico mais claro:** respostas comerciais sem opção elegível agora usam `no_valid_option`; `blocked` fica reservado para falha de rota/infraestrutura.
+- **DM contra catálogo antigo:** uma repetição expôs 200 cartões do catálogo geral após o portal ignorar o filtro. O robô agora exige correspondência direta, usa Enter real, limpa e tenta uma vez; a validação final retornou somente Teuto `R$ 1,50` e EMS `R$ 1,73`.
 
 ## [1.6.0] - 2026-07-17
 
