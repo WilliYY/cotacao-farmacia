@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld('api', {
   onGitUpdateAvailable: (callback) => {
     ipcRenderer.on('git-update-available', (event, data) => callback(data));
   },
+  onQuoteProgress: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('quote-progress', listener);
+    return () => ipcRenderer.removeListener('quote-progress', listener);
+  },
   getPopularSearches: () => ipcRenderer.invoke('get-popular-searches'),
   saveSupplierCredentials: (supplierId, url, username, password, clientCode) => 
     ipcRenderer.invoke('save-supplier-credentials', supplierId, url, username, password, clientCode),

@@ -35,6 +35,7 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Falhas controladas:** rede/timeout recebem uma nova tentativa; erro determinístico de tela não entra em repetição e nenhum fornecedor cai para preço histórico.
 - **Menos interferência:** portais web ficam ocultos por padrão. A Santa Cruz tenta preencher por UI Automation, reutiliza a tela de pesquisa e restaura a janela anteriormente ativa.
 - **Conferência rápida:** histórico completo recolhido por padrão, busca por medicamento e painel de interpretação com correções e itens não encontrados em vermelho.
+- **Progresso visível:** a espera agora exibe medicamento atual, percentual, cronômetro e o estado real de ANB, Profarma, Santa Cruz e DM Paraná. Nova tentativa, fallback de EAN, resultado vazio, falha e tempo limite aparecem sem interromper as demais fontes.
 
 ### Teste real ANB de 2026-07-21
 - `losartana 50` `R$ 2,80`; `hidrocloro 25` `R$ 1,55`; `metformina 500` `R$ 3,92`; `met 850` `R$ 5,21`; `sinvastatina 20` `R$ 3,52`, todos exatamente iguais à conferência informada.
@@ -50,7 +51,7 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Diagnóstico resiliente:** o fechamento de uma janela web oculta não encerra mais a auditoria enquanto um conector local ainda está trabalhando.
 
 ### Validação
-- `npm test`: 83/83 testes aprovados.
+- `npm test`: 86/86 testes aprovados, incluindo redução do progresso entre itens e eventos reais de início/conclusão dos conectores.
 - Build, lint, sintaxe PowerShell, inspeção visual e diagnóstico real ANB executados antes da publicação.
 
 ### Teste real de hidroclorotiazida 25 mg - 2026-07-21

@@ -213,6 +213,7 @@ The React frontend is an operational workspace with a dark navigation rail and a
 - **Input interpretation:** a preview shows inherited context, spelling corrections and expanded strengths. `NEEDS_INFO` rows stay red and remain visible even under the normal ST filters.
 - **History:** the full local history is collapsed by default and searchable through medication terms aggregated from `QuoteItem`.
 - **Result traceability:** the recommendation cards and detail table show the exact accepted field for each supplier: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final`, and DM Paraná `Preço final: R$`.
+- **Live progress contract:** `main.js` emits sanitized `quote-progress` events for quote, item and supplier phases; `preload.js` exposes a removable listener; `quote-progress.js` reduces those events into deterministic UI state and percentage. Supplier rows must reflect real connector completion, failure, retry, empty response, block or timeout rather than estimated timers.
 - **Responsive table:** below 900 px, every result row becomes a labeled card while preserving EAN, package, distributor, final price source, ST, stock, audit, recommendation, and review action.
 - **Status semantics:** green is reserved for valid ST/recommendations, red for blocked without ST, amber for review, and blue for informational/secondary states.
 - **Icons:** interface commands use `lucide-react`; buttons retain accessible text or labels and visible keyboard focus.

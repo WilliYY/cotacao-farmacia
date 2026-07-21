@@ -913,6 +913,228 @@ textarea.search-textarea {
   font-size: 0.84rem !important;
 }
 
+.quote-progress-panel {
+  width: min(720px, 100%);
+  padding: 1.35rem;
+  border: 1px solid #d7e0e5;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(29, 44, 54, 0.14);
+  color: var(--text);
+  text-align: left;
+}
+
+.quote-progress-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.9rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.quote-progress-heading {
+  min-width: 0;
+}
+
+.quote-progress-heading h3 {
+  margin: 0.12rem 0 0.22rem;
+  font-size: 1.08rem !important;
+}
+
+.quote-progress-heading p {
+  max-width: none;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.quote-progress-eyebrow {
+  color: #087b59;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.quote-progress-time {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  column-gap: 0.35rem;
+  min-width: 90px;
+  color: #30414c;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  text-align: right;
+}
+
+.quote-progress-time small {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 0.67rem;
+  font-weight: 600;
+}
+
+.quote-progress-current {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.quote-progress-current-label {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.quote-progress-current-label span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.quote-progress-current-label strong {
+  overflow-wrap: anywhere;
+  color: #24333d;
+  font-size: 0.92rem;
+}
+
+.quote-progress-percent {
+  flex: 0 0 auto;
+  color: #087b59;
+  font-size: 0.88rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.quote-progress-track {
+  width: 100%;
+  height: 7px;
+  margin: 0.72rem 0 1rem;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #dfe8ec;
+}
+
+.quote-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 240ms ease;
+}
+
+.supplier-progress-list {
+  border-top: 1px solid var(--border);
+}
+
+.supplier-progress-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 62px;
+  padding: 0.68rem 0.15rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.supplier-progress-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: #edf2f4;
+  color: #71818b;
+}
+
+.supplier-progress-row.is-searching .supplier-progress-icon,
+.supplier-progress-row.is-completed .supplier-progress-icon {
+  background: #e3f4ed;
+  color: #087b59;
+}
+
+.supplier-progress-row.is-empty .supplier-progress-icon,
+.supplier-progress-row.is-timeout .supplier-progress-icon {
+  background: #fff4d8;
+  color: #9b6500;
+}
+
+.supplier-progress-row.is-error .supplier-progress-icon {
+  background: #fde9e7;
+  color: #b33a31;
+}
+
+.supplier-progress-row.is-blocked .supplier-progress-icon {
+  background: #eceff1;
+  color: #66757e;
+}
+
+.supplier-progress-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #afd8ca;
+  border-top-color: #087b59;
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+
+.supplier-progress-copy {
+  min-width: 0;
+}
+
+.supplier-progress-copy > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.supplier-progress-copy strong {
+  color: #24333d;
+  font-size: 0.84rem;
+}
+
+.supplier-progress-copy span {
+  flex: 0 0 auto;
+  color: #657680;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.supplier-progress-row.is-searching .supplier-progress-copy span,
+.supplier-progress-row.is-completed .supplier-progress-copy span {
+  color: #087b59;
+}
+
+.supplier-progress-row.is-empty .supplier-progress-copy span,
+.supplier-progress-row.is-timeout .supplier-progress-copy span {
+  color: #9b6500;
+}
+
+.supplier-progress-row.is-error .supplier-progress-copy span {
+  color: #b33a31;
+}
+
+.supplier-progress-copy p {
+  max-width: none;
+  margin: 0.16rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted) !important;
+  font-size: 0.76rem !important;
+  line-height: 1.35;
+}
+
+.quote-progress-footer {
+  padding-top: 0.8rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
 .spinner {
   width: 38px;
   height: 38px;
@@ -1530,6 +1752,35 @@ textarea.search-textarea {
 
   .loading-overlay {
     inset: 0;
+    padding: 1rem;
+  }
+
+  .quote-progress-panel {
+    max-height: calc(100vh - 2rem);
+    padding: 1rem;
+    overflow-y: auto;
+  }
+
+  .quote-progress-header {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .quote-progress-time {
+    grid-column: 1 / -1;
+    grid-template-columns: auto auto auto;
+    justify-content: start;
+    min-width: 0;
+    text-align: left;
+  }
+
+  .quote-progress-time small {
+    grid-column: auto;
+  }
+
+  .supplier-progress-copy > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.1rem;
   }
 
   .search-card {

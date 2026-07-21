@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   CircleAlert,
   CircleX,
+  Clock3,
   Eye,
   EyeOff,
   FileSpreadsheet,
@@ -23,6 +24,7 @@ import {
   TrendingDown
 } from 'lucide-react';
 import { analyzeQuoteBatch, INPUT_STATUS } from './lib/search-intelligence.js';
+import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from './lib/quote-progress.js';
 
 // Browser mocks are available only through an explicit development opt-in.
 const mockApi = {
@@ -435,6 +437,7 @@ const mockApi = {
     return Object.keys(creds).map(k => ({ supplierId: parseInt(k, 10), ...creds[k] }));
   },
   getUpdateStatus: async () => ({ status: 'up-to-date', automaticUpdateEnabled: true }),
+  onQuoteProgress: null,
   exportExcel: async (quoteId) => {
     alert(`Planilha exportada com sucesso! (Simulado fora do Electron)`);
     return { success: true, path: 'c:/mock_path/cotacao_wimifarma.xlsx' };
@@ -458,11 +461,108 @@ const unavailableApi = {
   getAllSupplierCredentials: async () => [],
   getUpdateStatus: async () => ({ status: 'unknown', automaticUpdateEnabled: false }),
   onGitUpdateAvailable: null,
+  onQuoteProgress: null,
   ping: integrationUnavailable
 };
 
 const allowUiMocks = import.meta.env.VITE_ENABLE_UI_MOCKS === 'true';
 const api = window.api || (allowUiMocks ? mockApi : unavailableApi);
+
+const PROGRESS_STATUS_LABELS = {
+  waiting: 'Aguardando',
+  searching: 'Pesquisando',
+  completed: 'Concluída',
+  empty: 'Sem resultado',
+  error: 'Falha',
+  timeout: 'Tempo limite',
+  blocked: 'Ignorada'
+};
+
+function formatElapsedTime(totalSeconds) {
+  const seconds = Math.max(0, Number(totalSeconds) || 0);
+  const minutesPart = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const secondsPart = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${minutesPart}:${secondsPart}`;
+}
+
+function SupplierProgressIcon({ status }) {
+  if (status === 'searching') return <span className="supplier-progress-spinner" aria-hidden="true" />;
+  if (status === 'completed') return <CheckCircle2 size={18} aria-hidden="true" />;
+  if (status === 'error') return <CircleX size={18} aria-hidden="true" />;
+  if (status === 'empty' || status === 'timeout') return <CircleAlert size={18} aria-hidden="true" />;
+  if (status === 'blocked') return <ShieldCheck size={18} aria-hidden="true" />;
+  return <PackageSearch size={18} aria-hidden="true" />;
+}
+
+function QuoteProgressOverlay({ progress, elapsedSeconds }) {
+  const percent = getQuoteProgressPercent(progress);
+  const supplierOrder = progress?.supplierOrder || [];
+  const currentItem = progress?.currentItem || 0;
+  const totalItems = progress?.totalItems || 0;
+  const timeoutSeconds = (progress?.timeoutMinutes || 10) * 60;
+
+  return (
+    <div className="loading-overlay" role="status" aria-live="polite">
+      <section className="quote-progress-panel" aria-label="Andamento da cotação">
+        <header className="quote-progress-header">
+          <div className="spinner" aria-hidden="true" />
+          <div className="quote-progress-heading">
+            <span className="quote-progress-eyebrow">Consulta ao vivo</span>
+            <h3>Processando cotação</h3>
+            <p>{progress?.message || 'Preparando a pesquisa.'}</p>
+          </div>
+          <div className="quote-progress-time" title="Tempo decorrido e limite máximo da cotação">
+            <Clock3 size={16} aria-hidden="true" />
+            <span>{formatElapsedTime(elapsedSeconds)}</span>
+            <small>limite {formatElapsedTime(timeoutSeconds)}</small>
+          </div>
+        </header>
+
+        <div className="quote-progress-current">
+          <div className="quote-progress-current-label">
+            <span>{currentItem > 0 ? `Item ${currentItem} de ${totalItems}` : `${totalItems} ${totalItems === 1 ? 'item' : 'itens'}`}</span>
+            <strong>{progress?.currentQuery || 'Preparando a primeira busca...'}</strong>
+          </div>
+          <span className="quote-progress-percent">{percent}%</span>
+        </div>
+
+        <div
+          className="quote-progress-track"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={percent}
+        >
+          <span style={{ width: `${percent}%` }} />
+        </div>
+
+        <div className="supplier-progress-list">
+          {supplierOrder.map(supplier => {
+            const supplierProgress = progress.suppliers[supplier] || { status: 'waiting', message: 'Aguardando.' };
+            return (
+              <div className={`supplier-progress-row is-${supplierProgress.status}`} key={supplier}>
+                <div className="supplier-progress-icon">
+                  <SupplierProgressIcon status={supplierProgress.status} />
+                </div>
+                <div className="supplier-progress-copy">
+                  <div>
+                    <strong>{supplier}</strong>
+                    <span>{PROGRESS_STATUS_LABELS[supplierProgress.status] || 'Aguardando'}</span>
+                  </div>
+                  <p>{supplierProgress.message}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <footer className="quote-progress-footer">
+          Cada distribuidora tem seu próprio limite. Se uma não responder, a cotação segue com as demais.
+        </footer>
+      </section>
+    </div>
+  );
+}
 
 function App() {
   const [history, setHistory] = useState([]);
@@ -470,6 +570,9 @@ function App() {
   const [activeQuote, setActiveQuote] = useState(null);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
+  const [quoteProgress, setQuoteProgress] = useState(null);
+  const [quoteStartedAt, setQuoteStartedAt] = useState(null);
+  const [quoteElapsedSeconds, setQuoteElapsedSeconds] = useState(0);
   const [selectedQuoteId, setSelectedQuoteId] = useState(null);
   
   // Git updates state
@@ -534,6 +637,23 @@ function App() {
       });
     }
   }, []);
+
+  useEffect(() => {
+    if (!api.onQuoteProgress) return undefined;
+    return api.onQuoteProgress((event) => {
+      setQuoteProgress(previous => reduceQuoteProgress(previous, event));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!loading || !quoteStartedAt) return undefined;
+    const updateElapsedTime = () => {
+      setQuoteElapsedSeconds(Math.floor((Date.now() - quoteStartedAt) / 1000));
+    };
+    updateElapsedTime();
+    const timerId = setInterval(updateElapsedTime, 1000);
+    return () => clearInterval(timerId);
+  }, [loading, quoteStartedAt]);
 
   // Reload history and popularity metrics on quote updates
   useEffect(() => {
@@ -691,9 +811,14 @@ function App() {
     const lines = inputText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     if (lines.length === 0) return;
 
+    const activeList = Object.keys(selectedSuppliers).filter(k => selectedSuppliers[k]);
+    const plannedSearches = analyzeQuoteBatch(lines);
+    const startedAt = Date.now();
+    setQuoteProgress(createInitialQuoteProgress(plannedSearches.length, activeList));
+    setQuoteStartedAt(startedAt);
+    setQuoteElapsedSeconds(0);
     setLoading(true);
     try {
-      const activeList = Object.keys(selectedSuppliers).filter(k => selectedSuppliers[k]);
       const resultQuote = await api.runQuote(lines, activeList);
       setActiveQuote(resultQuote);
       setSelectedQuoteId(resultQuote.id);
@@ -704,6 +829,9 @@ function App() {
       alert('Erro ao realizar a cotação. Verifique logs.');
     } finally {
       setLoading(false);
+      setQuoteProgress(null);
+      setQuoteStartedAt(null);
+      setQuoteElapsedSeconds(0);
     }
   };
 
@@ -1084,13 +1212,15 @@ function App() {
       {/* Main Panel */}
       <main className="main-content">
         {loading ? (
-          <div className="loading-overlay">
-            <div className="spinner"></div>
-            <h3>Processando Cotação...</h3>
-            <p>
-              Pesquisando e calculando melhor preço por unidade de comprimido/embalagem. A cotação será encerrada automaticamente em até 10 minutos.
-            </p>
-          </div>
+          quoteProgress ? (
+            <QuoteProgressOverlay progress={quoteProgress} elapsedSeconds={quoteElapsedSeconds} />
+          ) : (
+            <div className="loading-overlay" role="status" aria-live="polite">
+              <div className="spinner" aria-hidden="true" />
+              <h3>Processando...</h3>
+              <p>Aguarde enquanto a operação é concluída.</p>
+            </div>
+          )
         ) : isSettingsOpen ? (
           /* Distributor Settings Panel */
           <div className="search-card settings-card animate-fade-in">

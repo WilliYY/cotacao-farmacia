@@ -149,6 +149,11 @@ function createWindow() {
   });
 }
 
+function sendQuoteProgress(event, payload) {
+  if (!event?.sender || event.sender.isDestroyed()) return;
+  event.sender.send('quote-progress', payload);
+}
+
 app.whenReady().then(async () => {
   const userDataPath = app.getPath('userData');
   console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
@@ -186,12 +191,14 @@ app.on('before-quit', () => {
 
 // IPC Handler: Run Quote Process
 ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
+  let quoteId = null;
   try {
     const learnedAliases = await getLearnedCorrections();
     const searchPlans = analyzeQuoteBatch(rawTextList, { learnedAliases });
     logger.info(`Starting new Quote process for ${rawTextList.length} input lines and ${searchPlans.length} planned searches`);
-    const quoteId = await createQuote('processing');
+    quoteId = await createQuote('processing');
     const blockedSupplierReasons = {};
+    const supplierList = Array.isArray(activeSuppliers) ? activeSuppliers : ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'];
     const quoteTimeoutMs = getQuoteTimeoutMs();
     const quoteTimeoutMinutes = Math.max(1, Math.ceil(quoteTimeoutMs / 60_000));
     const quoteController = new AbortController();
@@ -199,14 +206,47 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     const quoteTimeoutId = setTimeout(() => {
       quoteReachedTimeout = true;
       logger.warn(`Quote #${quoteId} reached the ${quoteTimeoutMinutes}-minute total limit; stopping pending suppliers.`);
+      sendQuoteProgress(event, {
+        phase: 'quote_timeout',
+        quoteId,
+        totalItems: searchPlans.length,
+        message: `Limite total de ${quoteTimeoutMinutes} minutos atingido; encerrando as consultas pendentes.`
+      });
       quoteController.abort();
     }, quoteTimeoutMs);
 
+    sendQuoteProgress(event, {
+      phase: 'quote_started',
+      quoteId,
+      totalItems: searchPlans.length,
+      timeoutMinutes: quoteTimeoutMinutes,
+      suppliers: supplierList,
+      message: 'Cotação iniciada. Preparando as consultas ao vivo.'
+    });
+
     try {
-      for (const plan of searchPlans) {
+      for (const [planIndex, plan] of searchPlans.entries()) {
+        const progressContext = {
+          quoteId,
+          currentItem: planIndex + 1,
+          totalItems: searchPlans.length,
+          currentQuery: plan.originalText,
+          suppliers: supplierList
+        };
+        sendQuoteProgress(event, {
+          phase: 'item_started',
+          ...progressContext,
+          message: `Analisando “${plan.originalText}”.`
+        });
+
         if (plan.status === INPUT_STATUS.NEEDS_INFO) {
           await createQuoteItem(quoteId, plan.originalText, plan.parsed, 'needs_info', plan);
           await saveSearch(plan.originalText, plan.parsed);
+          sendQuoteProgress(event, {
+            phase: 'item_completed',
+            ...progressContext,
+            message: 'Item separado para revisão porque precisa de mais informações.'
+          });
           continue;
         }
 
@@ -214,7 +254,11 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
           blockedSupplierReasons,
           parsedQuery: plan.parsed,
           signal: quoteController.signal,
-          totalTimeoutReason: `tempo limite total de ${quoteTimeoutMinutes} minutos excedido`
+          totalTimeoutReason: `tempo limite total de ${quoteTimeoutMinutes} minutos excedido`,
+          onProgress: progress => sendQuoteProgress(event, {
+            ...progress,
+            ...progressContext
+          })
         });
         for (const result of quote.results) {
           if (result.source && result.liveFailureReason) {
@@ -247,6 +291,13 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
           const confidence = plan.correctionType === 'BATCH_CONTEXT' ? 0.75 : 1;
           await recordQueryCorrection(plan.alias, plan.canonicalName, plan.correctionType, confidence);
         }
+
+        sendQuoteProgress(event, {
+          phase: 'item_completed',
+          ...progressContext,
+          resultCount: quote.results.length,
+          message: `Resultados de “${plan.originalText}” conferidos e salvos.`
+        });
       }
     } finally {
       clearTimeout(quoteTimeoutId);
@@ -255,9 +306,23 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     const finalStatus = quoteReachedTimeout ? 'completed_with_timeout' : 'completed';
     await updateQuoteStatus(quoteId, finalStatus);
     logger.info(`Quote process completed for ID: ${quoteId} with status ${finalStatus}`);
+    sendQuoteProgress(event, {
+      phase: 'quote_completed',
+      quoteId,
+      currentItem: searchPlans.length,
+      totalItems: searchPlans.length,
+      message: quoteReachedTimeout
+        ? 'Cotação concluída com uma ou mais distribuidoras encerradas por tempo limite.'
+        : 'Cotação concluída. Abrindo os resultados conferidos.'
+    });
     return await getQuoteDetails(quoteId);
   } catch (error) {
     logger.error(`Quote execution failed: ${error.message}`);
+    sendQuoteProgress(event, {
+      phase: 'quote_error',
+      quoteId,
+      message: `A cotação foi interrompida: ${error.message}`
+    });
     throw error;
   }
 });

@@ -55,6 +55,65 @@ export function isTimeoutFailure(result) {
     /tempo limite|timed out|timeout/i.test(String(result?.liveFailureReason || ''));
 }
 
+function notifyProgress(callback, payload) {
+  if (typeof callback !== 'function') return;
+  try {
+    callback(payload);
+  } catch (error) {
+    logger.warn(`Quote progress callback failed: ${error.message}`);
+  }
+}
+
+function getSupplierSearchMessage(supplierName) {
+  const messages = {
+    ANB: 'Abrindo a ANB e procurando o valor Unit c/ST.',
+    Profarma: 'Abrindo Novo Pedido na Profarma e procurando o Preço Final.',
+    'Santa Cruz': 'Localizando a Santa Cruz e procurando o Preço NF.',
+    'DM Paraná': 'Abrindo a DM Paraná e procurando o Preço final: R$.'
+  };
+  return messages[supplierName] || `Consultando ${supplierName}.`;
+}
+
+function getSupplierCompletionProgress(supplierName, results) {
+  const resultList = Array.isArray(results) ? results : [];
+  const timedOut = resultList.some(isTimeoutFailure);
+  if (timedOut) {
+    return {
+      phase: 'supplier_timeout',
+      supplier: supplierName,
+      message: 'Tempo limite atingido; seguindo com as demais distribuidoras.',
+      resultCount: 0
+    };
+  }
+
+  const allFailed = resultList.length > 0 && resultList.every(result => Boolean(result?.liveFailureReason));
+  if (allFailed) {
+    const reason = resultList.find(result => result?.liveFailureReason)?.liveFailureReason;
+    return {
+      phase: 'supplier_error',
+      supplier: supplierName,
+      message: reason ? `Consulta não concluída: ${reason}.` : 'Consulta não concluída.',
+      resultCount: 0
+    };
+  }
+
+  if (resultList.length === 0) {
+    return {
+      phase: 'supplier_empty',
+      supplier: supplierName,
+      message: 'Nenhum produto retornado para esta busca.',
+      resultCount: 0
+    };
+  }
+
+  return {
+    phase: 'supplier_completed',
+    supplier: supplierName,
+    message: `${resultList.length} produto${resultList.length === 1 ? '' : 's'} retornado${resultList.length === 1 ? '' : 's'}; conferindo preço e ST.`,
+    resultCount: resultList.length
+  };
+}
+
 function createAbortError() {
   const error = new Error('Quotation operation aborted by timeout.');
   error.name = 'AbortError';
@@ -95,6 +154,11 @@ export async function callWithRetry(connector, parsedQuery, options = {}) {
       if (options.signal?.aborted) throw createAbortError();
       if (attempt <= retries && shouldRetryLiveResults(results)) {
         logger.warn(`Transient live failure for ${connector.supplierName}; retrying once.`);
+        notifyProgress(options.onProgress, {
+          phase: 'supplier_started',
+          supplier: connector.supplierName,
+          message: `Falha temporária em ${connector.supplierName}; iniciando nova tentativa.`
+        });
         await waitForRetry(delayMs * attempt, options.signal);
         continue;
       }
@@ -104,6 +168,11 @@ export async function callWithRetry(connector, parsedQuery, options = {}) {
       lastErr = err;
       logger.warn(`Attempt ${attempt} failed for connector ${connector.supplierName}: ${err.message}`);
       if (attempt <= retries) {
+        notifyProgress(options.onProgress, {
+          phase: 'supplier_started',
+          supplier: connector.supplierName,
+          message: `${connector.supplierName} não respondeu; iniciando nova tentativa.`
+        });
         await waitForRetry(delayMs * attempt, options.signal);
       }
     }
@@ -124,6 +193,11 @@ export async function callWithEanFallback(connector, parsedQuery, options = {}) 
   }
 
   logger.info(`EAN ${parsedQuery.ean} not found at ${connector.supplierName}; retrying with the supplied product name.`);
+  notifyProgress(options.onProgress, {
+    phase: 'supplier_started',
+    supplier: connector.supplierName,
+    message: `EAN não encontrado em ${connector.supplierName}; tentando pelo nome do medicamento.`
+  });
   const nameResults = await callWithRetry(connector, { ...parsedQuery, ean: '' }, options);
   return nameResults.map(result => ({
     ...result,
@@ -139,6 +213,12 @@ export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
   const controller = new AbortController();
   const externalSignal = options.signal;
 
+  notifyProgress(options.onProgress, {
+    phase: 'supplier_started',
+    supplier: connector.supplierName,
+    message: getSupplierSearchMessage(connector.supplierName)
+  });
+
   return new Promise((resolve) => {
     let settled = false;
     let timeoutId = null;
@@ -151,6 +231,7 @@ export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
       if (externalSignal && externalAbortHandler) {
         externalSignal.removeEventListener('abort', externalAbortHandler);
       }
+      notifyProgress(options.onProgress, getSupplierCompletionProgress(connector.supplierName, results));
       resolve(results);
     };
 
@@ -209,15 +290,23 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       searchPromises.push(callConnectorWithTimeout(connector, parsed, {
         signal: options.signal,
         timeoutMs: options.connectorTimeoutMs?.[connector.supplierName],
-        totalTimeoutReason: options.totalTimeoutReason
+        totalTimeoutReason: options.totalTimeoutReason,
+        onProgress: options.onProgress
       }));
     }
   }
 
-  const allResultsLists = await Promise.all(searchPromises);
   const blockedResults = activeSuppliers
     .filter(supplier => blockedSupplierReasons[supplier])
-    .map(supplier => createLiveUnavailableResult(supplier, parsed, blockedSupplierReasons[supplier]));
+    .map(supplier => {
+      notifyProgress(options.onProgress, {
+        phase: 'supplier_blocked',
+        supplier,
+        message: `Consulta ignorada nesta cotação: ${blockedSupplierReasons[supplier]}.`
+      });
+      return createLiveUnavailableResult(supplier, parsed, blockedSupplierReasons[supplier]);
+    });
+  const allResultsLists = await Promise.all(searchPromises);
   const rawResults = [...allResultsLists.flat(), ...blockedResults];
 
   logger.info(`Found ${rawResults.length} raw results across suppliers.`);

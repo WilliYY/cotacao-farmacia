@@ -34,11 +34,74 @@ import {
 import { generateExcelBuffer } from '../src/lib/exporter.js';
 import { createUpdateStatus, getUpdateBlockReason, isElectronRuntimeReady } from '../scripts/bootstrap.mjs';
 import { classifyDiagnosticResults } from '../scripts/live-diagnostic.mjs';
+import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from '../src/lib/quote-progress.js';
 
 process.env.ENABLE_REAL_CONNECTORS = 'false';
 process.env.ENABLE_MOCK_CONNECTORS = 'true';
 process.env.DATABASE_PATH = '';
 process.env.DB_TYPE = 'sqlite';
+
+test('Quote progress - exposes real item and supplier states', async (t) => {
+  await t.test('calculates progress from terminal supplier events and resets each item', () => {
+    let progress = createInitialQuoteProgress(2, ['ANB', 'Profarma']);
+    progress = reduceQuoteProgress(progress, {
+      phase: 'item_started',
+      currentItem: 1,
+      totalItems: 2,
+      currentQuery: 'losartana 50mg',
+      suppliers: ['ANB', 'Profarma']
+    });
+    progress = reduceQuoteProgress(progress, {
+      phase: 'supplier_completed',
+      supplier: 'ANB',
+      resultCount: 3,
+      message: '3 produtos retornados.'
+    });
+
+    assert.strictEqual(progress.suppliers.ANB.status, 'completed');
+    assert.strictEqual(progress.suppliers.ANB.resultCount, 3);
+    assert.strictEqual(getQuoteProgressPercent(progress), 25);
+
+    progress = reduceQuoteProgress(progress, {
+      phase: 'supplier_timeout',
+      supplier: 'Profarma',
+      message: 'Tempo limite.'
+    });
+    assert.strictEqual(getQuoteProgressPercent(progress), 50);
+
+    progress = reduceQuoteProgress(progress, {
+      phase: 'item_started',
+      currentItem: 2,
+      totalItems: 2,
+      currentQuery: 'amitriptilina 25mg',
+      suppliers: ['ANB', 'Profarma']
+    });
+    assert.strictEqual(progress.suppliers.ANB.status, 'waiting');
+    assert.strictEqual(progress.suppliers.Profarma.status, 'waiting');
+    assert.strictEqual(getQuoteProgressPercent(progress), 50);
+
+    progress = reduceQuoteProgress(progress, { phase: 'quote_completed' });
+    assert.strictEqual(getQuoteProgressPercent(progress), 100);
+  });
+
+  await t.test('reports connector start and completion through the progress callback', async () => {
+    const events = [];
+    const connector = {
+      supplierName: 'ANB',
+      searchProduct: async () => [{ source: 'ANB', supplierProductName: 'Losartana 50mg', price: 2.8 }]
+    };
+
+    await callConnectorWithTimeout(connector, parseSearchQuery('losartana 50mg'), {
+      retries: 0,
+      timeoutMs: 1000,
+      onProgress: event => events.push(event)
+    });
+
+    assert.deepStrictEqual(events.map(event => event.phase), ['supplier_started', 'supplier_completed']);
+    assert.match(events[0].message, /Unit c\/ST/i);
+    assert.strictEqual(events[1].resultCount, 1);
+  });
+});
 
 test('Startup updater - applies only when the repository is safe', async (t) => {
   const cleanRepository = {
