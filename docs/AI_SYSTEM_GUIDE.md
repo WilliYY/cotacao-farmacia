@@ -104,6 +104,11 @@ erDiagram
         real unitPrice
         string auditStatus
         string auditSummary
+        string priceSourceLabel
+        string liveFailureReason
+        string failureCode
+        integer timedOut
+        string searchFallback
     }
     SystemLog {
         integer id PK
@@ -163,6 +168,8 @@ Ranks matching supplier results:
    - **Priority 2:** Lowest `unitPrice` when packaging differs.
 7. Annotate the cheapest result as `Melhor preço com ST` and the runner-up as `Segunda opção com ST`.
 
+`quote-summary.js` derives the consolidated result indicators after `getQuoteDetails()` reads the persisted rows. It counts priced sources conservatively, keeps timeout/failure evidence after reopening history, and calculates savings only between valid offers with the same ST priority, presentation, and package quantity. When no comparable alternative exists, savings is `null` and the UI displays `Não aplicável`.
+
 ### 4. Quote Auditor (`quote-auditor.js`)
 Validates whether each supplier result is safe to use in the quotation:
 - Blocks invalid or zero prices, unavailable products, `SEM_ST`, `ST_DESCONHECIDO`, EAN mismatch on barcode searches, dosage mismatch, presentation mismatch, and product names that do not fuzzy-match the search.
@@ -208,11 +215,14 @@ Operational notes added after the 2026-07-17 live tests:
 ## 🎨 UI Architecture & Frontend Flow
 
 The React frontend is an operational workspace with a dark navigation rail and a neutral, high-contrast content surface:
+- **Window lifecycle:** Electron creates the window hidden, maximizes it on `ready-to-show`, then displays it with minimum operational dimensions to avoid startup resizing and clipped controls.
 - **View state:** switches among medication search, consolidated results, and supplier credential settings without changing the Electron IPC contracts.
 - **Search workspace:** displays item and supplier counts, one-query-per-line input, quick examples, and explicit supplier selection before starting a live quote.
 - **Input interpretation:** a preview shows inherited context, spelling corrections and expanded strengths. `NEEDS_INFO` rows stay red and remain visible even under the normal ST filters.
 - **History:** the full local history is collapsed by default and searchable through medication terms aggregated from `QuoteItem`.
 - **Result traceability:** the recommendation cards and detail table show the exact accepted field for each supplier: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final`, and DM Paraná `Preço final: R$`.
+- **Decision hierarchy:** the consolidated gradient header states coverage and quote health; one recommendation card is rendered per medication with its best valid offer and optional second choice. Comparison tools are secondary and collapsed by default.
+- **Responsive result modes:** desktop uses a dense comparison table, 901-1280 px uses a compact labeled-card table, and screens up to 900 px use a single-column operational layout without horizontal overflow.
 - **Live progress contract:** `main.js` emits sanitized `quote-progress` events for quote, item and supplier phases; `preload.js` exposes a removable listener; `quote-progress.js` reduces those events into deterministic UI state and percentage. Supplier rows must reflect real connector completion, failure, retry, empty response, block or timeout rather than estimated timers.
 - **Responsive table:** below 900 px, every result row becomes a labeled card while preserving EAN, package, distributor, final price source, ST, stock, audit, recommendation, and review action.
 - **Status semantics:** green is reserved for valid ST/recommendations, red for blocked without ST, amber for review, and blue for informational/secondary states.

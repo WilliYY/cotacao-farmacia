@@ -120,14 +120,24 @@ async function checkGitUpdates() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1440,
+    height: 900,
+    minWidth: 1024,
+    minHeight: 700,
+    show: false,
+    backgroundColor: '#f3f6f8',
     title: 'Wimifarma Cotação',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false
     }
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.maximize();
+    mainWindow.show();
   });
 
   const isDev = !app.isPackaged;

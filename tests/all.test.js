@@ -29,17 +29,78 @@ import {
   getLearnedCorrections,
   recordQueryCorrection,
   updateQuoteResult,
-  getDb
+  getDb,
+  normalizePostgresRow
 } from '../src/lib/database.js';
 import { generateExcelBuffer } from '../src/lib/exporter.js';
 import { createUpdateStatus, getUpdateBlockReason, isElectronRuntimeReady } from '../scripts/bootstrap.mjs';
 import { classifyDiagnosticResults } from '../scripts/live-diagnostic.mjs';
 import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from '../src/lib/quote-progress.js';
+import { buildQuoteSummary } from '../src/lib/quote-summary.js';
 
 process.env.ENABLE_REAL_CONNECTORS = 'false';
 process.env.ENABLE_MOCK_CONNECTORS = 'true';
 process.env.DATABASE_PATH = '';
 process.env.DB_TYPE = 'sqlite';
+
+test('Quote summary - reports reliable backend indicators', () => {
+  const summary = buildQuoteSummary([
+    {
+      status: 'completed',
+      results: [
+        { source: 'ANB', price: 10, quantity: 10, packaging: '10 comprimidos', unitPrice: 1, isValidOption: 1, recommendationStatus: 'Melhor preço com ST', auditStatus: 'OK' },
+        { source: 'Profarma', price: 12, quantity: 10, packaging: '10 comprimidos', unitPrice: 1.2, isValidOption: 1, recommendationStatus: 'Segunda opção com ST', auditStatus: 'OK' }
+      ]
+    },
+    {
+      status: 'supplier_error',
+      results: [
+        { source: 'Santa Cruz', price: 0, isValidOption: 0, liveFailureReason: 'processo sem janela' }
+      ]
+    },
+    {
+      status: 'completed_with_timeout',
+      results: [
+        { source: 'ANB', price: 8, quantity: 20, unitPrice: 0.4, isValidOption: 1, recommendationStatus: 'Melhor preço com ST', auditStatus: 'ATENCAO' }
+      ]
+    }
+  ]);
+
+  assert.deepStrictEqual(summary, {
+    itemCount: 3,
+    itemsWithValidOption: 2,
+    itemsWithoutValidOption: 1,
+    needsReview: 2,
+    offerCount: 3,
+    validOptionCount: 3,
+    pricedSourceCount: 2,
+    failedSourceCount: 1,
+    timeoutItemCount: 1,
+    failedItemCount: 2,
+    notFoundItemCount: 0,
+    coveragePercent: 67,
+    estimatedSavings: 2,
+    comparableSavingsItemCount: 1
+  });
+});
+
+test('PostgreSQL rows - restores application camelCase fields', () => {
+  const row = normalizePostgresRow({
+    quoteitemid: 7,
+    isvalidoption: 1,
+    pricesourcelabel: 'Preço Final',
+    livefailurereason: 'sem internet',
+    timedout: 1,
+    suppliername: 'Profarma'
+  });
+
+  assert.strictEqual(row.quoteItemId, 7);
+  assert.strictEqual(row.isValidOption, 1);
+  assert.strictEqual(row.priceSourceLabel, 'Preço Final');
+  assert.strictEqual(row.liveFailureReason, 'sem internet');
+  assert.strictEqual(row.timedOut, 1);
+  assert.strictEqual(row.supplierName, 'Profarma');
+});
 
 test('Quote progress - exposes real item and supplier states', async (t) => {
   await t.test('calculates progress from terminal supplier events and resets each item', () => {
@@ -217,6 +278,14 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     assert.match(electronMain, /AUTO_UPDATE_CHECK_INTERVAL_MS/);
     assert.match(electronMain, /windowsHide:\s*true/);
     assert.match(electronMain, /get-update-status/);
+  });
+
+  await t.test('opens the Electron workspace maximized after it is ready', () => {
+    const mainSource = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'main.js'), 'utf8');
+    assert.match(mainSource, /show:\s*false/);
+    assert.match(mainSource, /once\('ready-to-show'/);
+    assert.match(mainSource, /mainWindow\.maximize\(\)/);
+    assert.match(mainSource, /mainWindow\.show\(\)/);
   });
 });
 
@@ -939,9 +1008,41 @@ test('Database Flow - Manual Review Recalculation', async () => {
       quantity: 10
     });
 
+    await saveQuoteResult({
+      quoteItemId: itemId,
+      supplierId: 3,
+      supplierProductName: 'Consulta Santa Cruz não concluída',
+      laboratory: '',
+      dosage: '500mg',
+      presentation: 'comprimido',
+      price: 0,
+      stStatus: 'ST_DESCONHECIDO',
+      availability: 'indisponível',
+      isValidOption: false,
+      ignoreReason: 'Tempo limite',
+      recommendationStatus: 'Não consultado',
+      source: 'Santa Cruz',
+      quantity: 1,
+      priceSourceLabel: 'Preço NF',
+      liveFailureReason: 'tempo limite excedido',
+      failureCode: 'TIMEOUT',
+      timedOut: true,
+      searchFallback: 'EAN_NAO_ENCONTRADO_NOME'
+    });
+
     const before = await getQuoteDetails(quoteId);
     const semStResult = before.items[0].results.find(r => r.stStatus === 'SEM_ST');
+    const failedResult = before.items[0].results.find(r => r.source === 'Santa Cruz');
     assert.ok(semStResult);
+    assert.strictEqual(failedResult.priceSourceLabel, 'Preço NF');
+    assert.strictEqual(failedResult.liveFailureReason, 'tempo limite excedido');
+    assert.strictEqual(failedResult.failureCode, 'TIMEOUT');
+    assert.strictEqual(failedResult.timedOut, 1);
+    assert.strictEqual(failedResult.searchFallback, 'EAN_NAO_ENCONTRADO_NOME');
+    assert.strictEqual(before.summary.failedSourceCount, 1);
+    assert.strictEqual(before.summary.failedItemCount, 1);
+    assert.strictEqual(before.summary.timeoutItemCount, 1);
+    assert.strictEqual(before.summary.pricedSourceCount, 2);
 
     await updateQuoteResult(semStResult.id, {
       price: 2.5,
@@ -959,6 +1060,8 @@ test('Database Flow - Manual Review Recalculation', async () => {
     assert.strictEqual(best.isValidOption, 1);
     assert.ok(second);
     assert.strictEqual(second.price, 3.2);
+    assert.strictEqual(after.summary.itemsWithValidOption, 1);
+    assert.strictEqual(after.summary.failedSourceCount, 1);
   } finally {
     await closeDatabase();
     fs.rmSync(tempDir, { recursive: true, force: true });

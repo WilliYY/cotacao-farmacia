@@ -4,11 +4,34 @@ import path from 'path';
 import fs from 'fs';
 import { logger } from './logger.js';
 import { isValidST, getSTPriority } from './st-rules.js';
+import { buildQuoteSummary } from './quote-summary.js';
 
 let dbInstance = null;
 let isPostgres = false;
 let pgPool = null;
 let sqliteDb = null;
+
+const POSTGRES_CAMEL_CASE_KEYS = [
+  'rawText', 'normalizedName', 'createdAt', 'quoteId', 'searchText', 'correctionType',
+  'correctionMessage', 'confidenceStatus', 'refinementSuggestion', 'quoteItemId',
+  'supplierId', 'supplierProductName', 'hasST', 'stStatus', 'isValidOption',
+  'ignoreReason', 'recommendationStatus', 'reviewStatus', 'capturedAt', 'unitPrice',
+  'auditStatus', 'auditSummary', 'priceSourceLabel', 'liveFailureReason', 'failureCode',
+  'timedOut', 'searchFallback', 'searchCount', 'lastSearchedAt', 'canonicalName',
+  'lastConfirmedAt', 'clientCode', 'updatedAt', 'supplierName'
+].reduce((keys, name) => keys.set(name.toLowerCase(), name), new Map());
+
+export function normalizePostgresRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  const normalized = { ...row };
+  for (const [key, value] of Object.entries(row)) {
+    const camelCaseKey = POSTGRES_CAMEL_CASE_KEYS.get(key.toLowerCase());
+    if (camelCaseKey && normalized[camelCaseKey] === undefined) {
+      normalized[camelCaseKey] = value;
+    }
+  }
+  return normalized;
+}
 
 const CANONICAL_SUPPLIER_NAMES = new Map([
   [1, 'ANB'],
@@ -77,7 +100,7 @@ const dbWrapper = {
     const { sql: tSql, params: tParams } = translateQuery(sql, params);
     if (isPostgres) {
       const res = await pgPool.query(tSql, tParams);
-      return res.rows[0] || null;
+      return normalizePostgresRow(res.rows[0]) || null;
     } else {
       return await sqliteDb.get(tSql, ...tParams);
     }
@@ -86,7 +109,7 @@ const dbWrapper = {
     const { sql: tSql, params: tParams } = translateQuery(sql, params);
     if (isPostgres) {
       const res = await pgPool.query(tSql, tParams);
-      return res.rows;
+      return res.rows.map(normalizePostgresRow);
     } else {
       return await sqliteDb.all(tSql, ...tParams);
     }
@@ -203,6 +226,11 @@ export async function initDatabase(userDataPath) {
         unitPrice REAL,
         auditStatus TEXT DEFAULT 'OK',
         auditSummary TEXT,
+        priceSourceLabel TEXT,
+        liveFailureReason TEXT,
+        failureCode TEXT,
+        timedOut INTEGER DEFAULT 0,
+        searchFallback TEXT,
         FOREIGN KEY(quoteItemId) REFERENCES QuoteItem(id) ON DELETE CASCADE,
         FOREIGN KEY(supplierId) REFERENCES Supplier(id)
       );
@@ -308,6 +336,11 @@ export async function initDatabase(userDataPath) {
         unitPrice REAL,
         auditStatus TEXT DEFAULT 'OK',
         auditSummary TEXT,
+        priceSourceLabel TEXT,
+        liveFailureReason TEXT,
+        failureCode TEXT,
+        timedOut INTEGER DEFAULT 0,
+        searchFallback TEXT,
         FOREIGN KEY(quoteItemId) REFERENCES QuoteItem(id) ON DELETE CASCADE,
         FOREIGN KEY(supplierId) REFERENCES Supplier(id)
       );
@@ -465,6 +498,37 @@ export async function initDatabase(userDataPath) {
         ALTER TABLE QuoteItem ADD COLUMN correctionMessage TEXT;
       `);
       logger.info('Contextual query intelligence migration completed successfully.');
+    }
+
+    const evidenceColumnDefinitions = [
+      ['priceSourceLabel', 'TEXT'],
+      ['liveFailureReason', 'TEXT'],
+      ['failureCode', 'TEXT'],
+      ['timedOut', 'INTEGER DEFAULT 0'],
+      ['searchFallback', 'TEXT']
+    ];
+    let existingEvidenceColumns;
+    if (isPostgres) {
+      const colCheck = await dbInstance.all(`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name='quoteresult'
+      `);
+      existingEvidenceColumns = new Set(colCheck.map(column => String(column.column_name).toLowerCase()));
+    } else {
+      const resultColumns = await dbInstance.all("PRAGMA table_info(QuoteResult)");
+      existingEvidenceColumns = new Set(resultColumns.map(column => String(column.name).toLowerCase()));
+    }
+
+    const missingEvidenceColumns = evidenceColumnDefinitions.filter(
+      ([name]) => !existingEvidenceColumns.has(name.toLowerCase())
+    );
+    if (missingEvidenceColumns.length > 0) {
+      logger.info('Migrating tables to live supplier evidence schema...');
+      for (const [name, definition] of missingEvidenceColumns) {
+        await dbInstance.exec(`ALTER TABLE QuoteResult ADD COLUMN ${name} ${definition}`);
+      }
+      logger.info('Live supplier evidence database migration completed successfully.');
     }
   } catch (err) {
     logger.error(`Database migration checking failed: ${err.message}`);
@@ -663,8 +727,8 @@ export async function saveQuoteResult(result) {
       quoteItemId, supplierId, supplierProductName, laboratory, dosage, presentation,
       price, hasST, stStatus, availability, isValidOption, ignoreReason, recommendationStatus, 
       reviewStatus, notes, confidence, capturedAt, source, ean, packaging, quantity, unitPrice,
-      auditStatus, auditSummary
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      auditStatus, auditSummary, priceSourceLabel, liveFailureReason, failureCode, timedOut, searchFallback
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     result.quoteItemId,
     result.supplierId,
     result.supplierProductName,
@@ -688,7 +752,12 @@ export async function saveQuoteResult(result) {
     qty,
     unitPrice,
     result.auditStatus || 'OK',
-    result.auditSummary || null
+    result.auditSummary || null,
+    result.priceSourceLabel || null,
+    result.liveFailureReason || null,
+    result.failureCode || null,
+    result.timedOut ? 1 : 0,
+    result.searchFallback || null
   );
 }
 
@@ -758,6 +827,7 @@ export async function getQuoteDetails(quoteId) {
   }
 
   quote.items = items;
+  quote.summary = buildQuoteSummary(items);
   return quote;
 }
 

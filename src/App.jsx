@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { analyzeQuoteBatch, INPUT_STATUS } from './lib/search-intelligence.js';
 import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from './lib/quote-progress.js';
+import { buildQuoteSummary } from './lib/quote-summary.js';
 
 // Browser mocks are available only through an explicit development opt-in.
 const mockApi = {
@@ -485,6 +486,31 @@ function formatElapsedTime(totalSeconds) {
   return `${minutesPart}:${secondsPart}`;
 }
 
+function formatCurrency(value) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL'
+  }).format(Number(value) || 0);
+}
+
+function getDisplayUnitPrice(result) {
+  const explicit = Number(result?.unitPrice || 0);
+  if (explicit > 0) return explicit;
+  const price = Number(result?.price || 0);
+  const quantity = Math.max(1, Number(result?.quantity || 1));
+  return price / quantity;
+}
+
+function getSupplierTone(source) {
+  const tones = {
+    ANB: 'anb',
+    Profarma: 'profarma',
+    'Santa Cruz': 'santa-cruz',
+    'DM Paraná': 'dm-parana'
+  };
+  return tones[source] || 'default';
+}
+
 function SupplierProgressIcon({ status }) {
   if (status === 'searching') return <span className="supplier-progress-spinner" aria-hidden="true" />;
   if (status === 'completed') return <CheckCircle2 size={18} aria-hidden="true" />;
@@ -943,39 +969,38 @@ function App() {
   // Calculate Summary Metrics
   const getSummaryMetrics = () => {
     if (!activeQuote || !activeQuote.items) {
-      return { total: 0, withST: 0, withoutST: 0, needsReview: 0, savings: 0 };
+      return {
+        total: 0,
+        withST: 0,
+        withoutST: 0,
+        needsReview: 0,
+        savings: 0,
+        offers: 0,
+        validOptions: 0,
+        sources: 0,
+        failures: 0,
+        coverage: 0,
+        failedItems: 0,
+        notFoundItems: 0,
+        comparableSavingsItems: 0
+      };
     }
-
-    const items = activeQuote.items;
-    const total = items.length;
-    let withST = 0;
-    let withoutST = 0;
-    let needsReview = 0;
-    let savings = 0;
-
-    items.forEach(item => {
-      const results = item.results || [];
-      const hasValid = results.some(r => r.isValidOption && r.stStatus !== 'ST_DESCONHECIDO');
-      const hasReview = results.some(r => r.stStatus === 'ST_DESCONHECIDO' || r.recommendationStatus === 'Produto parecido — revisar' || r.reviewStatus === 'PRECISA_REVISAR' || hasAuditIssue(r));
-
-      if (hasValid) {
-        withST++;
-      } else {
-        withoutST++;
-      }
-
-      if (hasReview) {
-        needsReview++;
-      }
-
-      const validSorted = results.filter(r => r.isValidOption).sort((a, b) => a.unitPrice - b.unitPrice);
-      if (validSorted.length > 1) {
-        const savingPerUnit = validSorted[1].unitPrice - validSorted[0].unitPrice;
-        savings += (savingPerUnit * validSorted[0].quantity);
-      }
-    });
-
-    return { total, withST, withoutST, needsReview, savings };
+    const summary = activeQuote.summary || buildQuoteSummary(activeQuote.items);
+    return {
+      total: summary.itemCount,
+      withST: summary.itemsWithValidOption,
+      withoutST: summary.itemsWithoutValidOption,
+      needsReview: summary.needsReview,
+      savings: summary.estimatedSavings,
+      offers: summary.offerCount,
+      validOptions: summary.validOptionCount,
+      sources: summary.pricedSourceCount,
+      failures: summary.failedSourceCount,
+      coverage: summary.coveragePercent,
+      failedItems: summary.failedItemCount,
+      notFoundItems: summary.notFoundItemCount,
+      comparableSavingsItems: summary.comparableSavingsItemCount
+    };
   };
 
   // Process rows for displaying with active filters
@@ -1008,31 +1033,22 @@ function App() {
     return rows;
   };
 
-  // Top Recommendation Cards
-  const getTopRecommendations = () => {
+  // One purchase recommendation per searched item.
+  const getPurchaseRecommendations = () => {
     if (!activeQuote || !activeQuote.items) return [];
 
     const recs = [];
     activeQuote.items.forEach(item => {
       if (!item.results) return;
 
-      const bestItem = item.results.find(r => r.recommendationStatus === 'Melhor preço com ST');
-      const secondItem = item.results.find(r => r.recommendationStatus === 'Segunda opção com ST');
-      
-      if (bestItem) {
-        recs.push({
-          rawText: item.rawText,
-          type: 'best',
-          ...bestItem
-        });
-      }
-      if (secondItem) {
-        recs.push({
-          rawText: item.rawText,
-          type: 'second',
-          ...secondItem
-        });
-      }
+      const validResults = item.results
+        .filter(result => result.isValidOption && Number(result.price || 0) > 0)
+        .sort((left, right) => getDisplayUnitPrice(left) - getDisplayUnitPrice(right));
+      const best = validResults.find(result => result.recommendationStatus === 'Melhor preço com ST') || validResults[0];
+      if (!best) return;
+      const second = validResults.find(result => result.recommendationStatus === 'Segunda opção com ST') ||
+        validResults.find(result => result.id !== best.id);
+      recs.push({ itemId: item.id, rawText: item.rawText, best, second });
     });
 
     return recs;
@@ -1048,8 +1064,16 @@ function App() {
   };
 
   const filteredRows = getFilteredRows();
-  const topRecs = getTopRecommendations();
+  const purchaseRecommendations = getPurchaseRecommendations();
   const metrics = getSummaryMetrics();
+  const hasSolidPackageOptions = activeQuote?.items?.some(item =>
+    (item.results || []).some(result =>
+      /comp|cpr|caps/.test(String(result.presentation || '').toLowerCase()) &&
+      result.isValidOption &&
+      Number(result.price || 0) > 0 &&
+      (result.stStatus === 'COM_ST' || result.stStatus === 'ST_INCLUSO')
+    )
+  );
   const filteredHistory = getFilteredHistory();
   const rawInputLines = inputText.split('\n').map(line => line.trim()).filter(Boolean);
   const inputAnalysis = analyzeQuoteBatch(rawInputLines);
@@ -1466,24 +1490,42 @@ function App() {
         ) : (
           /* Results Dashboard View */
           <div className="results-view animate-fade-in">
-            <div className="results-header">
+            <header className="results-header">
               <div className="results-title-group">
-                <span className="eyebrow">Resultado consolidado</span>
+                <span className="eyebrow">Resultado consolidado e auditado</span>
                 <h2>Cotação #{activeQuote.id}</h2>
                 <div className="results-meta">
                   Realizada em: {new Date(activeQuote.createdAt).toLocaleString('pt-BR')}
                 </div>
+                <div className="results-health" aria-label="Resumo rápido da cotação">
+                  <span className={activeQuote.status === 'completed_with_timeout' || metrics.failedItems > 0 ? 'is-warning' : 'is-success'}>
+                    {activeQuote.status === 'completed_with_timeout' || metrics.failedItems > 0 ? <CircleAlert size={14} /> : <CheckCircle2 size={14} />}
+                    {activeQuote.status === 'completed_with_timeout'
+                      ? 'Concluída com resultado parcial'
+                      : metrics.failedItems > 0
+                        ? 'Concluída com pendências'
+                        : 'Concluída e conferida'}
+                  </span>
+                  <span><ShieldCheck size={14} /> {metrics.coverage}% dos itens com opção válida</span>
+                  <span><PackageSearch size={14} /> {metrics.offers} ofertas em {metrics.sources} fontes com preço</span>
+                </div>
               </div>
 
-              <div className="results-actions">
-                <button className="btn btn-secondary" onClick={handleNewQuoteClick}>
-                  <Plus size={16} aria-hidden="true" /> Nova Cotação
-                </button>
-                <button className="btn btn-success" onClick={handleExportExcel}>
-                  <FileSpreadsheet size={17} aria-hidden="true" /> Exportar XLSX
-                </button>
+              <div className="results-header-side">
+                <div className="results-coverage" aria-label={`${metrics.coverage}% de cobertura`}>
+                  <strong>{metrics.coverage}%</strong>
+                  <span>cobertura válida</span>
+                </div>
+                <div className="results-actions">
+                  <button className="btn btn-secondary" onClick={handleNewQuoteClick}>
+                    <Plus size={16} aria-hidden="true" /> Nova Cotação
+                  </button>
+                  <button className="btn btn-success" onClick={handleExportExcel}>
+                    <FileSpreadsheet size={17} aria-hidden="true" /> Exportar XLSX
+                  </button>
+                </div>
               </div>
-            </div>
+            </header>
 
             {activeQuote.status === 'completed_with_timeout' && (
               <section className="quote-timeout-notice" role="status" aria-label="Cotação encerrada pelo limite de tempo">
@@ -1497,25 +1539,25 @@ function App() {
 
             {/* Metrics Dashboard Cards */}
             <div className="metrics-grid">
-              <div className="metric-card">
+              <div className="metric-card metric-neutral">
                 <div className="metric-icon"><PackageSearch size={17} aria-hidden="true" /></div>
-                <div><span>Total cotados</span><strong>{metrics.total}</strong></div>
+                <div><span>Itens pesquisados</span><strong>{metrics.total}</strong><small>{metrics.offers} ofertas capturadas</small></div>
               </div>
               <div className="metric-card metric-success">
                 <div className="metric-icon"><CheckCircle2 size={17} aria-hidden="true" /></div>
-                <div><span>Com opção ST</span><strong>{metrics.withST}</strong></div>
+                <div><span>Com opção válida</span><strong>{metrics.withST}</strong><small>{metrics.validOptions} opções aprovadas</small></div>
               </div>
               <div className="metric-card metric-danger">
                 <div className="metric-icon"><CircleX size={17} aria-hidden="true" /></div>
-                <div><span>Sem opção ST</span><strong>{metrics.withoutST}</strong></div>
+                <div><span>Sem opção válida</span><strong>{metrics.withoutST}</strong><small>{metrics.notFoundItems} não encontrados</small></div>
               </div>
               <div className="metric-card metric-warning">
                 <div className="metric-icon"><CircleAlert size={17} aria-hidden="true" /></div>
-                <div><span>Precisa revisar</span><strong>{metrics.needsReview}</strong></div>
+                <div><span>Precisa revisar</span><strong>{metrics.needsReview}</strong><small>{metrics.failedItems} com falha ou timeout</small></div>
               </div>
               <div className="metric-card metric-info">
                 <div className="metric-icon"><TrendingDown size={17} aria-hidden="true" /></div>
-                <div><span>Economia estimada</span><strong>R$ {metrics.savings.toFixed(2).replace('.', ',')}</strong></div>
+                <div><span>Economia comparável</span><strong>{metrics.comparableSavingsItems > 0 ? formatCurrency(metrics.savings) : 'Não aplicável'}</strong><small>{metrics.comparableSavingsItems} embalagens equivalentes</small></div>
               </div>
             </div>
 
@@ -1556,42 +1598,65 @@ function App() {
               </section>
             )}
 
-            {/* Recommendations Highlight */}
-            {topRecs.length > 0 && (
-              <div className="recommendations-deck" style={{ gap: '1rem', marginBottom: '2rem' }}>
-                {topRecs.slice(0, 3).map((rec, i) => (
-                  <div key={i} className={`recommendation-card ${rec.type === 'second' ? 'secondary' : ''}`}>
-                    <div className={`recommendation-badge ${rec.type === 'best' ? 'is-best' : ''}`}>
-                      {rec.type === 'best' ? 'Melhor Preço com ST' : 'Segunda Opção com ST'}
-                    </div>
-                    <div className="rec-search-name">Busca: "{rec.rawText}"</div>
-                    <div className="rec-product-title">{rec.supplierProductName}</div>
-                    
-                    <div className="rec-detail-row">
-                      <span>Distribuidora:</span>
-                      <strong style={{ color: '#fff' }}>{rec.source}</strong>
-                    </div>
-                    <div className="rec-detail-row">
-                      <span>EAN:</span>
-                      <span>{rec.ean || 'N/A'}</span>
-                    </div>
-                    <div className="rec-detail-row">
-                      <span>Embalagem:</span>
-                      <span>{rec.packaging}</span>
-                    </div>
-                    <div className="rec-detail-row rec-price-row">
-                      <span>{getPriceSourceLabel(rec)}</span>
-                      <span className="rec-price">
-                        R$ {rec.price.toFixed(2).replace('.', ',')}
-                      </span>
-                    </div>
+            {/* One clear purchase indication for every medication */}
+            {purchaseRecommendations.length > 0 && (
+              <section className="purchase-section" aria-labelledby="purchase-title">
+                <div className="section-heading">
+                  <div>
+                    <span className="eyebrow">Indicação de compra</span>
+                    <h3 id="purchase-title">Melhor opção segura por medicamento</h3>
                   </div>
-                ))}
-              </div>
+                  <span className="section-count">{purchaseRecommendations.length} de {metrics.total} itens com indicação</span>
+                </div>
+
+                <div className="recommendations-deck">
+                  {purchaseRecommendations.map(({ itemId, rawText, best, second }) => (
+                    <article key={itemId} className="recommendation-card">
+                      <div className="recommendation-card__topline">
+                        <span className="recommendation-badge is-best"><CheckCircle2 size={13} /> Melhor opção com ST</span>
+                        <span className={`supplier-chip is-${getSupplierTone(best.source)}`}>{best.source}</span>
+                      </div>
+                      <div className="rec-search-name">Solicitado: “{rawText}”</div>
+                      <div className="rec-product-title">{best.supplierProductName}</div>
+
+                      <div className="recommendation-price-block">
+                        <div>
+                          <span>{getPriceSourceLabel(best)}</span>
+                          <strong>{formatCurrency(best.price)}</strong>
+                        </div>
+                        <div>
+                          <span>Custo por unidade</span>
+                          <strong>{formatCurrency(getDisplayUnitPrice(best))}</strong>
+                        </div>
+                      </div>
+
+                      <div className="recommendation-meta">
+                        <span><strong>Embalagem</strong>{best.packaging || `${best.quantity || 1} unidades`}</span>
+                        <span><strong>EAN</strong>{best.ean || 'Não informado'}</span>
+                        <span><strong>Estoque</strong>{best.availability || 'Conferido'}</span>
+                      </div>
+
+                      {second && (
+                        <div className="recommendation-second">
+                          <span>2ª opção</span>
+                          <strong>{second.source}</strong>
+                          <span>{formatCurrency(second.price)}</span>
+                          <small>{second.packaging || `${second.quantity || 1} unidades`} · {getPriceSourceLabel(second)}</small>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </section>
             )}
 
             {/* Intelligent Comparison & Validation Panel */}
-            {activeQuote.items && activeQuote.items.length > 0 && (
+            {hasSolidPackageOptions && (
+              <details className="comparison-disclosure">
+                <summary>
+                  <span><PackageSearch size={17} aria-hidden="true" /> Comparar embalagens sólidas</span>
+                  <small>30, 60 e 90 unidades</small>
+                </summary>
               <div className="comparison-panel" style={{
                 marginBottom: '2rem',
                 padding: '1.5rem',
@@ -1614,7 +1679,11 @@ function App() {
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   {activeQuote.items.map((item, idx) => {
-                    const valid = (item.results || []).filter(r => r.isValidOption && r.price > 0 && (r.stStatus === 'COM_ST' || r.stStatus === 'ST_INCLUSO'));
+                    const valid = (item.results || []).filter(r => {
+                      const presentation = String(r.presentation || '').toLowerCase();
+                      const solidPackage = /comp|cpr|caps/.test(presentation);
+                      return solidPackage && r.isValidOption && r.price > 0 && (r.stStatus === 'COM_ST' || r.stStatus === 'ST_INCLUSO');
+                    });
                     if (valid.length === 0) return null;
 
                     // Group by quantity sizes
@@ -1628,7 +1697,7 @@ function App() {
                     const best90 = g90.sort((a, b) => a.price - b.price)[0];
 
                     // Absolute best by unit price (most cost-effective)
-                    const absBest = [...valid].sort((a, b) => a.unitPrice - b.unitPrice)[0];
+                    const absBest = [...valid].sort((a, b) => getDisplayUnitPrice(a) - getDisplayUnitPrice(b))[0];
 
                     return (
                       <div key={idx} style={{
@@ -1735,6 +1804,7 @@ function App() {
                   })}
                 </div>
               </div>
+              </details>
             )}
 
             {/* Vague Description warnings block */}
@@ -1867,51 +1937,53 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredRows.map((row, index) => (
-                      <tr
-                        key={index}
-                        className={['not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(row.itemStatus) ? 'result-row--problem' : ''}
-                        style={{ opacity: row.reviewStatus === 'REJEITADO' ? 0.45 : 1 }}
-                      >
+                    {filteredRows.map((row, index) => {
+                      const rowClasses = [
+                        ['not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(row.itemStatus) ? 'result-row--problem' : '',
+                        row.recommendationStatus === 'Melhor preço com ST' ? 'result-row--best' : '',
+                        row.recommendationStatus === 'Segunda opção com ST' ? 'result-row--second' : '',
+                        row.reviewStatus === 'REJEITADO' ? 'result-row--rejected' : ''
+                      ].filter(Boolean).join(' ');
+                      return (
+                      <tr key={row.id || `${row.itemId}-${index}`} className={rowClasses}>
                         <td className="searched-query-cell" data-label="Busca">"{row.rawText}"</td>
                         <td className="ean-cell" data-label="EAN">{row.ean || '-'}</td>
                         <td data-label="Produto encontrado">
                           <div className="product-name-cell">{row.supplierProductName}</div>
-                          <div style={{ color: '#64748b', fontSize: '0.7rem', marginTop: '0.15rem' }}>
-                            {row.laboratory} | {row.presentation} | {row.dosage} {row.notes && <span style={{ color: '#06b6d4' }}>• Obs: "{row.notes}"</span>}
-                            {row.auditSummary && <span style={{ color: '#f59e0b' }}> • Auditoria: "{row.auditSummary}"</span>}
+                          <div className="product-context">
+                            {row.laboratory} | {row.presentation} | {row.dosage}
+                            {row.notes && <span className="product-note"> • Obs: “{row.notes}”</span>}
+                            {row.auditSummary && <span className="product-audit"> • Auditoria: “{row.auditSummary}”</span>}
                           </div>
                         </td>
                         <td data-label="Embalagem">{row.packaging || `${row.quantity} cp`}</td>
                         <td data-label="Distribuidora">
-                          <span className="supplier-name-cell">{row.source}</span>
+                          <span className={`supplier-chip is-${getSupplierTone(row.source)}`}>{row.source}</span>
                         </td>
                         <td data-label="Preço final">
                           <span className={`text-price ${row.isValidOption ? 'highlight' : ''}`}>
-                            {row.price > 0 ? `R$ ${row.price.toFixed(2).replace('.', ',')}` : '-'}
+                            {row.price > 0 ? formatCurrency(row.price) : '-'}
                           </span>
                           <div className="price-source-label">{getPriceSourceLabel(row)}</div>
+                          {getDisplayUnitPrice(row) > 0 && <div className="unit-price-label">{formatCurrency(getDisplayUnitPrice(row))} / unidade</div>}
                         </td>
                         <td data-label="ST">
                           <span className={`badge ${
                             row.stStatus === 'COM_ST' || row.stStatus === 'ST_INCLUSO' || row.stStatus === 'ST_ISENTO' ? 'badge-st-com' :
                             row.stStatus === 'ST_SEPARADO' ? 'badge-status-second' :
                             row.stStatus === 'SEM_ST' ? 'badge-st-sem' : 'badge-st-unknown'
-                          }`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>
+                          }`}>
                             {row.stStatus === 'ST_SEPARADO' ? 'ST SEPARADO' : row.stStatus}
                           </span>
                         </td>
                         <td data-label="Estoque">
-                          <span style={{
-                            color: row.availability === 'disponível' ? '#10b981' : '#ef4444',
-                            fontWeight: '600',
-                            fontSize: '0.75rem'
-                          }}>
+                          <span className={`availability-status ${String(row.availability).toLowerCase() === 'disponível' || String(row.availability).toLowerCase() === 'disponivel' ? 'is-available' : 'is-unavailable'}`}>
+                            <span aria-hidden="true" />
                             {row.availability}
                           </span>
                         </td>
                         <td data-label="Auditoria">
-                          <span className={`badge ${getAuditBadgeClass(row)}`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>
+                          <span className={`badge ${getAuditBadgeClass(row)}`}>
                             {row.auditStatus || 'OK'}
                           </span>
                         </td>
@@ -1923,7 +1995,7 @@ function App() {
                             row.recommendationStatus === 'ST separado — conferir custo final' ? 'badge-status-second' :
                             row.recommendationStatus === 'Produto parecido — revisar' ? 'badge-status-similar' :
                             'badge-status-review'
-                          }`} style={{ fontSize: '0.65rem', padding: '0.15rem 0.35rem' }}>
+                          }`}>
                             {row.recommendationStatus}
                           </span>
                         </td>
@@ -1933,7 +2005,8 @@ function App() {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

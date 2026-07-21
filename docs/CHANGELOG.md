@@ -18,6 +18,15 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Uma única interface visível:** `wimi cotacao.bat`, `cotação.bat` e `start-app.bat` iniciam o bootstrap por `wimi cotacao.vbs`, mantendo o CMD oculto enquanto o Electron permanece aberto.
 - **Erros preservados:** toda a saída do inicializador oculto fica em `logs/startup.log`, sem perder diagnóstico de atualização, dependências ou abertura do aplicativo.
 
+### Resultado operacional e janela ampliada
+- **Abertura maximizada:** o Electron aguarda `ready-to-show`, maximiza a janela e só então a exibe, com dimensões mínimas para preservar os controles.
+- **Uma decisão por medicamento:** cada item recebe um cartão próprio com melhor opção, preço final, custo por unidade, distribuidora, embalagem, EAN, estoque e segunda opção comparável.
+- **Hierarquia visual:** cabeçalho consolidado, métricas e linhas usam gradientes funcionais distintos para cobertura, sucesso, informação, revisão e bloqueio, sempre acompanhados de texto e ícone.
+- **Tabela adaptativa:** a faixa intermediária de 901 a 1280 px ganhou cartões rotulados; desktop, notebook e celular permanecem sem estouro horizontal.
+- **Resumo confiável:** `quote-summary.js` separa opções válidas, não encontrados, falhas e timeouts. Economia só é calculada entre ofertas de mesma prioridade ST, apresentação e quantidade.
+- **Evidência persistente:** origem do preço, motivo/código de falha, timeout e fallback de busca sobrevivem ao ciclo SQLite/PostgreSQL e continuam visíveis ao reabrir o histórico.
+- **Compatibilidade PostgreSQL:** linhas retornadas pelo driver recuperam os nomes camelCase esperados pela aplicação, preservando cobertura, falhas e origem do preço também no modo servidor.
+
 ### Limite de duração da cotação
 - **Sem espera infinita:** portais web são interrompidos após 5 minutos; Santa Cruz e a cotação completa são encerradas após 10 minutos por padrão.
 - **Cancelamento real:** BrowserWindow, espera de nova tentativa e automação PowerShell recebem sinal de cancelamento, evitando que o trabalho continue escondido depois da resposta.
@@ -51,8 +60,8 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Diagnóstico resiliente:** o fechamento de uma janela web oculta não encerra mais a auditoria enquanto um conector local ainda está trabalhando.
 
 ### Validação
-- `npm test`: 86/86 testes aprovados, incluindo redução do progresso entre itens e eventos reais de início/conclusão dos conectores.
-- Build, lint, sintaxe PowerShell, inspeção visual e diagnóstico real ANB executados antes da publicação.
+- `npm test`: 89/89 testes aprovados, incluindo resumo comparável, normalização PostgreSQL, persistência de evidências, redução do progresso entre itens e eventos reais de início/conclusão dos conectores.
+- Build, lint, sintaxe PowerShell, inspeção visual em 1600x900, 1200x800 e 390x844, e diagnóstico real ANB executados antes da publicação.
 
 ### Teste real de hidroclorotiazida 25 mg - 2026-07-21
 - **DM Paraná:** `R$ 1,50`, Teuto, com estoque e ST, capturado exclusivamente de `Preço final: R$`.

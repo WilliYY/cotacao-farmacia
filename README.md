@@ -134,12 +134,16 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 ### 6. Interface e conferência do preço
 
 - No uso diário, abra **`wimi cotacao.bat`**. Esse atalho chama `cotacao.bat`, que valida o Node.js e executa o bootstrap seguro de atualização e dependências antes de iniciar o Electron.
+- A janela principal abre maximizada, respeita um tamanho mínimo operacional e reorganiza o conteúdo sem rolagem horizontal em notebooks e telas compactas.
 - O processo técnico permanece oculto e grava sua saída em `logs/startup.log`; a janela preta do CMD não fica aberta junto do aplicativo.
 - Uma cotação nunca permanece carregando indefinidamente: por padrão, portais web têm limite de 5 minutos, enquanto Santa Cruz e a cotação completa têm limite de 10 minutos. Ao atingir o limite, processos pendentes são cancelados, resultados reais já obtidos são preservados e as fontes incompletas ficam sinalizadas.
 - Durante a espera, o painel mostra o medicamento atual, o progresso total, o tempo decorrido e o estado real de cada distribuidora: aguardando, pesquisando, concluída, sem resultado, falha, ignorada ou tempo limite. As mensagens também identificam o campo final conferido em cada portal.
 - A pesquisa mostra quantos itens serão cotados e quais distribuidoras estão selecionadas antes de iniciar o robô.
 - A prévia explica cada correção ou herança de contexto antes da cotação. Linhas incompletas permanecem vermelhas e visíveis para ajuste.
 - Cada resultado exibe a origem exata do valor utilizado: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final` e DM Paraná `Preço final: R$`.
+- O resultado consolidado separa cobertura, opções válidas, itens não encontrados, falhas/tempo limite e revisão necessária. A economia só aparece quando existe outra oferta realmente comparável em ST, apresentação e quantidade.
+- A indicação de compra mostra uma vencedora por medicamento, com preço final, custo por unidade, distribuidora, embalagem, EAN e estoque; a segunda opção permanece logo abaixo para conferência. O comparativo de embalagens sólidas fica recolhido por padrão.
+- Gradientes funcionais e cores distintas separam decisão segura, informação, revisão e bloqueio sem depender apenas da cor: todos os estados também têm texto e ícone.
 - Os indicadores de ST, auditoria, estoque e recomendação permanecem visíveis tanto no painel quanto na tabela detalhada.
 - O histórico completo fica recolhido por padrão, pode ser aberto por um único botão e aceita busca pelos medicamentos cotados.
 - Em telas menores, a tabela vira uma sequência de cartões com os rótulos de cada coluna, sem esconder o preço final ou a origem.
