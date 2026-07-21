@@ -1,7 +1,7 @@
 Option Explicit
 
 Dim shell, fileSystem, projectRoot, logDirectory, logPath
-Dim batchPath, command, forwardedArguments, waitForExit, exitCode, index, argument
+Dim batchPath, command, forwardedArguments, waitForExit, exitCode, index, argument, nodeCheck
 
 Set shell = CreateObject("WScript.Shell")
 Set fileSystem = CreateObject("Scripting.FileSystemObject")
@@ -13,6 +13,14 @@ batchPath = fileSystem.BuildPath(projectRoot, "cotacao.bat")
 
 If Not fileSystem.FolderExists(logDirectory) Then
     fileSystem.CreateFolder(logDirectory)
+End If
+
+nodeCheck = shell.Run("cmd.exe /d /c where node >nul 2>&1", 0, True)
+If nodeCheck <> 0 Then
+    MsgBox "O Node.js LTS nao foi encontrado neste computador." & vbCrLf & _
+        "Instale o Node.js e abra novamente o Wimifarma Cotacao.", _
+        vbCritical, "Wimifarma Cotacao"
+    WScript.Quit 1
 End If
 
 forwardedArguments = ""

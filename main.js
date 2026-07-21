@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import dotenv from 'dotenv';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 
 dotenv.config();
 
@@ -36,43 +36,86 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow = null;
+let updateCheckInProgress = false;
+let updateCheckIntervalId = null;
 const isLiveDiagnostic = process.argv.includes('--live-diagnostic');
+const updateStatusPath = path.join(__dirname, 'logs', 'update-status.json');
 
 if (String(process.env.DISABLE_HARDWARE_ACCELERATION || 'true').toLowerCase() !== 'false') {
   app.disableHardwareAcceleration();
 }
 
-function checkGitUpdates() {
+function getUpdateCheckIntervalMs() {
+  const configured = Number.parseInt(process.env.AUTO_UPDATE_CHECK_INTERVAL_MS || '900000', 10);
+  if (!Number.isInteger(configured)) return 900_000;
+  return Math.min(24 * 60 * 60_000, Math.max(5 * 60_000, configured));
+}
+
+function runGit(args) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 60_000
+    }, (error, stdout, stderr) => {
+      if (error) {
+        error.gitStderr = String(stderr || '').trim();
+        reject(error);
+        return;
+      }
+      resolve(String(stdout || '').trim());
+    });
+  });
+}
+
+function readUpdateStatus() {
+  try {
+    return JSON.parse(fs.readFileSync(updateStatusPath, 'utf8'));
+  } catch {
+    return {
+      checkedAt: '',
+      status: 'unknown',
+      automaticUpdateEnabled: String(process.env.AUTO_UPDATE_ON_STARTUP || '').toLowerCase() !== 'false',
+      updated: false,
+      commitCount: 0,
+      branch: '',
+      upstream: '',
+      revision: ''
+    };
+  }
+}
+
+async function checkGitUpdates() {
+  if (updateCheckInProgress) return;
   if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
     logger.info('Not a git repository, skipping update check.');
     return;
   }
-  
+
+  updateCheckInProgress = true;
   logger.info('Checking for Git updates...');
-  exec('git fetch origin', (err) => {
-    if (err) {
-      logger.warn(`Git fetch failed: ${err.message}`);
-      return;
+  try {
+    const upstream = await runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    const separatorIndex = upstream.indexOf('/');
+    if (separatorIndex <= 0) throw new Error('Git upstream is not configured.');
+    const remote = upstream.slice(0, separatorIndex);
+    const branch = upstream.slice(separatorIndex + 1);
+    await runGit(['fetch', '--quiet', remote]);
+    const count = Number.parseInt(await runGit(['rev-list', '--count', `HEAD..${upstream}`]), 10);
+    if (Number.isInteger(count) && count > 0) {
+      logger.info(`Git updates available: ${count} commits behind ${upstream}`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('git-update-available', { count, branch });
+      }
+    } else {
+      logger.info('App is up to date with Git repository.');
     }
-    
-    exec('git rev-parse --abbrev-ref HEAD', (err, stdout) => {
-      if (err) return;
-      const branch = stdout.trim();
-      
-      exec(`git rev-list --count HEAD..origin/${branch}`, (err, stdout) => {
-        if (err) return;
-        const count = parseInt(stdout.trim(), 10);
-        if (count > 0) {
-          logger.info(`Git updates available: ${count} commits behind origin/${branch}`);
-          if (mainWindow) {
-            mainWindow.webContents.send('git-update-available', { count, branch });
-          }
-        } else {
-          logger.info('App is up to date with Git repository.');
-        }
-      });
-    });
-  });
+  } catch (error) {
+    logger.warn(`Git update check failed: ${error.message}`);
+  } finally {
+    updateCheckInProgress = false;
+  }
 }
 
 function createWindow() {
@@ -98,7 +141,7 @@ function createWindow() {
   }
 
   mainWindow.webContents.on('did-finish-load', () => {
-    setTimeout(checkGitUpdates, 2000);
+    setTimeout(checkGitUpdates, 5000);
   });
 
   mainWindow.on('closed', () => {
@@ -121,6 +164,7 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+  updateCheckIntervalId = setInterval(checkGitUpdates, getUpdateCheckIntervalMs());
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -133,6 +177,11 @@ app.on('window-all-closed', () => {
   if (!isLiveDiagnostic && process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  if (updateCheckIntervalId) clearInterval(updateCheckIntervalId);
+  updateCheckIntervalId = null;
 });
 
 // IPC Handler: Run Quote Process
@@ -315,3 +364,5 @@ ipcMain.handle('get-all-supplier-credentials', async () => {
     throw error;
   }
 });
+
+ipcMain.handle('get-update-status', () => readUpdateStatus());

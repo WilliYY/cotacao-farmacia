@@ -112,6 +112,14 @@ select:focus-visible {
   box-shadow: var(--shadow-sm);
 }
 
+.update-banner--success {
+  background: #126b4d;
+}
+
+.update-banner--warning {
+  background: #8a5a08;
+}
+
 .sidebar {
   grid-area: sidebar;
   display: flex;

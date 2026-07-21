@@ -6,6 +6,14 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.0] - 2026-07-21
 
+### Atualização automática em vários computadores
+- **Atualização em toda abertura:** cada instalação Git faz `fetch` e `merge --ff-only` antes do Electron, depois reconcilia dependências e runtime.
+- **Verificação contínua:** o aplicativo consulta o upstream de forma oculta a cada 15 minutos e avisa sobre uma versão que será aplicada na próxima abertura.
+- **Estado visível e portátil:** `logs/update-status.json` registra versão, branch, horário e resultado sem credenciais; falta de internet, `.git`, upstream ou segurança da árvore aparece na própria interface.
+- **Pré-requisitos sem falha silenciosa:** o launcher avisa se Node.js não estiver instalado e a interface diferencia Git ausente de pasta sem metadados Git.
+- **Dados locais preservados:** `.env`, banco SQLite, histórico, logins e logs permanecem fora do Git e nunca são substituídos pela atualização.
+- **Dependências futuras:** política `allowScripts` aprova apenas `sqlite3@6.0.1` e `electron-winstaller@5.4.0`, ambas necessárias e fixadas no lockfile.
+
 ### Inicialização sem console
 - **Uma única interface visível:** `wimi cotacao.bat`, `cotação.bat` e `start-app.bat` iniciam o bootstrap por `wimi cotacao.vbs`, mantendo o CMD oculto enquanto o Electron permanece aberto.
 - **Erros preservados:** toda a saída do inicializador oculto fica em `logs/startup.log`, sem perder diagnóstico de atualização, dependências ou abertura do aplicativo.
@@ -42,7 +50,7 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Diagnóstico resiliente:** o fechamento de uma janela web oculta não encerra mais a auditoria enquanto um conector local ainda está trabalhando.
 
 ### Validação
-- `npm test`: 80/80 testes aprovados.
+- `npm test`: 83/83 testes aprovados.
 - Build, lint, sintaxe PowerShell, inspeção visual e diagnóstico real ANB executados antes da publicação.
 
 ### Teste real de hidroclorotiazida 25 mg - 2026-07-21

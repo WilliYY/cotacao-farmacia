@@ -434,6 +434,7 @@ const mockApi = {
     const creds = JSON.parse(localStorage.getItem('supplier_creds') || '{}');
     return Object.keys(creds).map(k => ({ supplierId: parseInt(k, 10), ...creds[k] }));
   },
+  getUpdateStatus: async () => ({ status: 'up-to-date', automaticUpdateEnabled: true }),
   exportExcel: async (quoteId) => {
     alert(`Planilha exportada com sucesso! (Simulado fora do Electron)`);
     return { success: true, path: 'c:/mock_path/cotacao_wimifarma.xlsx' };
@@ -455,6 +456,7 @@ const unavailableApi = {
   getPopularSearches: async () => [],
   getSupplierCredentials: async () => null,
   getAllSupplierCredentials: async () => [],
+  getUpdateStatus: async () => ({ status: 'unknown', automaticUpdateEnabled: false }),
   onGitUpdateAvailable: null,
   ping: integrationUnavailable
 };
@@ -472,6 +474,7 @@ function App() {
   
   // Git updates state
   const [updateAvailable, setUpdateAvailable] = useState(null);
+  const [updateStatus, setUpdateStatus] = useState(null);
 
   // Popular searches self-learning list
   const [popularSearches, setPopularSearches] = useState([]);
@@ -520,6 +523,9 @@ function App() {
     loadHistory();
     loadPopularSearches();
     loadAllConfiguredSuppliers();
+    api.getUpdateStatus?.().then(setUpdateStatus).catch(error => {
+      console.warn('Failed to read automatic update status:', error);
+    });
     
     // Register Git update callback
     if (api.onGitUpdateAvailable) {
@@ -922,6 +928,41 @@ function App() {
   const inputItemCount = inputAnalysis.length;
   const inputNeedsInfo = inputAnalysis.filter(plan => plan.status === INPUT_STATUS.NEEDS_INFO).length;
   const selectedSupplierCount = Object.values(selectedSuppliers).filter(Boolean).length;
+  const updateStatusNotices = {
+    updated: {
+      type: 'success',
+      message: `Sistema atualizado automaticamente nesta abertura${updateStatus?.revision ? ` para a versão ${updateStatus.revision}` : ''}.`
+    },
+    'fetch-failed': {
+      type: 'warning',
+      message: 'Sem conexão com o servidor de atualizações. A versão local foi aberta e uma nova tentativa será feita automaticamente.'
+    },
+    'not-a-repository': {
+      type: 'warning',
+      message: 'Atualização automática indisponível: esta pasta não contém o repositório Git. Instale o segundo computador pelo clone oficial.'
+    },
+    'git-unavailable': {
+      type: 'warning',
+      message: 'Atualização automática indisponível: o Git não está instalado ou não foi encontrado neste computador.'
+    },
+    'dirty-worktree': {
+      type: 'warning',
+      message: 'Atualização automática pausada para preservar alterações locais neste computador.'
+    },
+    'no-upstream': {
+      type: 'warning',
+      message: 'Atualização automática sem canal remoto configurado. Revise a instalação deste computador.'
+    },
+    disabled: {
+      type: 'warning',
+      message: 'Atualização automática está desativada neste computador.'
+    },
+    'merge-failed': {
+      type: 'warning',
+      message: 'A nova versão não pôde ser aplicada com segurança. A versão local foi preservada.'
+    }
+  };
+  const updateStatusNotice = updateStatus ? updateStatusNotices[updateStatus.status] : null;
 
   return (
     <div className={`app-container ${isHistoryOpen ? '' : 'history-collapsed'}`}>
@@ -930,6 +971,12 @@ function App() {
         <div className="update-banner">
           <ShieldCheck size={16} aria-hidden="true" />
           <span>Atualização disponível ({updateAvailable.count} commits). Ela será verificada e aplicada com segurança na próxima abertura.</span>
+        </div>
+      )}
+      {!updateAvailable && updateStatusNotice && (
+        <div className={`update-banner update-banner--${updateStatusNotice.type}`} role="status">
+          <ShieldCheck size={16} aria-hidden="true" />
+          <span>{updateStatusNotice.message}</span>
         </div>
       )}
 

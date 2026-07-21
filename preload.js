@@ -16,5 +16,6 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('get-supplier-credentials', supplierId),
   getAllSupplierCredentials: () => 
     ipcRenderer.invoke('get-all-supplier-credentials'),
+  getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
   ping: () => ipcRenderer.invoke('ping')
 });

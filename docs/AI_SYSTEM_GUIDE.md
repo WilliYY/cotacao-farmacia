@@ -286,8 +286,12 @@ PG_DATABASE=cotador_st
 - Antes do Electron, o bootstrap consulta o estado Git. Uma atualização só é aceita com worktree limpa, upstream conhecido ou branch idêntica ao padrão de `origin`, `git fetch` bem-sucedido e `git merge --ff-only`.
 - Alterações locais em arquivos rastreados, ausência de referência remota segura, falta de Git ou indisponibilidade de rede não apagam arquivos nem bloqueiam a versão instalada; nesses casos a atualização de código é ignorada. Arquivos locais não rastreados são preservados e qualquer conflito faz o `merge --ff-only` abortar.
 - `npm install --no-audit --no-fund` reconcilia as dependências declaradas antes de iniciar `dev:app`.
-- A interface apenas avisa sobre commits detectados durante a execução. A instalação acontece na próxima abertura, fora do processo Electron, evitando um `git pull` concorrente com arquivos em uso.
+- `package.json#allowScripts` aprova somente as versões fixadas de `sqlite3` e `electron-winstaller`, evitando bloqueio futuro do npm em uma instalação nova sem liberar scripts de dependências indiscriminadamente.
+- Cada inicialização grava um estado sanitizado em `logs/update-status.json`. A interface torna visíveis atualização aplicada, falta de conexão, pasta sem `.git`, branch sem upstream, atualização desativada ou bloqueio por alterações locais.
+- O Electron consulta o upstream com `execFile` oculto na abertura e a cada `AUTO_UPDATE_CHECK_INTERVAL_MS` (15 minutos por padrão). A interface avisa sobre commits detectados; a instalação acontece na próxima abertura, fora do processo Electron, evitando atualizar arquivos em uso.
 - `AUTO_UPDATE_ON_STARTUP=false` desativa a etapa Git. `AUTO_UPDATE_BRANCH` é opcional e só pode completar o upstream da mesma branch que já está ativa; o bootstrap nunca troca de branch automaticamente.
+- Para outro computador, usar `git clone` ou copiar também a pasta oculta `.git`. Um ZIP sem metadados Git é deliberadamente marcado como incapaz de se atualizar, embora a versão local continue utilizável.
+- O launcher VBS valida Node.js antes de iniciar o processo oculto e mostra uma caixa de erro quando o requisito não existe. Git ausente é um estado separado de `.git` ausente para orientar corretamente a preparação do computador.
 
 ### Test Coverage Focus
 The Node test suite validates the high-risk pharmacy purchase paths:

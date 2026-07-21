@@ -32,7 +32,7 @@ import {
   getDb
 } from '../src/lib/database.js';
 import { generateExcelBuffer } from '../src/lib/exporter.js';
-import { getUpdateBlockReason, isElectronRuntimeReady } from '../scripts/bootstrap.mjs';
+import { createUpdateStatus, getUpdateBlockReason, isElectronRuntimeReady } from '../scripts/bootstrap.mjs';
 import { classifyDiagnosticResults } from '../scripts/live-diagnostic.mjs';
 
 process.env.ENABLE_REAL_CONNECTORS = 'false';
@@ -43,6 +43,7 @@ process.env.DB_TYPE = 'sqlite';
 test('Startup updater - applies only when the repository is safe', async (t) => {
   const cleanRepository = {
     isRepository: true,
+    gitAvailable: true,
     dirty: false,
     branch: 'main',
     upstream: 'origin/main'
@@ -73,6 +74,45 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     assert.strictEqual(getUpdateBlockReason(cleanRepository, {}), '');
   });
 
+  await t.test('records automatic update results without credentials or local data', () => {
+    const updated = createUpdateStatus(
+      { updated: true, commitCount: 2 },
+      { ...cleanRepository, revision: 'abc1234' },
+      { AUTO_UPDATE_ON_STARTUP: 'true' },
+      '2026-07-21T12:00:00.000Z'
+    );
+    assert.deepStrictEqual(updated, {
+      checkedAt: '2026-07-21T12:00:00.000Z',
+      status: 'updated',
+      automaticUpdateEnabled: true,
+      updated: true,
+      commitCount: 2,
+      gitAvailable: true,
+      branch: 'main',
+      upstream: 'origin/main',
+      revision: 'abc1234'
+    });
+
+    const offline = createUpdateStatus(
+      { updated: false, skipped: 'fetch-failed' },
+      cleanRepository,
+      { AUTO_UPDATE_ON_STARTUP: 'true' }
+    );
+    assert.strictEqual(offline.status, 'fetch-failed');
+    assert.strictEqual(offline.updated, false);
+  });
+
+  await t.test('distinguishes a missing Git installation from a folder without repository metadata', () => {
+    assert.strictEqual(
+      getUpdateBlockReason({ ...cleanRepository, gitAvailable: false }, {}),
+      'git-unavailable'
+    );
+    assert.strictEqual(
+      getUpdateBlockReason({ ...cleanRepository, isRepository: false }, {}),
+      'not-a-repository'
+    );
+  });
+
   await t.test('detects whether the Electron executable is actually installed', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cotacao-electron-runtime-test-'));
     try {
@@ -88,17 +128,32 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     }
   });
 
+  await t.test('pins the only reviewed dependency install scripts needed on a new PC', () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    assert.deepStrictEqual(packageJson.allowScripts, {
+      'electron-winstaller@5.4.0': true,
+      'sqlite3@6.0.1': true
+    });
+  });
+
   await t.test('uses a hidden Windows launcher while preserving startup logs', () => {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const launcherBatch = fs.readFileSync(path.join(root, 'wimi cotacao.bat'), 'utf8');
     const hiddenLauncher = fs.readFileSync(path.join(root, 'wimi cotacao.vbs'), 'utf8');
     const technicalBatch = fs.readFileSync(path.join(root, 'cotacao.bat'), 'utf8');
+    const electronMain = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
 
     assert.match(launcherBatch, /wscript\.exe/i);
     assert.match(hiddenLauncher, /shell\.Run\(command, 0, waitForExit\)/i);
     assert.match(hiddenLauncher, /logs["']?\)/i);
     assert.match(hiddenLauncher, /startup\.log/i);
+    assert.match(hiddenLauncher, /where node/i);
+    assert.match(hiddenLauncher, /MsgBox/i);
     assert.match(technicalBatch, /npm run dev -- %\*/i);
+    assert.match(electronMain, /AUTO_UPDATE_CHECK_INTERVAL_MS/);
+    assert.match(electronMain, /windowsHide:\s*true/);
+    assert.match(electronMain, /get-update-status/);
   });
 });
 

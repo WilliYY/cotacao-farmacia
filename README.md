@@ -8,7 +8,7 @@ Sistema local de cotação de medicamentos em fornecedores com filtragem por Sub
 
 O sistema roda localmente no computador da farmácia. Certifique-se de possuir o Node.js instalado (Versão LTS sugerida).
 
-1. Clone o repositório ou baixe os arquivos da aplicação.
+1. Clone o repositório com Git ou copie a pasta completa, incluindo a pasta oculta `.git`. Uma pasta baixada apenas como ZIP funciona localmente, mas não consegue receber atualizações automáticas.
 2. Copie o arquivo `.env.example` para `.env`:
    ```bash
    copy .env.example .env
@@ -17,10 +17,12 @@ O sistema roda localmente no computador da farmácia. Certifique-se de possuir o
 
 ### Configuração em outro computador
 
-1. Clone o projeto e abra `wimi cotacao.bat`; o bootstrap instala as dependências compatíveis antes de iniciar.
+1. Instale Git e Node.js LTS, clone o projeto e abra `wimi cotacao.bat`; o bootstrap instala as dependências compatíveis antes de iniciar.
 2. Abra **Configurar Logins das Distribuidoras** no aplicativo.
 3. Cadastre ANB, Profarma, Santa Cruz e **DM Paraná**. A URL da DM é `https://portal.dmparana.com.br/login`.
 4. Faça uma cotação curta e confira se cada fonte aparece como consultada ao vivo.
+
+Se o Node.js estiver ausente, o inicializador oculto mostra uma mensagem em vez de falhar silenciosamente. Se o Git estiver ausente ou a pasta `.git` não tiver sido copiada, o aplicativo abre a versão local e exibe por que a atualização automática não está disponível.
 
 As senhas não ficam no Git. Com `CREDENTIAL_STORAGE_MODE=plain`, configuração operacional padrão, elas ficam codificadas no SQLite local e podem acompanhar uma cópia autorizada do banco para outro computador. Esse modo não é criptografia: limite o acesso à pasta e nunca envie `.env` ou `data/cotador-st.db` ao repositório. O histórico pode permanecer local, mas nunca é usado como fonte de preço para uma nova cotação.
 
@@ -38,8 +40,10 @@ Na abertura, `scripts/bootstrap.mjs`:
 - aplica atualizações Git somente quando a pasta está limpa e a branch rastreia um remoto ou corresponde à branch padrão de `origin`, sempre com `fast-forward`;
 - preserva a versão local quando existem alterações rastreadas, não há referência remota segura ou o remoto está indisponível;
 - executa `npm install` para reconciliar `package-lock.json` e dependências antes de abrir o Electron.
+- registra o resultado em `logs/update-status.json`; o aplicativo avisa quando a atualização automática está bloqueada, quando abriu offline ou quando uma versão foi instalada.
+- verifica novas versões a cada 15 minutos enquanto permanece aberto. A aplicação segura ocorre na próxima abertura, antes de qualquer cotação.
 
-Use `AUTO_UPDATE_ON_STARTUP=false` para desativar a atualização de código. `AUTO_UPDATE_BRANCH` pode indicar a branch remota esperada em uma instalação distribuída. O diagnóstico sem alterações é `node scripts/bootstrap.mjs --diagnose`.
+Use `AUTO_UPDATE_ON_STARTUP=false` para desativar a atualização de código. `AUTO_UPDATE_CHECK_INTERVAL_MS` controla a verificação em segundo plano e `AUTO_UPDATE_BRANCH` pode indicar a branch remota esperada em uma instalação distribuída. O diagnóstico sem alterações é `node scripts/bootstrap.mjs --diagnose`.
 
 ### 2. Rodar Testes Unitários
 Para rodar a suite de testes unitários local (alimentada pelo runner nativo do Node):

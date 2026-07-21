@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, '..');
 const isWindows = process.platform === 'win32';
+const updateStatusPath = path.join(projectRoot, 'logs', 'update-status.json');
 
 function loadBootstrapEnvironment() {
   const environment = { ...process.env };
@@ -59,10 +60,49 @@ function npmExists() {
   return runNpm(['--version']).ok;
 }
 
+function getCurrentRevision() {
+  const revision = run('git', ['rev-parse', '--short', 'HEAD']);
+  return revision.ok ? revision.stdout : '';
+}
+
+export function createUpdateStatus(updateResult, repositoryState, environment = process.env, checkedAt = new Date().toISOString()) {
+  const status = updateResult?.updated ? 'updated' : (updateResult?.skipped || 'unknown');
+  return {
+    checkedAt,
+    status,
+    automaticUpdateEnabled: String(environment.AUTO_UPDATE_ON_STARTUP || '').toLowerCase() !== 'false',
+    updated: updateResult?.updated === true,
+    commitCount: Number.isInteger(updateResult?.commitCount) ? updateResult.commitCount : 0,
+    gitAvailable: repositoryState?.gitAvailable !== false,
+    branch: repositoryState?.branch || '',
+    upstream: repositoryState?.upstream || '',
+    revision: repositoryState?.revision || ''
+  };
+}
+
+function writeUpdateStatus(updateResult, environment = process.env) {
+  const repositoryState = {
+    ...getRepositoryState(environment),
+    revision: getCurrentRevision()
+  };
+  const status = createUpdateStatus(updateResult, repositoryState, environment);
+  fs.mkdirSync(path.dirname(updateStatusPath), { recursive: true });
+  fs.writeFileSync(updateStatusPath, JSON.stringify(status, null, 2), 'utf8');
+  return status;
+}
+
 export function getRepositoryState(environment = process.env) {
   const gitDirectory = path.join(projectRoot, '.git');
-  if (!fs.existsSync(gitDirectory) || !commandExists('git')) {
-    return { isRepository: false, dirty: false, branch: '', upstream: '' };
+  const hasGitDirectory = fs.existsSync(gitDirectory);
+  const gitAvailable = commandExists('git');
+  if (!hasGitDirectory || !gitAvailable) {
+    return {
+      isRepository: hasGitDirectory,
+      gitAvailable,
+      dirty: false,
+      branch: '',
+      upstream: ''
+    };
   }
 
   const status = run('git', ['status', '--porcelain=v1', '--untracked-files=no']);
@@ -86,6 +126,7 @@ export function getRepositoryState(environment = process.env) {
 
   return {
     isRepository: true,
+    gitAvailable: true,
     dirty: !status.ok || status.stdout.length > 0,
     branch: branch.ok ? branch.stdout : '',
     upstream: upstream.ok ? upstream.stdout : ''
@@ -97,6 +138,7 @@ export function getUpdateBlockReason(state, environment = process.env) {
     return 'disabled';
   }
   if (!state.isRepository) return 'not-a-repository';
+  if (state.gitAvailable === false) return 'git-unavailable';
   if (state.dirty) return 'dirty-worktree';
   if (!state.upstream) return 'no-upstream';
   return '';
@@ -108,6 +150,7 @@ function updateRepository(environment = process.env) {
   const blockMessages = {
     disabled: '[UPDATE] Atualizacao automatica desativada por configuracao.',
     'not-a-repository': '[UPDATE] Pasta sem Git; mantendo a versao instalada.',
+    'git-unavailable': '[UPDATE] Programa Git nao encontrado; mantendo a versao instalada.',
     'dirty-worktree': '[UPDATE] Alteracoes locais detectadas; atualizacao Git ignorada para preservar os arquivos.',
     'no-upstream': '[UPDATE] Branch sem upstream; configure o rastreamento remoto ou AUTO_UPDATE_BRANCH.'
   };
@@ -192,6 +235,7 @@ function printDiagnostics(environment) {
     npmAvailable: npmExists(),
     gitAvailable: commandExists('git'),
     electronRuntimeReady: isElectronRuntimeReady(),
+    updateStatusPath,
     autoUpdateEnabled: String(environment.AUTO_UPDATE_ON_STARTUP || '').toLowerCase() !== 'false',
     configuredBranch: String(environment.AUTO_UPDATE_BRANCH || ''),
     ...state
@@ -205,7 +249,9 @@ if (isMainModule) {
     printDiagnostics(environment);
   } else {
     try {
-      updateRepository(environment);
+      const updateResult = updateRepository(environment);
+      const updateStatus = writeUpdateStatus(updateResult, environment);
+      console.log(`[UPDATE] Estado registrado: ${updateStatus.status} (${updateStatus.revision || 'sem revisao Git'}).`);
       installDependencies();
       ensureElectronRuntime();
       if (process.argv.includes('--prepare-only')) {
