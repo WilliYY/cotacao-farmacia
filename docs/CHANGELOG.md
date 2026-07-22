@@ -6,6 +6,11 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Limpeza Automática, Auto-Correção de Foco e Rolagem na Santa Cruz
+- **Limpeza Automática do Texto Anterior (`Ensure-SantaCruzSearchInput`):** Criada função no `santacruz-search.ps1` que foca o campo *Busca inteligente* e executa seleção total (`Ctrl+A`) e apaga (`Backspace`) qualquer pesquisa anterior (como *losartana 50*) antes de digitar o novo item em cotações de múltiplos medicamentos.
+- **Auto-Correção e Verificação de Digitação:** O robô valida em um ciclo de até 3 tentativas se o texto no campo corresponde ao medicamento alvo. Se o usuário clicar fora ou a janela perder o foco durante a escrita, o robô automaticamente refoca o campo, limpa e reescreve a busca inteira antes de enviar.
+- **Varredura Completa da Tabela por Rolagem (`Read-AllSantaCruzRowsWithScroll`):** O robô agora navega e faz rolagem vertical na grade da Santa Cruz (`PageDown` / `Ctrl+Home`), capturando todos os produtos e apresentações retornados sem limitar a leitura aos itens visíveis na tela.
+
 ### Detecção Automática da Santa Cruz em Qualquer Computador
 - **Sonda Multiprocesso e Multi-Janela Resiliente (`santacruz-search.ps1`):** Aprimorada a busca por processos (`javaw`, `java`, `Pe - SantaCruz`, `digitador-sd`) e títulos de janelas (`Pedido Eletrônico`, `SantaCruz`, `Pedidos`, `Vitrine de Ofertas`, `Digitador SD`). O sistema detecta se a Santa Cruz está aberta ou fechada em qualquer computador (Windows 10/11, 32 ou 64-bit) de forma universal.
 - **Detecção em Tempo Real (5s + Foco da Janela):** Reduzido o intervalo de sondagem em `App.jsx` de 30s para **5 segundos**, acionando também a verificação imediata sempre que o usuário alternar para o aplicativo.

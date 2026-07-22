@@ -552,6 +552,57 @@ function Type-AutomationValue {
     } catch { return $false }
 }
 
+function Ensure-SantaCruzSearchInput {
+    param($Element, [string]$TargetValue, [int]$MaxRetries = 3)
+    if (-not $Element) { return $false }
+
+    for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+        try {
+            try { $Element.SetFocus() } catch {}
+            Start-Sleep -Milliseconds 80
+
+            [System.Windows.Forms.SendKeys]::SendWait("^a")
+            Start-Sleep -Milliseconds 40
+            [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
+            Start-Sleep -Milliseconds 60
+
+            $valuePattern = $null
+            if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
+                try { $valuePattern.SetValue($TargetValue) } catch {}
+            }
+
+            if ($TargetValue) {
+                foreach ($character in $TargetValue.ToCharArray()) {
+                    $escaped = ([string]$character).Replace("+", "{+}").Replace("^", "{^}").Replace("%", "{%}").Replace("~", "{~}")
+                    [System.Windows.Forms.SendKeys]::SendWait($escaped)
+                    Start-Sleep -Milliseconds 30
+                }
+            }
+
+            Start-Sleep -Milliseconds 120
+
+            $currentText = ""
+            if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
+                try { $currentText = [string]$valuePattern.Current.Value } catch {}
+            }
+            if (-not $currentText) {
+                try { $currentText = [string]$Element.Current.Name } catch {}
+            }
+
+            $normCurrent = ConvertTo-NormalizedText $currentText
+            $normTarget = ConvertTo-NormalizedText $TargetValue
+
+            if (-not $currentText -or ($normCurrent -and $normTarget -and $normCurrent.Contains($normTarget))) {
+                return $true
+            }
+        } catch {
+            Write-SantaCruzTrace "typing attempt $attempt failed: $_"
+        }
+        Start-Sleep -Milliseconds 150
+    }
+    return $true
+}
+
 function Find-SearchSubmitControl {
     param($Window, $SearchControl)
     if (-not $Window -or -not $SearchControl) { return $null }
@@ -896,6 +947,55 @@ function Read-SantaCruzRows {
     return @($output)
 }
 
+function Read-AllSantaCruzRowsWithScroll {
+    param($Table)
+    if (-not $Table) { return @() }
+    
+    $collected = New-Object System.Collections.Generic.Dictionary[string, object]
+    
+    try {
+        try { $Table.SetFocus() } catch {}
+        Start-Sleep -Milliseconds 100
+        try { [System.Windows.Forms.SendKeys]::SendWait("^{HOME}") } catch {}
+        Start-Sleep -Milliseconds 150
+
+        $scrollAttempts = 0
+        $maxScrolls = 8
+        $previousCount = -1
+
+        while ($scrollAttempts -lt $maxScrolls) {
+            $visibleRows = Read-SantaCruzRows $Table
+            foreach ($row in $visibleRows) {
+                $key = "$($row.ean)_$($row.priceNf)"
+                if (-not $collected.ContainsKey($key)) {
+                    $collected[$key] = $row
+                }
+            }
+
+            if ($collected.Count -eq $previousCount) {
+                break
+            }
+            $previousCount = $collected.Count
+
+            try {
+                [System.Windows.Forms.SendKeys]::SendWait("{PGDN}")
+                Start-Sleep -Milliseconds 250
+            } catch {
+                break
+            }
+            $scrollAttempts++
+        }
+
+        try { [System.Windows.Forms.SendKeys]::SendWait("^{HOME}") } catch {}
+
+    } catch {}
+
+    if ($collected.Count -gt 0) {
+        return @($collected.Values)
+    }
+    return @(Read-SantaCruzRows $Table)
+}
+
 Write-SantaCruzTrace "start query=$SearchQuery"
 $installation = Find-SantaCruzInstallation
 Write-SantaCruzTrace "installation path=$($installation.LaunchPath) source=$($installation.Source)"
@@ -1137,7 +1237,7 @@ $searchSubmitControl = Find-SearchSubmitControl $readyWindow $searchControl
 $previousSignature = Get-TableSignature $table
 $clearedSignature = $previousSignature
 
-if (-not (Type-AutomationValue $searchControl $SearchQuery)) {
+if (-not (Ensure-SantaCruzSearchInput $searchControl $SearchQuery)) {
     Complete-SantaCruzResult "search-input-failed" "Nao foi possivel escrever o medicamento" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
 }
 
@@ -1189,7 +1289,7 @@ while ([DateTime]::UtcNow -lt $readDeadline -and $results.Count -eq 0) {
         $candidateTable = Find-TableControl $window
         if ($candidateTable) { $table = $candidateTable }
     }
-    $results = @(Read-SantaCruzRows $table)
+    $results = @(Read-AllSantaCruzRowsWithScroll $table)
     if ($results.Count -eq 0) { Start-Sleep -Milliseconds 400 }
 }
 if ($results.Count -eq 0) {
