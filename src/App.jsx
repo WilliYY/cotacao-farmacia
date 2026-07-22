@@ -1648,47 +1648,6 @@ function App() {
                   </label>
                 ))}
               </div>
-              {santaCruzSelected && (
-                <div
-                  className={`santacruz-readiness is-${getSantaCruzStatusTone(santaCruzStatus.status, santaCruzStatus.ready)}`}
-                  role="status"
-                  aria-live="polite"
-                >
-                  <div className="santacruz-readiness__icon" aria-hidden="true">
-                    {santaCruzStatus.ready
-                      ? <CheckCircle2 size={18} />
-                      : santaCruzStatus.status === 'updating' || santaCruzStatus.status === 'preparing'
-                        ? <Clock3 size={18} />
-                        : <CircleAlert size={18} />}
-                  </div>
-                  <div className="santacruz-readiness__copy">
-                    <strong>{getSantaCruzStatusLabel(santaCruzStatus.status)}</strong>
-                    <span>{santaCruzStatus.reason || 'Verifique o aplicativo antes da cotação.'}</span>
-                    {santaCruzStatus.windowTitle && <small>Janela: {santaCruzStatus.windowTitle}</small>}
-                  </div>
-                  <div className="santacruz-readiness__actions">
-                    {!santaCruzStatus.ready && santaCruzStatus.canAutoPrepare && (
-                      <button className="btn btn-primary btn-compact" onClick={handlePrepareSantaCruz} disabled={isPreparingSantaCruz}>
-                        <PanelLeftOpen size={15} aria-hidden="true" />
-                        {isPreparingSantaCruz
-                          ? 'Preparando...'
-                          : santaCruzStatus.status === 'running-without-window'
-                            ? 'Reiniciar e preparar'
-                            : 'Abrir e preparar'}
-                      </button>
-                    )}
-                    <button
-                      className="icon-button"
-                      onClick={() => loadSantaCruzStatus(true)}
-                      disabled={isCheckingSantaCruz || isPreparingSantaCruz}
-                      aria-label="Verificar Santa Cruz novamente"
-                      title="Verificar Santa Cruz novamente"
-                    >
-                      <RotateCcw size={16} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
 
             <div className="action-row">
