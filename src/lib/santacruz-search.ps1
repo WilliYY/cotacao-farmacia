@@ -361,7 +361,7 @@ function Find-SantaCruzWindow {
         Write-SantaCruzTrace "window-scan failed: $_"
     }
 
-    # --- Strategy 2: Find process first, then its windows (fallback for headless startup) ---
+    # --- Strategy 2: Find process first, then its windows ---
     $process = Find-SantaCruzProcess
     if (-not $process) { return $null }
     try {
@@ -373,23 +373,22 @@ function Find-SantaCruzWindow {
             [System.Windows.Automation.TreeScope]::Children,
             $processCondition
         )
-    } catch { return $null }
-
-    $candidates = @()
-    foreach ($candidateWindow in $windows) {
-        try {
-            $title = [string]$candidateWindow.Current.Name
-            if ($title -match '(?i)santa\s*-?\s*cruz|pedido\s*eletr|digitador|vitrine' -or $title -eq "Pedidos") {
-                $bounds = $candidateWindow.Current.BoundingRectangle
-                $score = [double]($bounds.Width * $bounds.Height)
-                if ($title -eq "Pedidos") { $score += 10000000 }
-                if ($title -match '(?i)^Pedido Eletr.nico SantaCruz') { $score += 1000000 }
-                $candidates += [PSCustomObject]@{ Window = $candidateWindow; Score = $score }
+        if ($windows.Count -gt 0) {
+            $candidates = @()
+            foreach ($candidateWindow in $windows) {
+                try {
+                    $title = [string]$candidateWindow.Current.Name
+                    $bounds = $candidateWindow.Current.BoundingRectangle
+                    $score = [double]($bounds.Width * $bounds.Height)
+                    if ($title -match '(?i)santa\s*-?\s*cruz|pedido\s*eletr|digitador|vitrine|pedidos') { $score += 1000000 }
+                    $candidates += [PSCustomObject]@{ Window = $candidateWindow; Score = $score }
+                } catch {}
             }
-        } catch {}
-    }
-    $winner = $candidates | Sort-Object Score -Descending | Select-Object -First 1
-    return $(if ($winner) { $winner.Window } else { $null })
+            $winner = $candidates | Sort-Object Score -Descending | Select-Object -First 1
+            if ($winner) { return $winner.Window }
+        }
+    } catch { return $null }
+    return $null
 }
 
 function Find-SantaCruzProcess {

@@ -93,7 +93,7 @@ function runSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) 
       credentials?.password || '',
       credentials?.clientCode || ''
     ], {
-      windowsHide: true,
+      windowsHide: false,
       timeout,
       maxBuffer: 4 * 1024 * 1024,
       env: createSantaCruzProcessEnvironment(credentials),
