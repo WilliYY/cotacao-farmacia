@@ -4,6 +4,35 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ---
 
+## [1.7.2] - 2026-07-22
+
+### Bloqueio de Instância Dupla
+- **Instância Única Rigorosa (`requestSingleInstanceLock`):** Implementada trava no `main.js` com `process.exit(0)` imediato se uma segunda instância do aplicativo for iniciada. Ao tentar abrir novamente, o aplicativo existente em execução é imediatamente restaurado e trazido ao foco na tela.
+
+### Layout de Digitação e Botão Fixo
+- **Barra de Rolagem no Textarea:** Adicionada barra de rolagem vertical interna (`overflow-y: auto`, `max-height: 240px`) no campo de entrada de texto e na prévia de inteligência, permitindo digitar quantos itens forem necessários sem estourar o layout.
+- **Botão Pesquisar Fixo (`position: sticky`):** A barra de ação (`.action-row`) com o botão "Pesquisar preços" foi fixada na parte inferior da tela (`position: sticky; bottom: 0; z-index: 30`), garantindo que o botão fique 100% visível e acessível a qualquer momento.
+
+### Retorno Sequencial Multi-Item Completo
+- **Todos os Itens em Sequência (1, 2, 3...):** Ajustada a geração de recomendações para manter e exibir todos os itens digitados em ordem rigorosa.
+- **Destaque por Medicamento:** Se um item não tiver opções válidas nas distribuidoras, ele exibe um cartão e uma linha dedicada informando explicitamente *"Não Disponível nas distribuidoras pesquisadas."*, garantindo que nenhum item digitado "desapareça" do relatório final.
+
+### Redução do Tempo Limite de Pesquisa (2 Minutos por Item)
+- **Timeout Ajustado para 2 Minutos (`120.000ms`):** Atualizado `CONNECTOR_TIMEOUT_MS`, `SCRAPER_TIMEOUT_MS` e `SANTACRUZ_TIMEOUT_MS` de 5/10 minutos para **2 minutos por item**, garantindo respostas muito mais rápidas sem travamento prolongado em portais lentos.
+- **Timeout Global de Cotação (`240.000ms`):** Reajustado `QUOTE_TIMEOUT_MS` para 4 minutos no total.
+
+### Design e Ícone Personalizado do Atalho
+- **Ícone de Alta Resolução (`assets/icon.ico` e `assets/icon.png`):** Criado ícone moderno em gradiente azul-turquesa profundo com símbolo de farmácia/cápsula e tipografia 'WF'.
+- **Atalho da Área de Trabalho (`wimi cotacao.lnk`):** Gerado e aplicado o novo ícone `.ico` no atalho da Área de Trabalho do Windows e no projeto local, eliminando o ícone genérico de engrenagem cinza (`cmd.exe`).
+- **Ícone do App no Electron (`main.js`):** Configurada a propriedade `icon` da janela do Electron para exibir o novo ícone na barra de tarefas e título do Windows.
+
+## [1.7.1] - 2026-07-22
+
+### Inicialização e Tela de Carregamento Instantânea
+- **Tela de Splash HTML/CSS Animada:** Inserida tela de abertura com animação de pulso no ícone da marca, barra de progresso fluida e status visual ("Carregando módulos e banco de dados...") renderizada instantaneamente pelo Chromium assim que a janela abre, eliminando a tela em branco durante o carregamento do React e dos scripts.
+- **Fundo Escuro Nativo no Electron (`#0b0f19`):** Alterada a cor de fundo do `BrowserWindow` de cinza claro para azul escuro profundo (`#0b0f19`), combinando 100% com o tema visual escuro do sistema e evitando flashes ou impressão de travamento do programa ao iniciar.
+- **Abertura Antecipada da Janela:** A janela principal do Electron agora é instanciada e exibida imediatamente na inicialização enquanto o banco de dados e os módulos são inicializados em paralelo.
+
 ## [1.7.0] - 2026-07-21
 
 ### Atualização automática em vários computadores

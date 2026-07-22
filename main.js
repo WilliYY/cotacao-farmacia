@@ -122,14 +122,16 @@ async function checkGitUpdates() {
 }
 
 function createWindow() {
+  const iconPath = path.join(__dirname, 'assets', 'icon.ico');
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 1024,
     minHeight: 700,
     show: false,
-    backgroundColor: '#f3f6f8',
+    backgroundColor: '#0b0f19',
     title: 'Wimifarma Cotação',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -167,11 +169,20 @@ function sendQuoteProgress(event, payload) {
   event.sender.send('quote-progress', payload);
 }
 
-app.whenReady().then(async () => {
-  const userDataPath = app.getPath('userData');
-  console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
-  await initDatabase(userDataPath);
+const gotSingleInstanceLock = isDiagnosticMode || app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  console.log('Another instance of Wimifarma Cotação is already running. Quitting secondary instance.');
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
 
+app.whenReady().then(async () => {
   if (isLiveDiagnostic) {
     const { runLiveDiagnostic } = await import('./scripts/live-diagnostic.mjs');
     const diagnosticArgs = process.argv.slice(2).filter(value => value !== '--live-diagnostic');
@@ -198,7 +209,13 @@ app.whenReady().then(async () => {
     return;
   }
 
+  // Open window immediately so user sees the animated loading splash screen
   createWindow();
+
+  const userDataPath = app.getPath('userData');
+  console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
+  await initDatabase(userDataPath);
+
   updateCheckIntervalId = setInterval(checkGitUpdates, getUpdateCheckIntervalMs());
 
   app.on('activate', () => {
@@ -214,9 +231,14 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('will-quit', async () => {
   if (updateCheckIntervalId) clearInterval(updateCheckIntervalId);
   updateCheckIntervalId = null;
+  try {
+    await closeDatabase();
+  } catch (err) {
+    logger.warn(`Error closing database on exit: ${err.message}`);
+  }
 });
 
 // IPC Handler: Run Quote Process

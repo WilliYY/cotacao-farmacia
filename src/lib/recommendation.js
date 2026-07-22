@@ -10,9 +10,9 @@ import { logger } from './logger.js';
 dotenv.config();
 
 const MAX_LIVE_CAPTURE_AGE_MS = 5 * 60 * 1000;
-const DEFAULT_CONNECTOR_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_SANTACRUZ_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_QUOTE_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_CONNECTOR_TIMEOUT_MS = 2 * 60 * 1000;
+const DEFAULT_SANTACRUZ_TIMEOUT_MS = 2 * 60 * 1000;
+const DEFAULT_QUOTE_TIMEOUT_MS = 4 * 60 * 1000;
 
 export function isFreshLiveCapture(result, now = Date.now(), maxAgeMs = MAX_LIVE_CAPTURE_AGE_MS) {
   const capturedAt = Date.parse(result?.capturedAt || '');

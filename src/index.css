@@ -602,7 +602,9 @@ select:focus-visible {
 }
 
 textarea.search-textarea {
-  height: 210px;
+  height: 180px;
+  max-height: 240px;
+  overflow-y: auto !important;
   padding: 0.85rem;
   font-size: 0.9rem;
   line-height: 1.55;
@@ -639,7 +641,12 @@ textarea.search-textarea {
   font-weight: 750;
 }
 
-.intelligence-preview__list,
+.intelligence-preview__list {
+  display: grid;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
 .interpretation-panel__list {
   display: grid;
 }
@@ -908,7 +915,14 @@ textarea.search-textarea {
   align-items: center;
   justify-content: flex-end;
   gap: 0.5rem;
-  padding-top: 0.1rem;
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  background: var(--surface, #0f172a);
+  padding-top: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  margin-top: 1rem;
 }
 
 .settings-card {

@@ -1129,49 +1129,66 @@ function App() {
 
     const rows = [];
     activeQuote.items.forEach(item => {
-      if (!item.results) return;
-
-      item.results.forEach(res => {
+      const results = item.results || [];
+      const validFilteredResults = results.filter(res => {
         const forceVisible = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(item.status);
-        // Filter by supplier
-        if (!forceVisible && filterSupplier !== 'All' && res.source !== filterSupplier) return;
+        if (!forceVisible && filterSupplier !== 'All' && res.source !== filterSupplier) return false;
+        if (!forceVisible && filterOnlyST && !(res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_SEPARADO')) return false;
+        if (!forceVisible && !filterShowIgnored && res.stStatus === 'SEM_ST') return false;
+        if (!forceVisible && !filterShowUnknown && res.stStatus === 'ST_DESCONHECIDO') return false;
+        return true;
+      });
 
-        // Apply ST-specific filters
-        if (!forceVisible && filterOnlyST && !(res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_SEPARADO')) return;
-        if (!forceVisible && !filterShowIgnored && res.stStatus === 'SEM_ST') return;
-        if (!forceVisible && !filterShowUnknown && res.stStatus === 'ST_DESCONHECIDO') return;
-
+      if (validFilteredResults.length > 0) {
+        validFilteredResults.forEach(res => {
+          rows.push({
+            itemId: item.id,
+            itemStatus: item.status,
+            rawText: item.rawText,
+            ...res
+          });
+        });
+      } else {
         rows.push({
           itemId: item.id,
           itemStatus: item.status,
           rawText: item.rawText,
-          ...res
+          supplierProductName: 'Não Disponível nas distribuidoras pesquisadas.',
+          isNotFoundPlaceholder: true,
+          price: 0,
+          stStatus: '-',
+          availability: 'indisponível',
+          source: '-',
+          ean: '-'
         });
-      });
+      }
     });
 
     return rows;
   };
 
-  // One purchase recommendation per searched item.
+  // One purchase recommendation per searched item in original order.
   const getPurchaseRecommendations = () => {
     if (!activeQuote || !activeQuote.items) return [];
 
-    const recs = [];
-    activeQuote.items.forEach(item => {
-      if (!item.results) return;
-
-      const validResults = item.results
+    return activeQuote.items.map(item => {
+      const validResults = (item.results || [])
         .filter(result => result.isValidOption && Number(result.price || 0) > 0)
         .sort((left, right) => getDisplayUnitPrice(left) - getDisplayUnitPrice(right));
-      const best = validResults.find(result => result.recommendationStatus === 'Melhor preço com ST') || validResults[0];
-      if (!best) return;
-      const second = validResults.find(result => result.recommendationStatus === 'Segunda opção com ST') ||
-        validResults.find(result => result.id !== best.id);
-      recs.push({ itemId: item.id, rawText: item.rawText, best, second });
-    });
 
-    return recs;
+      const best = validResults.find(result => result.recommendationStatus === 'Melhor preço com ST') || validResults[0] || null;
+      const second = best ? (validResults.find(result => result.recommendationStatus === 'Segunda opção com ST') ||
+        validResults.find(result => result.id !== best.id) || null) : null;
+
+      return {
+        itemId: item.id,
+        rawText: item.rawText,
+        itemStatus: item.status,
+        best,
+        second,
+        hasResult: Boolean(best)
+      };
+    });
   };
 
   const getFilteredHistory = () => {
@@ -1771,39 +1788,53 @@ function App() {
                 </div>
 
                 <div className="recommendations-deck">
-                  {purchaseRecommendations.map(({ itemId, rawText, best, second }) => (
-                    <article key={itemId} className="recommendation-card">
-                      <div className="recommendation-card__topline">
-                        <span className="recommendation-badge is-best"><CheckCircle2 size={13} /> Melhor opção com ST</span>
-                        <span className={`supplier-chip is-${getSupplierTone(best.source)}`}>{best.source}</span>
-                      </div>
-                      <div className="rec-search-name">Solicitado: “{rawText}”</div>
-                      <div className="rec-product-title">{best.supplierProductName}</div>
+                  {purchaseRecommendations.map(({ itemId, rawText, best, second, hasResult }, index) => (
+                    <article key={itemId} className={`recommendation-card ${!hasResult ? 'is-empty' : ''}`}>
+                      {hasResult ? (
+                        <>
+                          <div className="recommendation-card__topline">
+                            <span className="recommendation-badge is-best"><CheckCircle2 size={13} /> Item #{index + 1} - Melhor opção com ST</span>
+                            <span className={`supplier-chip is-${getSupplierTone(best.source)}`}>{best.source}</span>
+                          </div>
+                          <div className="rec-search-name">Solicitado: “{rawText}”</div>
+                          <div className="rec-product-title">{best.supplierProductName}</div>
 
-                      <div className="recommendation-price-block">
-                        <div>
-                          <span>{getPriceSourceLabel(best)}</span>
-                          <strong>{formatCurrency(best.price)}</strong>
-                        </div>
-                        <div>
-                          <span>Custo por unidade</span>
-                          <strong>{formatCurrency(getDisplayUnitPrice(best))}</strong>
-                        </div>
-                      </div>
+                          <div className="recommendation-price-block">
+                            <div>
+                              <span>{getPriceSourceLabel(best)}</span>
+                              <strong>{formatCurrency(best.price)}</strong>
+                            </div>
+                            <div>
+                              <span>Custo por unidade</span>
+                              <strong>{formatCurrency(getDisplayUnitPrice(best))}</strong>
+                            </div>
+                          </div>
 
-                      <div className="recommendation-meta">
-                        <span><strong>Embalagem</strong>{best.packaging || `${best.quantity || 1} unidades`}</span>
-                        <span><strong>EAN</strong>{best.ean || 'Não informado'}</span>
-                        <span><strong>Estoque</strong>{best.availability || 'Conferido'}</span>
-                      </div>
+                          <div className="recommendation-meta">
+                            <span><strong>Embalagem</strong>{best.packaging || `${best.quantity || 1} unidades`}</span>
+                            <span><strong>EAN</strong>{best.ean || 'Não informado'}</span>
+                            <span><strong>Estoque</strong>{best.availability || 'Conferido'}</span>
+                          </div>
 
-                      {second && (
-                        <div className="recommendation-second">
-                          <span>2ª opção</span>
-                          <strong>{second.source}</strong>
-                          <span>{formatCurrency(second.price)}</span>
-                          <small>{second.packaging || `${second.quantity || 1} unidades`} · {getPriceSourceLabel(second)}</small>
-                        </div>
+                          {second && (
+                            <div className="recommendation-second">
+                              <span>2ª opção</span>
+                              <strong>{second.source}</strong>
+                              <span>{formatCurrency(second.price)}</span>
+                              <small>{second.packaging || `${second.quantity || 1} unidades`} · {getPriceSourceLabel(second)}</small>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div className="recommendation-card__topline">
+                            <span className="recommendation-badge is-warning"><CircleAlert size={13} /> Item #{index + 1} - Indisponível</span>
+                          </div>
+                          <div className="rec-search-name">Solicitado: “{rawText}”</div>
+                          <div className="rec-product-title" style={{ color: '#f87171', fontWeight: 650, marginTop: '0.5rem', fontSize: '0.9rem' }}>
+                            Não Disponível nas distribuidoras pesquisadas.
+                          </div>
+                        </>
                       )}
                     </article>
                   ))}
@@ -2099,6 +2130,28 @@ function App() {
                   </thead>
                   <tbody>
                     {filteredRows.map((row, index) => {
+                      if (row.isNotFoundPlaceholder) {
+                        return (
+                          <tr key={`placeholder-${row.itemId}-${index}`} className="result-row--problem">
+                            <td className="searched-query-cell" data-label="Busca">"{row.rawText}"</td>
+                            <td className="ean-cell" data-label="EAN">-</td>
+                            <td data-label="Produto encontrado">
+                              <div className="product-name-cell" style={{ color: '#f87171', fontStyle: 'italic', fontWeight: 600 }}>
+                                Não Disponível nas distribuidoras pesquisadas.
+                              </div>
+                            </td>
+                            <td data-label="Embalagem">-</td>
+                            <td data-label="Distribuidora">-</td>
+                            <td data-label="Preço final">-</td>
+                            <td data-label="ST">-</td>
+                            <td data-label="Estoque"><span className="badge badge-st-sem">Indisponível</span></td>
+                            <td data-label="Auditoria">Item não localizado</td>
+                            <td data-label="Recomendação">-</td>
+                            <td data-label="Ações">-</td>
+                          </tr>
+                        );
+                      }
+
                       const rowClasses = [
                         ['not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(row.itemStatus) ? 'result-row--problem' : '',
                         row.recommendationStatus === 'Melhor preço com ST' ? 'result-row--best' : '',

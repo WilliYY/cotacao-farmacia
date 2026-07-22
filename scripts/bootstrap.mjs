@@ -161,9 +161,9 @@ function updateRepository(environment = process.env) {
 
   console.log(`[UPDATE] Verificando ${initialState.upstream}...`);
   const remote = initialState.upstream.split('/')[0];
-  const fetch = run('git', ['fetch', '--quiet', remote], { timeout: 60_000 });
+  const fetch = run('git', ['fetch', '--quiet', remote], { timeout: 5_000 });
   if (!fetch.ok) {
-    console.log('[UPDATE] Sem acesso ao repositorio remoto; iniciando a versao local.');
+    console.log('[UPDATE] Sem acesso ao repositorio remoto ou conexao lenta; iniciando a versao local.');
     return { updated: false, skipped: 'fetch-failed' };
   }
 
@@ -184,7 +184,14 @@ function updateRepository(environment = process.env) {
   return { updated: true, commitCount };
 }
 
-function installDependencies() {
+function installDependencies(updateResult) {
+  const nodeModulesPath = path.join(projectRoot, 'node_modules');
+  const needsInstall = !fs.existsSync(nodeModulesPath) || updateResult?.updated === true;
+
+  if (!needsInstall) {
+    return;
+  }
+
   if (!npmExists()) {
     throw new Error('npm nao foi encontrado. Instale uma versao atual do Node.js.');
   }
@@ -199,13 +206,18 @@ function installDependencies() {
   }
 }
 
-export function isElectronRuntimeReady(rootDirectory = projectRoot) {
+export function getElectronExecutablePath(rootDirectory = projectRoot) {
   const electronDirectory = path.join(rootDirectory, 'node_modules', 'electron');
   const pathFile = path.join(electronDirectory, 'path.txt');
-  if (!fs.existsSync(pathFile)) return false;
+  if (!fs.existsSync(pathFile)) return null;
 
   const executableName = fs.readFileSync(pathFile, 'utf8').trim();
-  return executableName.length > 0 && fs.existsSync(path.join(electronDirectory, 'dist', executableName));
+  const execPath = path.join(electronDirectory, 'dist', executableName);
+  return fs.existsSync(execPath) ? execPath : null;
+}
+
+export function isElectronRuntimeReady(rootDirectory = projectRoot) {
+  return Boolean(getElectronExecutablePath(rootDirectory));
 }
 
 function ensureElectronRuntime() {
@@ -223,6 +235,22 @@ function ensureElectronRuntime() {
 
 function startApplication() {
   console.log('[APP] Iniciando Wimifarma Cotacao...');
+  const distHtml = path.join(projectRoot, 'dist', 'index.html');
+
+  // Build production assets if missing
+  if (!fs.existsSync(distHtml)) {
+    console.log('[APP] Compilando interface de producao...');
+    runNpm(['run', 'build'], { stdio: 'inherit' });
+  }
+
+  const electronExec = getElectronExecutablePath();
+
+  // Launch Electron executable directly for 100% clean process tree and instant exit
+  if (electronExec && fs.existsSync(distHtml) && !process.env.FORCE_DEV_SERVER) {
+    const result = run(electronExec, ['.'], { stdio: 'inherit' });
+    return result.status ?? 0;
+  }
+
   const application = runNpm(['run', 'dev:app'], { stdio: 'inherit' });
   return application.status ?? 1;
 }
@@ -252,7 +280,7 @@ if (isMainModule) {
       const updateResult = updateRepository(environment);
       const updateStatus = writeUpdateStatus(updateResult, environment);
       console.log(`[UPDATE] Estado registrado: ${updateStatus.status} (${updateStatus.revision || 'sem revisao Git'}).`);
-      installDependencies();
+      installDependencies(updateResult);
       ensureElectronRuntime();
       if (process.argv.includes('--prepare-only')) {
         console.log('[APP] Preparacao concluida; abertura ignorada por --prepare-only.');

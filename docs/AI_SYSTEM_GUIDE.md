@@ -232,23 +232,6 @@ The React frontend is an operational workspace with a dark navigation rail and a
 - **Icons:** interface commands use `lucide-react`; buttons retain accessible text or labels and visible keyboard focus.
 - **Manual review:** opening `Revisar` keeps the existing edit and recalculation flow through `recalculateQuoteItemRecommendations`.
 
----
-
-## 🛡️ Logging, Audit & Self-Diagnostics
-
-### 1. Dual Logger System
-The `logger.js` component operates on a dual-logging system:
-- **Database Table:** Inserts logs into `SystemLog` table for live visualization in the web panel.
-- **Local File:** Appends logs to `logs/app.log`.
-
-### 2. Log Rotation
-To protect server space, the physical `logs/app.log` file is protected by a **2MB limit**. When the file surpasses 2MB, the system automatically truncates it, preserving only the last 500 lines.
-
----
-
-## 🚀 Environment Setup & Deployment
-
-Configure your project using variables in your `.env` file:
 
 ```bash
 # Environment Mode
