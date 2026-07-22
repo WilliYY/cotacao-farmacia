@@ -647,65 +647,54 @@ function Ensure-SantaCruzSearchInput {
 
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         try {
-            try { $Element.SetFocus() } catch {}
-            Start-Sleep -Milliseconds 80
-
-            # Step 1: Clear text box completely
+            # --- Method A: Pure UIAutomation SetValue (SAFE: 0 keystrokes sent to window) ---
             $valuePattern = $null
             if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
-                try { $valuePattern.SetValue("") } catch {}
-            }
-            [System.Windows.Forms.SendKeys]::SendWait("^a")
-            Start-Sleep -Milliseconds 30
-            [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
-            [System.Windows.Forms.SendKeys]::SendWait("{DELETE}")
-            Start-Sleep -Milliseconds 50
-
-            # Step 2: Try SetValue first (cleanest insertion, avoids double typing)
-            $setValueSuccess = $false
-            if ($valuePattern) {
                 try {
+                    $valuePattern.SetValue("")
                     $valuePattern.SetValue($TargetValue)
-                    $setValueSuccess = $true
+                    Start-Sleep -Milliseconds 60
+                    $valText = [string]$valuePattern.Current.Value
+                    $normValText = ConvertTo-NormalizedText $valText
+                    if (-not $TargetValue -or ($normValText -and $normTarget -and $normValText -eq $normTarget)) {
+                        Write-SantaCruzTrace "input-success by SetValue text='$valText'"
+                        return $true
+                    }
                 } catch {}
             }
 
-            # Step 3: Check text after SetValue
-            $currentText = ""
-            if ($valuePattern) {
-                try { $currentText = [string]$valuePattern.Current.Value } catch {}
-            }
-            if (-not $currentText) {
-                try { $currentText = [string]$Element.Current.Name } catch {}
-            }
+            # --- Method B: Mouse Click Focus + Keystrokes (Fallback) ---
+            # Click inside the physical bounds of the edit box to lock Win32 focus on the input control
+            try {
+                $bounds = $Element.Current.BoundingRectangle
+                if ($bounds.Width -gt 0 -and $bounds.Height -gt 0) {
+                    $cx = [int]($bounds.Left + ($bounds.Width / 2))
+                    $cy = [int]($bounds.Top + ($bounds.Height / 2))
+                    [SantaCruzMouse]::SetCursorPos($cx, $cy) | Out-Null
+                    [SantaCruzMouse]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
+                    [SantaCruzMouse]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
+                    Start-Sleep -Milliseconds 80
+                }
+            } catch {}
 
-            $normCurrent = ConvertTo-NormalizedText $currentText
+            try { $Element.SetFocus() } catch {}
+            Start-Sleep -Milliseconds 50
 
-            # If SetValue produced exact match, return success
-            if ($normCurrent -and $normTarget -and $normCurrent -eq $normTarget) {
-                Write-SantaCruzTrace "input-success by SetValue text='$currentText'"
-                return $true
-            }
-
-            # Step 4: If SetValue didn't produce exact match, clear and type via SendKeys
-            if ($valuePattern) { try { $valuePattern.SetValue("") } catch {} }
             [System.Windows.Forms.SendKeys]::SendWait("^a")
             Start-Sleep -Milliseconds 30
             [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
-            [System.Windows.Forms.SendKeys]::SendWait("{DELETE}")
-            Start-Sleep -Milliseconds 50
+            Start-Sleep -Milliseconds 40
 
             if ($TargetValue) {
                 foreach ($character in $TargetValue.ToCharArray()) {
                     $escaped = ([string]$character).Replace("+", "{+}").Replace("^", "{^}").Replace("%", "{%}").Replace("~", "{~}")
                     [System.Windows.Forms.SendKeys]::SendWait($escaped)
-                    Start-Sleep -Milliseconds 30
+                    Start-Sleep -Milliseconds 25
                 }
             }
 
-            Start-Sleep -Milliseconds 120
+            Start-Sleep -Milliseconds 100
 
-            # Step 5: Final verification — STRICT EXACT MATCH REQUIRED ($normCurrent -eq $normTarget)
             $currentText = ""
             if ($valuePattern) {
                 try { $currentText = [string]$valuePattern.Current.Value } catch {}
@@ -723,7 +712,7 @@ function Ensure-SantaCruzSearchInput {
 
             Write-SantaCruzTrace "input-mismatch attempt ${attempt}: current='$currentText' vs target='$TargetValue'"
         } catch {
-            Write-SantaCruzTrace "typing attempt $attempt failed: $_"
+            Write-SantaCruzTrace "typing attempt ${attempt} failed: $_"
         }
         Start-Sleep -Milliseconds 150
     }
