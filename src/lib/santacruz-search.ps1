@@ -497,6 +497,7 @@ function Find-ControlByAutomationId {
 
 function Find-TableControl {
     param($Window)
+    if (-not $Window) { return $null }
     try {
         $tableCondition = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -508,22 +509,11 @@ function Find-TableControl {
         )
 
         foreach ($table in $tables) {
-            $names = New-Object System.Collections.Generic.HashSet[string]
-            $elements = $table.FindAll(
-                [System.Windows.Automation.TreeScope]::Descendants,
-                [System.Windows.Automation.PropertyCondition]::TrueCondition
-            )
-            foreach ($element in $elements) {
-                $name = [string]$element.Current.Name
-                if ($name) { $names.Add((ConvertTo-NormalizedText $name)) | Out-Null }
-            }
-            if ($names.Contains("codigo ean") -and $names.Contains("descricao") -and $names.Contains("preco nf")) {
-                try {
-                    $grid = $table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
-                    if ($grid.Current.ColumnCount -ge 12) { return $table }
-                } catch {
-                    return $table
-                }
+            try {
+                $grid = $table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
+                if ($grid.Current.ColumnCount -ge 12) { return $table }
+            } catch {
+                return $table
             }
         }
     } catch { return $null }
@@ -640,83 +630,44 @@ function Type-AutomationValue {
 }
 
 function Ensure-SantaCruzSearchInput {
-    param($Element, [string]$TargetValue, [int]$MaxRetries = 3)
+    param($Element, [string]$TargetValue)
     if (-not $Element) { return $false }
 
-    $normTarget = ConvertTo-NormalizedText $TargetValue
-
-    for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
-        try {
-            # --- Method A: Pure UIAutomation SetValue (SAFE: 0 keystrokes sent to window) ---
-            $valuePattern = $null
-            if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
-                try {
-                    $valuePattern.SetValue("")
-                    $valuePattern.SetValue($TargetValue)
-                    Start-Sleep -Milliseconds 60
-                    $valText = [string]$valuePattern.Current.Value
-                    $normValText = ConvertTo-NormalizedText $valText
-                    if (-not $TargetValue -or ($normValText -and $normTarget -and $normValText -eq $normTarget)) {
-                        Write-SantaCruzTrace "input-success by SetValue text='$valText'"
-                        return $true
-                    }
-                } catch {}
-            }
-
-            # --- Method B: Mouse Click Focus + Keystrokes (Fallback) ---
-            # Click inside the physical bounds of the edit box to lock Win32 focus on the input control
-            try {
-                $bounds = $Element.Current.BoundingRectangle
-                if ($bounds.Width -gt 0 -and $bounds.Height -gt 0) {
-                    $cx = [int]($bounds.Left + ($bounds.Width / 2))
-                    $cy = [int]($bounds.Top + ($bounds.Height / 2))
-                    [SantaCruzMouse]::SetCursorPos($cx, $cy) | Out-Null
-                    [SantaCruzMouse]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
-                    [SantaCruzMouse]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
-                    Start-Sleep -Milliseconds 80
-                }
-            } catch {}
-
-            try { $Element.SetFocus() } catch {}
-            Start-Sleep -Milliseconds 50
-
-            [System.Windows.Forms.SendKeys]::SendWait("^a")
-            Start-Sleep -Milliseconds 30
-            [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
-            Start-Sleep -Milliseconds 40
-
-            if ($TargetValue) {
-                foreach ($character in $TargetValue.ToCharArray()) {
-                    $escaped = ([string]$character).Replace("+", "{+}").Replace("^", "{^}").Replace("%", "{%}").Replace("~", "{~}")
-                    [System.Windows.Forms.SendKeys]::SendWait($escaped)
-                    Start-Sleep -Milliseconds 25
-                }
-            }
-
-            Start-Sleep -Milliseconds 100
-
-            $currentText = ""
-            if ($valuePattern) {
-                try { $currentText = [string]$valuePattern.Current.Value } catch {}
-            }
-            if (-not $currentText) {
-                try { $currentText = [string]$Element.Current.Name } catch {}
-            }
-
-            $normCurrent = ConvertTo-NormalizedText $currentText
-
-            if (-not $TargetValue -or ($normCurrent -and $normTarget -and $normCurrent -eq $normTarget)) {
-                Write-SantaCruzTrace "input-success text='$currentText'"
-                return $true
-            }
-
-            Write-SantaCruzTrace "input-mismatch attempt ${attempt}: current='$currentText' vs target='$TargetValue'"
-        } catch {
-            Write-SantaCruzTrace "typing attempt ${attempt} failed: $_"
+    try {
+        # Step 1: Click physical center of edit box bounds to lock focus on JavaFX input box
+        $bounds = $Element.Current.BoundingRectangle
+        if ($bounds.Width -gt 0 -and $bounds.Height -gt 0) {
+            $cx = [int]($bounds.Left + ($bounds.Width / 2))
+            $cy = [int]($bounds.Top + ($bounds.Height / 2))
+            Write-SantaCruzTrace "click input box x=$cx y=$cy"
+            [SantaCruzMouse]::SetCursorPos($cx, $cy) | Out-Null
+            [SantaCruzMouse]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
+            [SantaCruzMouse]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 120
         }
-        Start-Sleep -Milliseconds 150
+
+        # Step 2: Clear existing text in search box ONCE cleanly
+        [System.Windows.Forms.SendKeys]::SendWait("^a")
+        Start-Sleep -Milliseconds 40
+        [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
+        Start-Sleep -Milliseconds 40
+
+        # Step 3: Type search query character by character ONCE cleanly
+        if ($TargetValue) {
+            foreach ($character in $TargetValue.ToCharArray()) {
+                $escaped = ([string]$character).Replace("+", "{+}").Replace("^", "{^}").Replace("%", "{%}").Replace("~", "{~}")
+                [System.Windows.Forms.SendKeys]::SendWait($escaped)
+                Start-Sleep -Milliseconds 25
+            }
+        }
+
+        Start-Sleep -Milliseconds 100
+        Write-SantaCruzTrace "input-completed query='$TargetValue'"
+        return $true
+    } catch {
+        Write-SantaCruzTrace "typing failed: $_"
+        return $false
     }
-    return $true
 }
 
 function Find-SearchSubmitControl {
@@ -1021,17 +972,17 @@ function Parse-DoubleSafe {
 function Read-SantaCruzRows {
     param($Table)
     if (-not $Table) { return @() }
-    $output = New-Object System.Collections.Generic.List[object]
+    $output = New-Object System.Collections.ArrayList
     try {
         $grid = $Table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
         if ($grid.Current.ColumnCount -lt 12) { return @() }
         $colCount = $grid.Current.ColumnCount
         for ($row = 0; $row -lt $grid.Current.RowCount; $row++) {
-            $ean = Get-GridCellText $grid $row 0
-            $name = Get-GridCellText $grid $row 2
+            $ean = [string](Get-GridCellText $grid $row 0)
+            $name = [string](Get-GridCellText $grid $row 2)
             $priceNf = Parse-DoubleSafe (Get-GridCellText $grid $row 13)
             if ($ean -notmatch '^\d{13}$' -or -not $name -or $priceNf -le 0) { continue }
-            $availabilityEvidence = Get-GridCellStatus $grid $row 3
+            $availabilityEvidence = [string](Get-GridCellStatus $grid $row 3)
             $normalizedAvailability = ConvertTo-NormalizedText $availabilityEvidence
             $stock = if ($normalizedAvailability -match 'indispon|sem estoque|vermelh|nao dispon') {
                 "sem estoque"
@@ -1040,27 +991,35 @@ function Read-SantaCruzRows {
             } else {
                 "estoque desconhecido"
             }
-            $lab = if ($colCount -ge 18) { Get-GridCellText $grid $row 17 } else { "" }
-            $cat = if ($colCount -ge 15) { Get-GridCellText $grid $row 14 } else { "" }
-            $listType = if ($colCount -ge 16) { Get-GridCellText $grid $row 15 } else { "" }
-            $output.Add([PSCustomObject]@{
+            $lab = if ($colCount -ge 18) { [string](Get-GridCellText $grid $row 17) } else { "" }
+            $cat = if ($colCount -ge 15) { [string](Get-GridCellText $grid $row 14) } else { "" }
+            $listType = if ($colCount -ge 16) { [string](Get-GridCellText $grid $row 15) } else { "" }
+            $qBox = [string](Get-GridCellText $grid $row 5)
+            $fPrice = Parse-DoubleSafe (Get-GridCellText $grid $row 6)
+            $stVal = Parse-DoubleSafe (Get-GridCellText $grid $row 12)
+
+            $item = [PSCustomObject]@{
                 ean = $ean
                 name = $name
                 price = $priceNf
                 priceNf = $priceNf
-                factoryPrice = Parse-DoubleSafe (Get-GridCellText $grid $row 6)
-                st = Parse-DoubleSafe (Get-GridCellText $grid $row 12)
+                factoryPrice = $fPrice
+                st = $stVal
                 unitCostWithSt = $priceNf
                 stock = $stock
                 stockEvidence = $availabilityEvidence
                 laboratory = $lab
-                quantityBox = Get-GridCellText $grid $row 5
+                quantityBox = $qBox
                 category = $cat
                 listType = $listType
-            })
+            }
+            [void]$output.Add($item)
         }
-    } catch { return @() }
-    return @($output)
+    } catch {
+        Write-SantaCruzTrace "Read-SantaCruzRows error: $_"
+        return @()
+    }
+    return $output.ToArray()
 }
 
 function Read-AllSantaCruzRowsWithScroll {
