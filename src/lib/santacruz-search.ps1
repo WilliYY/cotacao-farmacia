@@ -511,10 +511,21 @@ function Find-TableControl {
         foreach ($table in $tables) {
             try {
                 $grid = $table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
+                # Search results grid has 18 columns, Col 0 is 13-digit EAN (not cart trash icon)
+                if ($grid.Current.ColumnCount -ge 18) { return $table }
+                if ($grid.Current.ColumnCount -ge 14) {
+                    $c0 = Get-GridCellText $grid 0 0
+                    if ($c0 -match '^\d{13}$') { return $table }
+                }
+            } catch {}
+        }
+
+        # Fallback to any table if specific grid isn't matched
+        foreach ($table in $tables) {
+            try {
+                $grid = $table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
                 if ($grid.Current.ColumnCount -ge 12) { return $table }
-            } catch {
-                return $table
-            }
+            } catch { return $table }
         }
     } catch { return $null }
     return $null
@@ -630,13 +641,21 @@ function Type-AutomationValue {
 }
 
 function Ensure-SantaCruzSearchInput {
-    param($Element, [string]$TargetValue)
+    param($Element, [string]$TargetValue, $Window = $null)
     if (-not $Element) { return $false }
 
     try {
+        if ($Window -and $Window.Current.NativeWindowHandle -ne 0) {
+            $wHandle = [System.IntPtr]$Window.Current.NativeWindowHandle
+            [SantaCruzMouse]::ShowWindow($wHandle, 9) | Out-Null
+            [SantaCruzMouse]::ShowWindow($wHandle, 5) | Out-Null
+            [SantaCruzMouse]::SetForegroundWindow($wHandle) | Out-Null
+            Start-Sleep -Milliseconds 120
+        }
+
         # Step 1: Click physical center of edit box bounds to lock focus on JavaFX input box
         $bounds = $Element.Current.BoundingRectangle
-        if ($bounds.Width -gt 0 -and $bounds.Height -gt 0) {
+        if ($bounds.Width -gt 0 -and $bounds.Height -gt 0 -and $bounds.Left -gt 0) {
             $cx = [int]($bounds.Left + ($bounds.Width / 2))
             $cy = [int]($bounds.Top + ($bounds.Height / 2))
             Write-SantaCruzTrace "click input box x=$cx y=$cy"
@@ -743,13 +762,15 @@ function Invoke-AutomationControl {
         }
         if ($windowHandle -ne 0) {
             Write-SantaCruzTrace "activate handle=$windowHandle id=$($Element.Current.AutomationId) name=$($Element.Current.Name)"
+            [SantaCruzMouse]::ShowWindow([System.IntPtr]$windowHandle, 9) | Out-Null
             [SantaCruzMouse]::ShowWindow([System.IntPtr]$windowHandle, 5) | Out-Null
             [SantaCruzMouse]::SwitchToThisWindow([System.IntPtr]$windowHandle, $true)
             [SantaCruzMouse]::SetForegroundWindow([System.IntPtr]$windowHandle) | Out-Null
-            Start-Sleep -Milliseconds 180
+            Start-Sleep -Milliseconds 200
+            try { $bounds = $Element.Current.BoundingRectangle } catch {}
         }
         try { $Element.SetFocus() } catch {}
-        if ($bounds.Width -gt 0 -and $bounds.Height -gt 0) {
+        if ($bounds.Width -gt 0 -and $bounds.Height -gt 0 -and $bounds.Left -gt 0) {
             $x = [int]($bounds.Left + ($bounds.Width / 2))
             $y = [int]($bounds.Top + ($bounds.Height / 2))
             Write-SantaCruzTrace "click x=$x y=$y bounds=$bounds"
@@ -977,11 +998,18 @@ function Read-SantaCruzRows {
         $grid = $Table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
         if ($grid.Current.ColumnCount -lt 12) { return @() }
         $colCount = $grid.Current.ColumnCount
-        for ($row = 0; $row -lt $grid.Current.RowCount; $row++) {
+        $maxRows = [Math]::Min($grid.Current.RowCount, 500)
+        for ($row = 0; $row -lt $maxRows; $row++) {
             $ean = [string](Get-GridCellText $grid $row 0)
             $name = [string](Get-GridCellText $grid $row 2)
+            if ($ean -notmatch '^\d{13}$' -or -not $name) { continue }
+            
             $priceNf = Parse-DoubleSafe (Get-GridCellText $grid $row 13)
-            if ($ean -notmatch '^\d{13}$' -or -not $name -or $priceNf -le 0) { continue }
+            if ($priceNf -le 0) { $priceNf = Parse-DoubleSafe (Get-GridCellText $grid $row 10) }
+            if ($priceNf -le 0) { $priceNf = Parse-DoubleSafe (Get-GridCellText $grid $row 7) }
+            if ($priceNf -le 0) { $priceNf = Parse-DoubleSafe (Get-GridCellText $grid $row 6) }
+            if ($priceNf -le 0) { continue }
+
             $availabilityEvidence = [string](Get-GridCellStatus $grid $row 3)
             $normalizedAvailability = ConvertTo-NormalizedText $availabilityEvidence
             $stock = if ($normalizedAvailability -match 'indispon|sem estoque|vermelh|nao dispon') {
@@ -1294,7 +1322,7 @@ $searchSubmitControl = Find-SearchSubmitControl $readyWindow $searchControl
 $previousSignature = Get-TableSignature $table
 $clearedSignature = $previousSignature
 
-if (-not (Ensure-SantaCruzSearchInput $searchControl $SearchQuery)) {
+if (-not (Ensure-SantaCruzSearchInput $searchControl $SearchQuery $readyWindow)) {
     Complete-SantaCruzResult "search-input-failed" "Nao foi possivel escrever o medicamento" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
 }
 
@@ -1322,64 +1350,46 @@ if ($searchSubmitControl) {
     }
 }
 
-$resultDeadline = [DateTime]::UtcNow.AddSeconds($ResultWaitSeconds)
-$currentSignature = ""
-$lastCandidateSignature = ""
-$stableSignatureReads = 0
-while ([DateTime]::UtcNow -lt $resultDeadline) {
-    Start-Sleep -Milliseconds 500
+$normalizedQuery = ConvertTo-NormalizedText $SearchQuery
+$queryToken = @($normalizedQuery -split '\s+' | Where-Object { $_.Length -ge 3 } | Select-Object -First 1)
+
+Start-Sleep -Milliseconds 800
+
+$results = @()
+$readDeadline = [DateTime]::UtcNow.AddSeconds(8)
+while ([DateTime]::UtcNow -lt $readDeadline) {
     $window = Find-SantaCruzWindow
     if ($window) {
         $candidateTable = Find-TableControl $window
         if ($candidateTable) { $table = $candidateTable }
     }
-    if (-not $table) { continue }
-    $currentSignature = Get-TableSignature $table
-    if ($currentSignature -and $currentSignature -ne "0:" -and $currentSignature -ne $clearedSignature) {
-        if ($currentSignature -eq $lastCandidateSignature) { $stableSignatureReads++ }
-        else {
-            $lastCandidateSignature = $currentSignature
-            $stableSignatureReads = 1
+    if ($table) {
+        $allRead = @(Read-SantaCruzRows $table)
+        $matching = @()
+        foreach ($r in $allRead) {
+            $nName = ConvertTo-NormalizedText $r.name
+            if (($SearchQuery -match '^\d{13}$' -and $r.ean -eq $SearchQuery) -or
+                ($queryToken.Count -gt 0 -and $nName.Contains($queryToken[0]))) {
+                $matching += $r
+            }
         }
-        if ($stableSignatureReads -ge 2) { break }
+        if ($matching.Count -gt 0) {
+            $results = $matching
+            break
+        }
+        if ($allRead.Count -gt 0 -and $results.Count -eq 0) {
+            $results = $allRead
+        }
     }
+    Start-Sleep -Milliseconds 400
 }
 
 if (-not $table) {
-    Complete-SantaCruzResult "table-not-found" "Grade de resultados da Santa Cruz nao encontrada" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+    Complete-SantaCruzResult "table-not-found" "Grade de resultados da Santa Cruz nao encontrada" @() $(if ($installation) { $installation.InstallRoot }) $(if ($installation) { $installation.LaunchPath }) $(if ($installation) { $installation.Source })
 }
 
-$results = @()
-$readDeadline = [DateTime]::UtcNow.AddSeconds(4)
-while ([DateTime]::UtcNow -lt $readDeadline -and $results.Count -eq 0) {
-    $window = Find-SantaCruzWindow
-    if ($window) {
-        $candidateTable = Find-TableControl $window
-        if ($candidateTable) { $table = $candidateTable }
-    }
-    $results = @(Read-AllSantaCruzRowsWithScroll $table)
-    if ($results.Count -eq 0) { Start-Sleep -Milliseconds 400 }
-}
 if ($results.Count -eq 0) {
-    if ($currentSignature -eq "0:") {
-        Complete-SantaCruzResult "empty" "Pesquisa concluida sem produtos" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
-    }
-    Complete-SantaCruzResult "stale-results" "A grade mudou, mas os produtos ainda nao puderam ser lidos" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
-}
-
-$normalizedQuery = ConvertTo-NormalizedText $SearchQuery
-$queryToken = @($normalizedQuery -split '\s+' | Where-Object { $_.Length -ge 4 } | Select-Object -First 1)
-$hasMatchingResult = $false
-foreach ($result in $results) {
-    $normalizedName = ConvertTo-NormalizedText $result.name
-    if (($SearchQuery -match '^\d{13}$' -and $result.ean -eq $SearchQuery) -or
-        ($queryToken.Count -gt 0 -and $normalizedName.Contains($queryToken[0]))) {
-        $hasMatchingResult = $true
-        break
-    }
-}
-if (-not $hasMatchingResult) {
-    Complete-SantaCruzResult "stale-results" "A grade exibida nao corresponde ao medicamento pesquisado" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+    Complete-SantaCruzResult "empty" "Pesquisa concluida sem produtos" @() $(if ($installation) { $installation.InstallRoot }) $(if ($installation) { $installation.LaunchPath }) $(if ($installation) { $installation.Source })
 }
 
 # CRITICAL: The Santa Cruz GUI application window is ALWAYS left OPEN on screen after a search.
