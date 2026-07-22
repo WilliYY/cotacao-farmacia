@@ -538,7 +538,17 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   .normalize('NFD')
                   .replace(/[\u0300-\u036f]/g, '')
                   .toLowerCase();
-                const input = document.querySelector('input[placeholder*="buscando"]');
+                const input = document.querySelector('#inputPP') ||
+                              document.querySelector('input[data-placeholder*="Pesquisar"]') ||
+                              document.querySelector('input[placeholder*="Pesquisar"]') ||
+                              document.querySelector('input[placeholder*="Buscar"]') ||
+                              document.querySelector('input[placeholder*="buscando"]') ||
+                              document.querySelector('input[placeholder*="busc"]') ||
+                              document.querySelector('input[placeholder*="Digite"]') ||
+                              document.querySelector('input[type="search"]') ||
+                              document.querySelector('input[formcontrolname*="busca"]') ||
+                              document.querySelector('input[formcontrolname*="search"]') ||
+                              document.querySelector('input.mat-input-element');
                 return !!input && !input.disabled && !text.includes('carregando produtos');
               })()
             `).catch(() => false);

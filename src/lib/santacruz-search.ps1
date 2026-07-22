@@ -363,8 +363,14 @@ function Find-SantaCruzWindow {
 function Find-SantaCruzProcess {
     foreach ($process in Get-Process -ErrorAction SilentlyContinue) {
         try {
-            if ($process.ProcessName -match '^(?i:javaw|digitador-sd|Pe - SantaCruz)$' -and
-                $process.Path -match '(?i)santa\s*-?\s*cruz|digitador-sd') {
+            $pName = [string]$process.ProcessName
+            if ($pName -match '^(?i:javaw|digitador-sd|Pe - SantaCruz)$') {
+                try {
+                    $pPath = [string]$process.Path
+                    if ($pPath -and $pPath -match '(?i)santa\s*-?\s*cruz|digitador-sd') {
+                        return $process
+                    }
+                } catch {}
                 return $process
             }
         } catch {}

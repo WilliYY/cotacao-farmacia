@@ -52,6 +52,49 @@ const SYNONYMS = {
   abs: 'absorvente',
   fralda: 'fralda',
   fraldas: 'fralda',
+  comp: 'comprimido',
+  cpr: 'comprimido',
+  cp: 'comprimido',
+  cps: 'comprimido',
+  comprimido: 'comprimido',
+  comprimidos: 'comprimido',
+  
+  caps: 'capsula',
+  cap: 'capsula',
+  capsula: 'capsula',
+  capsulas: 'capsula',
+  
+  gotas: 'gotas',
+  gts: 'gotas',
+  gota: 'gotas',
+  
+  susp: 'suspensao',
+  suspensao: 'suspensao',
+  
+  xarope: 'xarope',
+  xrp: 'xarope',
+
+  creme: 'creme',
+  pomada: 'pomada',
+  pom: 'pomada',
+  gel: 'gel',
+  liquido: 'liquido',
+  liq: 'liquido',
+  solucao: 'solucao',
+  sol: 'solucao',
+  spray: 'spray',
+  inalador: 'inalador',
+  adesivo: 'adesivo',
+  shampoo: 'shampoo',
+  shamp: 'shampoo',
+  condicionador: 'condicionador',
+  cond: 'condicionador',
+  desodorante: 'desodorante',
+  desod: 'desodorante',
+  absorvente: 'absorvente',
+  abs: 'absorvente',
+  fralda: 'fralda',
+  fraldas: 'fralda',
   tintura: 'tintura',
   tinta: 'tintura',
   shampooing: 'shampoo',
@@ -78,6 +121,12 @@ const VAGUE_SUGGESTIONS = {
 };
 
 const COSMETIC_KEYWORDS = ['shampoo', 'condicionador', 'desodorante', 'absorvente', 'fralda', 'fraldas', 'tintura', 'tinta', 'shamp', 'cond'];
+
+const MCG_MEDICATIONS = new Set([
+  'clenil', 'puran', 'synthroid', 'euthyrox', 'levotiroxina', 'aerolin',
+  'alenia', 'symbicort', 'seretide', 'relvar', 'busonid', 'budesonida',
+  'tiotropio', 'spiriva', 'atrimon', 'beclometasona', 'salbutamol', 'formoterol'
+]);
 
 export function isValidEAN13(ean) {
   if (!/^\d{13}$/.test(ean)) return false;
@@ -114,14 +163,16 @@ export function parseSearchQuery(rawText) {
   const matchedEan = eanMatch ? eanMatch[1] : '';
   const ean = isValidEAN13(matchedEan) ? matchedEan : '';
 
-  // 2. Extract dosage (e.g. 500mg, 20mg, 10ml, 50g, etc.)
+  // 2. Extract dosage (e.g. 500mg, 250mcg, 20mg, 10ml, 50g, etc.)
   const dosageMatch = cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) || 
                       cleaned.match(/\b(\d{1,4})\b(?!\s*(?:capsulas?|caps?|comprimidos?|comp?s?|cprs?|cps?|gotas?|gts|unidades?|unds?|envelopes?|env?s?|tablets?|tbls?|flaconetes?|flac?s?))/i);
   let dosage = '';
   if (dosageMatch) {
     dosage = dosageMatch[0].trim();
     if (/^\d+$/.test(dosage)) {
-      dosage = dosage + 'mg'; 
+      const lowerCleaned = cleaned.toLowerCase();
+      const isMcgMed = Array.from(MCG_MEDICATIONS).some(med => lowerCleaned.includes(med));
+      dosage = isMcgMed ? dosage + 'mcg' : dosage + 'mg';
     }
   }
 
@@ -142,7 +193,7 @@ export function parseSearchQuery(rawText) {
     const trailingQtyMatch = cleaned.match(/\b(?:comp|cp|caps|gotas|gts|ml|g)\s+(\d{1,3})\b/i) || cleaned.match(/\s+(\d{1,3})$/);
     if (trailingQtyMatch) {
       const val = parseInt(trailingQtyMatch[1], 10);
-      if (dosage !== `${val}mg` && dosage !== `${val}ml` && dosage !== `${val}g` && val !== 500 && val !== 750 && val !== 100) {
+      if (dosage !== `${val}mg` && dosage !== `${val}mcg` && dosage !== `${val}ml` && dosage !== `${val}g` && val !== 500 && val !== 750 && val !== 100) {
         quantity = val;
       }
     }

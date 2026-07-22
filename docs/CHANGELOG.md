@@ -26,6 +26,15 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Atalho da Área de Trabalho (`wimi cotacao.lnk`):** Gerado e aplicado o novo ícone `.ico` no atalho da Área de Trabalho do Windows e no projeto local, eliminando o ícone genérico de engrenagem cinza (`cmd.exe`).
 - **Ícone do App no Electron (`main.js`):** Configurada a propriedade `icon` da janela do Electron para exibir o novo ícone na barra de tarefas e título do Windows.
 
+### Correção da Busca "Clenil 250" (Suporte a `mcg`)
+- **Normalização de Dosagem em Microgramas (`MCG_MEDICATIONS`):** Medicamentos que utilizam microgramas (como *Clenil*, *Puran*, *Synthroid*, *Levotiroxina*, *Aerolin*, *Alenia*, *Symbicort*, *Budesonida*) agora convertem números puros (ex: `clenil 250`) para `250mcg` em vez de `250mg`. As buscas nos portais encontram perfeitamente os produtos cadastrados como `CLENIL 250MCG`.
+
+### Automação de Busca na Profarma
+- **Seletores de Busca Tolerantes:** Atualizado o seletor do campo de busca do portal Profarma no `electron-scraper.js` para aceitar variações insensíveis a maiúsculas/minúsculas (`Buscar`, `Pesquisar`, `Digite`, `inputPP`, `mat-input-element`, `formcontrolname`), eliminando falsos travamentos no carregamento inicial.
+
+### Reutilização Inteligente da Santa Cruz Aberta
+- **Detecção Confiável de Processos sem Reabertura:** Ajustado `santacruz-search.ps1` e `Find-SantaCruzProcess` para ignorar exceções de permissão de caminho de arquivo e detectar com precisão o aplicativo `Pe - SantaCruz.exe` aberto. O robô reutiliza a janela existente sem disparar um segundo executável que feche o aplicativo aberto.
+
 ## [1.7.1] - 2026-07-22
 
 ### Inicialização e Tela de Carregamento Instantânea
