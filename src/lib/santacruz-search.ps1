@@ -507,24 +507,31 @@ function Find-TableControl {
             $tableCondition
         )
 
+        # Priority 1: Search results grid in Santa Cruz JavaFX application has exactly 18 columns
         foreach ($table in $tables) {
             try {
                 $grid = $table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
-                # Search results grid has 18 columns, Col 0 is 13-digit EAN (not cart trash icon)
-                if ($grid.Current.ColumnCount -ge 18) { return $table }
-                if ($grid.Current.ColumnCount -ge 14) {
-                    $c0 = Get-GridCellText $grid 0 0
-                    if ($c0 -match '^\d{13}$') { return $table }
-                }
+                if ($grid.Current.ColumnCount -eq 18) { return $table }
             } catch {}
         }
 
-        # Fallback to any table if specific grid isn't matched
+        # Priority 2: Any table with >= 18 columns
         foreach ($table in $tables) {
             try {
                 $grid = $table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
-                if ($grid.Current.ColumnCount -ge 12) { return $table }
-            } catch { return $table }
+                if ($grid.Current.ColumnCount -ge 18) { return $table }
+            } catch {}
+        }
+
+        # Priority 3: Table with >= 14 columns where Col 0 is valid EAN and not trash icon
+        foreach ($table in $tables) {
+            try {
+                $grid = $table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
+                if ($grid.Current.ColumnCount -ge 14) {
+                    $c0 = Get-GridCellText $grid 0 0
+                    if ($c0 -and $c0 -ne '' -and $c0 -match '^\d{13}$') { return $table }
+                }
+            } catch {}
         }
     } catch { return $null }
     return $null
@@ -677,6 +684,9 @@ function Ensure-SantaCruzSearchInput {
                 [System.Windows.Forms.SendKeys]::SendWait($escaped)
                 Start-Sleep -Milliseconds 25
             }
+            Start-Sleep -Milliseconds 50
+            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+            Start-Sleep -Milliseconds 300
         }
 
         Start-Sleep -Milliseconds 100
@@ -1355,6 +1365,7 @@ $queryToken = @($normalizedQuery -split '\s+' | Where-Object { $_.Length -ge 3 }
 Start-Sleep -Milliseconds 800
 
 $results = @()
+$isEanSearch = $SearchQuery -match '^\d{13}$'
 $readDeadline = [DateTime]::UtcNow.AddSeconds(8)
 while ([DateTime]::UtcNow -lt $readDeadline) {
     $window = Find-SantaCruzWindow
@@ -1367,8 +1378,8 @@ while ([DateTime]::UtcNow -lt $readDeadline) {
         $matching = @()
         foreach ($r in $allRead) {
             $nName = ConvertTo-NormalizedText $r.name
-            if (($SearchQuery -match '^\d{13}$' -and $r.ean -eq $SearchQuery) -or
-                ($queryToken.Count -gt 0 -and $nName.Contains($queryToken[0]))) {
+            if (($isEanSearch -and $r.ean -eq $SearchQuery) -or
+                (-not $isEanSearch -and $queryToken.Count -gt 0 -and $nName.Contains($queryToken[0]))) {
                 $matching += $r
             }
         }
@@ -1376,11 +1387,12 @@ while ([DateTime]::UtcNow -lt $readDeadline) {
             $results = $matching
             break
         }
-        if ($allRead.Count -gt 0 -and $results.Count -eq 0) {
-            $results = $allRead
-        }
     }
-    Start-Sleep -Milliseconds 400
+    Start-Sleep -Milliseconds 500
+}
+
+if ($results.Count -eq 0 -and -not $isEanSearch -and $table) {
+    $results = @(Read-SantaCruzRows $table)
 }
 
 if (-not $table) {
