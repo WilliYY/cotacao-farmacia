@@ -144,7 +144,7 @@ export function parseDmParanaCard(cardData = {}) {
 
 export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
   const cols = Array.isArray(columns) ? columns.map(value => String(value || '').trim()) : [];
-  if (cols.length < 14) return null;
+  if (cols.length < 5) return null;
 
   const parseCurrency = (value) => {
     const match = String(value || '').match(/-?\d{1,3}(?:\.\d{3})*,\d+|-?\d+(?:[.,]\d+)?/);
@@ -160,15 +160,19 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
 
-  const ean = cols[1].match(/\d{13}/)?.[0] || '';
-  const name = cols[2];
-  const quantityText = normalize(cols[3]);
-  const finalPrice = parseCurrency(cols[4]);
-  const stAmount = parseCurrency(cols[8]);
-  const category = cols[12];
+  const ean = cols.join(' ').match(/\d{13}/)?.[0] || '';
+  const name = cols[2] || cols[1] || cols[0] || '';
+  if (!name) return null;
+
+  const quantityText = cols[3] ? normalize(cols[3]) : '';
+  const finalPrice = parseCurrency(cols[4]) || parseCurrency(cols[5]) || parseCurrency(cols[6]);
+  if (finalPrice <= 0) return null;
+
+  const stAmount = cols.length >= 9 ? parseCurrency(cols[8]) : 0;
+  const category = cols[12] || '';
   const normalizedCategory = normalize(category);
   const stExempt = ['cosmet', 'dermocosmet', 'perfum', 'higiene'].some(term => normalizedCategory.includes(term));
-  const available = hasQuantityInput && !quantityText.includes('avise') && !quantityText.includes('indispon');
+  const available = !quantityText.includes('avise') && !quantityText.includes('indispon');
   const quantityMatch = name.match(/c\/\s*(\d+)/i) || name.match(/(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i);
   const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
   const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
@@ -458,8 +462,8 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           return;
         }
 
-        if (supplierId === 2 && !hasPasswordInput && (pathname === '/inicio' || pathname === '/')) {
-          logger.info('Opening Profarma Novo Pedido page...');
+        if (supplierId === 2 && !hasPasswordInput && !pathname.includes('/novo-pedido')) {
+          logger.info(`Profarma portal is at "${pathname}". Navigating to "/novo-pedido"...`);
           await win.loadURL(new URL('/novo-pedido', currentUrl).href);
           return;
         }
@@ -885,9 +889,18 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   }
                   if (supplierId !== 4 && initialRows.length === 0) {
                     const bodyText = (document.body?.innerText || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-                    const explicitlyEmpty = bodyText.includes('nenhum produto') || bodyText.includes('nao encontramos') || bodyText.includes('sem produtos encontrados');
+                    const explicitlyEmpty = bodyText.includes('nenhum produto') ||
+                      bodyText.includes('nao encontramos') ||
+                      bodyText.includes('sem produtos') ||
+                      bodyText.includes('nenhum registro') ||
+                      bodyText.includes('nenhum resultado') ||
+                      bodyText.includes('sem registros') ||
+                      bodyText.includes('nenhum item') ||
+                      bodyText.includes('0 produtos') ||
+                      bodyText.includes('0 registros') ||
+                      bodyText.includes('0 resultados');
                     const searchSettled = ${Date.now() - submittedSearchAt} >= 3000;
-                    return explicitlyEmpty && searchSettled ? [] : null;
+                    return (explicitlyEmpty || searchSettled) ? [] : null;
                   }
 
                   while (hasNext && pageCount < maxPages) {
