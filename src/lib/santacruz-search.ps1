@@ -347,7 +347,7 @@ function Find-SantaCruzWindow {
     foreach ($candidateWindow in $windows) {
         try {
             $title = [string]$candidateWindow.Current.Name
-            if ($title -match '(?i)santa\s*-?\s*cruz|pedido\s+eletr' -or $title -eq "Pedidos") {
+            if ($title -match '(?i)santa\s*-?\s*cruz|pedido\s*eletr|digitador|vitrine' -or $title -eq "Pedidos") {
                 $bounds = $candidateWindow.Current.BoundingRectangle
                 $score = [double]($bounds.Width * $bounds.Height)
                 if ($title -eq "Pedidos") { $score += 10000000 }
@@ -364,10 +364,10 @@ function Find-SantaCruzProcess {
     foreach ($process in Get-Process -ErrorAction SilentlyContinue) {
         try {
             $pName = [string]$process.ProcessName
-            if ($pName -match '^(?i:javaw|digitador-sd|Pe - SantaCruz)$') {
+            if ($pName -match '^(?i:javaw|java|digitador-sd|Pe - SantaCruz|SantaCruz)$') {
                 try {
                     $pPath = [string]$process.Path
-                    if ($pPath -and $pPath -match '(?i)santa\s*-?\s*cruz|digitador-sd') {
+                    if ($pPath -and $pPath -match '(?i)santa\s*-?\s*cruz|digitador-sd|pe\s*-?\s*santacruz') {
                         return $process
                     }
                 } catch {}

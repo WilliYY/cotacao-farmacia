@@ -6,6 +6,17 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Detecção Automática da Santa Cruz em Qualquer Computador
+- **Sonda Multiprocesso e Multi-Janela Resiliente (`santacruz-search.ps1`):** Aprimorada a busca por processos (`javaw`, `java`, `Pe - SantaCruz`, `digitador-sd`) e títulos de janelas (`Pedido Eletrônico`, `SantaCruz`, `Pedidos`, `Vitrine de Ofertas`, `Digitador SD`). O sistema detecta se a Santa Cruz está aberta ou fechada em qualquer computador (Windows 10/11, 32 ou 64-bit) de forma universal.
+- **Detecção em Tempo Real (5s + Foco da Janela):** Reduzido o intervalo de sondagem em `App.jsx` de 30s para **5 segundos**, acionando também a verificação imediata sempre que o usuário alternar para o aplicativo.
+
+### Redesign Executivo da Barra Lateral (Sidebar)
+- **Visual Dark Moderno e Elegante (`index.css`):** Atualizada a barra lateral para estilo escuro executivo (`#0f172a`), com campo de busca com bordas finas (`#334155`), cartões de histórico com destaque suave ao passar o mouse (`#1e293b`) e borda indicadora esmeralda iluminada (`#10b981`) no item ativo.
+- **Botões de Ação na Sidebar:** Botão *"+ Nova Cotação"* em gradiente esmeralda vibrante e botão *"Configurar Logins"* em tom ardósia moderno.
+
+### Tabela de Resultados em Alto Contraste
+- **Cabeçalho Escuro e Nítido (`#0f172a`):** A tabela de resultados ganhou cabeçalho fixo escuro em alto contraste com letras brancas em caixa alta, tipografia robusta e linhas com realce suave ao passar o cursor (`#f0fdf4`).
+
 ### Botão de Cancelamento de Cotação em Tempo Real
 - **Botão *"Cancelar Cotação"* (`cancel-quote`):** Adicionado botão vermelho destacado no painel de andamento da cotação (`QuoteProgressOverlay`). Permite interromper instantaneamente a consulta aos portais a qualquer momento, cancelando os robôs sem travar o aplicativo.
 

@@ -270,31 +270,39 @@ select:focus-visible {
 }
 
 .history-item {
-  padding: 0.65rem 0.7rem;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: #d8e1e5;
+  position: relative;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  background: #111827;
+  color: #cbd5e1;
   cursor: pointer;
-  font-size: 0.82rem;
-  transition: background-color 150ms ease, border-color 150ms ease;
+  font-size: 0.84rem;
+  font-weight: 650;
+  transition: all 180ms ease;
 }
 
 .history-item:hover {
-  border-color: var(--sidebar-border);
-  background: var(--sidebar-surface);
+  border-color: #334155;
+  background: #1e293b;
+  color: #f8fafc;
+  transform: translateX(2px);
 }
 
 .history-item.active {
-  border-color: #3c8c72;
-  background: #173b34;
-  color: #8ee0c3;
+  border-color: rgba(16, 185, 129, 0.4) !important;
+  border-left: 4px solid #10b981 !important;
+  background: linear-gradient(135deg, rgba(5, 150, 105, 0.22) 0%, rgba(13, 148, 136, 0.12) 100%) !important;
+  color: #34d399 !important;
+  font-weight: 800;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.15);
 }
 
 .history-date {
-  margin-top: 0.18rem;
-  color: #8999a5;
-  font-size: 0.7rem;
+  margin-top: 0.2rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 550;
 }
 
 .history-empty {
@@ -1986,21 +1994,23 @@ textarea.search-textarea {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 0.65rem 0.7rem;
-  border-bottom: 1px solid var(--border-strong);
-  background: linear-gradient(90deg, #eaf3ef 0%, #edf2f6 100%);
-  color: #52616b;
-  font-size: 0.69rem;
-  font-weight: 800;
+  padding: 0.8rem 0.85rem;
+  border-bottom: 2px solid #cbd5e1;
+  background: #0f172a !important;
+  color: #ffffff !important;
+  font-size: 0.72rem !important;
+  font-weight: 850 !important;
+  letter-spacing: 0.05em !important;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
 .quote-table td {
-  padding: 0.65rem 0.7rem;
-  border-bottom: 1px solid #e8edef;
-  color: #42515b;
+  padding: 0.75rem 0.85rem;
+  border-bottom: 1px solid #e2e8f0;
+  color: #1e293b;
   vertical-align: middle;
+  font-size: 0.84rem;
 }
 
 .quote-table tbody tr:last-child td {
@@ -2008,7 +2018,7 @@ textarea.search-textarea {
 }
 
 .quote-table tbody tr:hover {
-  background: #f7faf9;
+  background: #f0fdf4 !important;
 }
 
 .quote-table tbody tr.result-row--best {

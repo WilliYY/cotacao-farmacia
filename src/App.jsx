@@ -812,8 +812,13 @@ function App() {
   useEffect(() => {
     if (!santaCruzSelected || activeQuote || isSettingsOpen || loading || isPreparingSantaCruz) return undefined;
     loadSantaCruzStatus(false);
-    const statusTimer = setInterval(() => loadSantaCruzStatus(false), 30_000);
-    return () => clearInterval(statusTimer);
+    const statusTimer = setInterval(() => loadSantaCruzStatus(false), 5_000);
+    const handleFocus = () => loadSantaCruzStatus(false);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      clearInterval(statusTimer);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [santaCruzSelected, activeQuote, isSettingsOpen, loading, isPreparingSantaCruz]);
 
   const loadHistory = async () => {
