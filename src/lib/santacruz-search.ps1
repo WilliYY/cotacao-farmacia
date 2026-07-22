@@ -1066,49 +1066,7 @@ function Read-SantaCruzRows {
 function Read-AllSantaCruzRowsWithScroll {
     param($Table)
     if (-not $Table) { return @() }
-    
-    $collected = New-Object System.Collections.Generic.Dictionary[string, object]
-    
-    try {
-        try { $Table.SetFocus() } catch {}
-        Start-Sleep -Milliseconds 100
-        try { [System.Windows.Forms.SendKeys]::SendWait("^{HOME}") } catch {}
-        Start-Sleep -Milliseconds 150
-
-        $scrollAttempts = 0
-        $maxScrolls = 8
-        $previousCount = -1
-
-        while ($scrollAttempts -lt $maxScrolls) {
-            $visibleRows = Read-SantaCruzRows $Table
-            foreach ($row in $visibleRows) {
-                $key = "$($row.ean)_$($row.priceNf)"
-                if (-not $collected.ContainsKey($key)) {
-                    $collected[$key] = $row
-                }
-            }
-
-            if ($collected.Count -eq $previousCount) {
-                break
-            }
-            $previousCount = $collected.Count
-
-            try {
-                [System.Windows.Forms.SendKeys]::SendWait("{PGDN}")
-                Start-Sleep -Milliseconds 250
-            } catch {
-                break
-            }
-            $scrollAttempts++
-        }
-
-        try { [System.Windows.Forms.SendKeys]::SendWait("^{HOME}") } catch {}
-
-    } catch {}
-
-    if ($collected.Count -gt 0) {
-        return @($collected.Values)
-    }
+    # Read rows directly via UIAutomation GridPattern (0 keystrokes sent to window)
     return @(Read-SantaCruzRows $Table)
 }
 
@@ -1387,10 +1345,21 @@ if ($searchSubmitControl) {
     }
 } else {
     try {
-        $searchControl.SetFocus()
+        try {
+            $bounds = $searchControl.Current.BoundingRectangle
+            if ($bounds.Width -gt 0 -and $bounds.Height -gt 0) {
+                $cx = [int]($bounds.Left + ($bounds.Width / 2))
+                $cy = [int]($bounds.Top + ($bounds.Height / 2))
+                [SantaCruzMouse]::SetCursorPos($cx, $cy) | Out-Null
+                [SantaCruzMouse]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
+                [SantaCruzMouse]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
+                Start-Sleep -Milliseconds 60
+            }
+        } catch {}
+        try { $searchControl.SetFocus() } catch {}
         [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
     } catch {
-        Complete-SantaCruzResult "search-submit-failed" "Nao foi possivel iniciar a pesquisa" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+        Complete-SantaCruzResult "search-submit-failed" "Nao foi possivel iniciar a pesquisa" $(if ($installation) { $installation.InstallRoot }) $(if ($installation) { $installation.LaunchPath }) $(if ($installation) { $installation.Source })
     }
 }
 
