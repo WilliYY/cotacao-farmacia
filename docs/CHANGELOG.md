@@ -6,6 +6,9 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Proteção Estrita contra Fechamento da Santa Cruz
+- **Bloqueio de Duplo Lançamento (`santacruz-search.ps1`):** Adicionada verificação rígida `if (-not $window -and -not $existingProcess -and $installation)`. Se o processo da Santa Cruz já estiver rodando, o robô **nunca** dispara um segundo `Start-Process`, pois o inicializador nativo da Santa Cruz encerrava a instância aberta ao detectar uma segunda chamada. A janela aberta permanece 100% ativa no computador do operador.
+
 ### Limpeza Automática, Auto-Correção de Foco e Rolagem na Santa Cruz
 - **Limpeza Automática do Texto Anterior (`Ensure-SantaCruzSearchInput`):** Criada função no `santacruz-search.ps1` que foca o campo *Busca inteligente* e executa seleção total (`Ctrl+A`) e apaga (`Backspace`) qualquer pesquisa anterior (como *losartana 50*) antes de digitar o novo item em cotações de múltiplos medicamentos.
 - **Auto-Correção e Verificação de Digitação:** O robô valida em um ciclo de até 3 tentativas se o texto no campo corresponde ao medicamento alvo. Se o usuário clicar fora ou a janela perder o foco durante a escrita, o robô automaticamente refoca o campo, limpa e reescreve a busca inteira antes de enviar.

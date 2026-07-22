@@ -1084,6 +1084,7 @@ if (-not $SearchQuery -and -not $PrepareOnly) {
 $window = Find-SantaCruzWindow
 $existingProcess = Find-SantaCruzProcess
 $launchAttempted = $false
+
 if ($PrepareOnly -and $existingProcess -and -not $window) {
     Write-SantaCruzTrace "prepare restart stale process id=$($existingProcess.Id) path=$($existingProcess.Path)"
     try {
@@ -1097,8 +1098,12 @@ if ($PrepareOnly -and $existingProcess -and -not $window) {
         Complete-SantaCruzResult "restart-failed" "Nao foi possivel reiniciar o processo Santa Cruz sem janela" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
     }
 }
-if (-not $window -and $installation) {
+
+# CRITICAL: NEVER launch a second process if Santa Cruz is already running or open.
+# Launching a second instance of Pe - SantaCruz.exe triggers its single-instance watcher which kills the open software.
+if (-not $window -and -not $existingProcess -and $installation) {
     try {
+        Write-SantaCruzTrace "launching single Santa Cruz process (no existing process or window found)"
         $startArguments = @{
             FilePath = $installation.LaunchPath
             WorkingDirectory = $installation.WorkingDirectory
@@ -1112,7 +1117,7 @@ if (-not $window -and $installation) {
     }
 }
 
-if (-not $window -and -not $installation) {
+if (-not $window -and -not $existingProcess -and -not $installation) {
     Complete-SantaCruzResult "not-installed" "Aplicativo Santa Cruz nao localizado"
 }
 
