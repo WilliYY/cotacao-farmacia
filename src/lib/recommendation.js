@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import { parseSearchQuery } from './parser.js';
-import { presentationsMatch } from './pharmaceutical-context.js';
+import { presentationsMatch, getFarmaciaPopularInfo } from './pharmaceutical-context.js';
 import { isValidST, getSTPriority } from './st-rules.js';
 import { AUDIT_STATUS, applyPriceOutlierAudit, auditQuoteResult, getDosageNumber } from './quote-auditor.js';
 import { getActiveConnectors, getConnectorMode } from '../connectors/connector-registry.js';
@@ -379,9 +379,11 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
 
     const qty = res.quantity || parsed.quantity || 1;
     const unitPrice = res.price ? (res.price / qty) : 0;
+    const productName = res.supplierProductName || res.name || '';
+    const fpInfo = getFarmaciaPopularInfo(productName || parsed.name);
 
     return {
-      supplierProductName: res.supplierProductName || res.name || '',
+      supplierProductName: productName,
       laboratory: res.laboratory || '',
       dosage: res.dosage,
       presentation: res.presentation,
@@ -406,7 +408,11 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       failureCode: res.failureCode || null,
       timedOut: res.timedOut === true,
       searchFallback: res.searchFallback || null,
-      debugColumns: res.debugColumns
+      debugColumns: res.debugColumns,
+      farmaciaPopular: fpInfo?.isFarmaciaPopular === true,
+      farmaciaPopularCategory: fpInfo?.category || null,
+      farmaciaPopularCoverage: fpInfo?.coverage || null,
+      farmaciaPopularNotes: fpInfo?.notes || null
     };
   });
 

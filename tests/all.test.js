@@ -15,6 +15,7 @@ import { AUDIT_STATUS, auditQuoteResult } from '../src/lib/quote-auditor.js';
 import { createSantaCruzProcessEnvironment, getSantaCruzFinalPrice, normalizeSantaCruzGuiPayload } from '../src/connectors/real/santacruz-real.js';
 import { normalizeProfarmaUrl } from '../src/connectors/real/profarma-real.js';
 import { normalizeDmParanaUrl } from '../src/connectors/real/dm-parana-real.js';
+import { getFarmaciaPopularInfo, resolveReferenceBrandName } from '../src/lib/pharmaceutical-context.js';
 import { isDirectDmProductMatch, parseAnbTableRow, parseDmParanaCard, parseProfarmaTableRow } from '../src/lib/electron-scraper.js';
 import { isRetryableAnbError, normalizeAnbUrl } from '../src/connectors/real/anb-real.js';
 import { resolveConnectorMode } from '../src/connectors/connector-registry.js';
@@ -536,6 +537,34 @@ test('Profarma Novo Pedido Parser', async (t) => {
       '20,00', '12', 'LAB TESTE', 'Cosmeticos', 'Nao'
     ], false);
     assert.strictEqual(unavailable.availability, 'sem estoque');
+  });
+});
+
+test('Farmacia Popular & Reference Brand Intelligence', async (t) => {
+  await t.test('Identifies official Farmacia Popular program medications', () => {
+    const metformina = getFarmaciaPopularInfo('CLORIDRATO DE METFORMINA 500MG 30 COMP');
+    assert.strictEqual(metformina.isFarmaciaPopular, true);
+    assert.strictEqual(metformina.category, 'Diabetes');
+    assert.strictEqual(metformina.coverage, 'Gratuito');
+
+    const losartana = getFarmaciaPopularInfo('LOSARTANA POTASSICA 50MG 30 COMP');
+    assert.strictEqual(losartana.isFarmaciaPopular, true);
+    assert.strictEqual(losartana.category, 'Hipertensão');
+
+    const sinvastatina = getFarmaciaPopularInfo('SINVASTATINA 20MG 30 COMP');
+    assert.strictEqual(sinvastatina.isFarmaciaPopular, true);
+    assert.strictEqual(sinvastatina.category, 'Dislipidemia');
+
+    const nonProgram = getFarmaciaPopularInfo('SHAMPOO 200ML');
+    assert.strictEqual(nonProgram.isFarmaciaPopular, false);
+  });
+
+  await t.test('Resolves reference brand names to active ingredients', () => {
+    assert.strictEqual(resolveReferenceBrandName('Glifage XR'), 'metformina');
+    assert.strictEqual(resolveReferenceBrandName('Aradois'), 'losartana');
+    assert.strictEqual(resolveReferenceBrandName('Selozok'), 'metoprolol');
+    assert.strictEqual(resolveReferenceBrandName('Pura T4'), 'levotiroxina');
+    assert.strictEqual(resolveReferenceBrandName('Novalgina'), 'dipirona');
   });
 });
 

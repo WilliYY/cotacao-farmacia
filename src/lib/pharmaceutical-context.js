@@ -228,3 +228,111 @@ export function presentationsMatch(queryPresentation, resultPresentation, contex
 
   return false;
 }
+
+export const FARMACIA_POPULAR_PROGRAM = Object.freeze([
+  {
+    category: 'Hipertensão',
+    coverage: 'Gratuito',
+    ingredients: ['atenolol', 'captopril', 'enalapril', 'hidroclorotiazida', 'losartana', 'espironolactona', 'propranolol', 'furosemida'],
+    notes: 'Cobertura 100% Gratuita - Programa Farmácia Popular do Brasil'
+  },
+  {
+    category: 'Diabetes',
+    coverage: 'Gratuito',
+    ingredients: ['glibenclamida', 'metformina', 'dapagliflozina', 'insulina'],
+    notes: 'Cobertura 100% Gratuita - Programa Farmácia Popular do Brasil'
+  },
+  {
+    category: 'Asma',
+    coverage: 'Gratuito',
+    ingredients: ['beclometasona', 'salbutamol', 'ipratropio'],
+    notes: 'Cobertura 100% Gratuita - Programa Farmácia Popular do Brasil'
+  },
+  {
+    category: 'Osteoporose',
+    coverage: 'Co-pagamento',
+    ingredients: ['alendronato'],
+    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
+  },
+  {
+    category: 'Dislipidemia',
+    coverage: 'Co-pagamento',
+    ingredients: ['sinvastatina'],
+    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
+  },
+  {
+    category: 'Parkinson',
+    coverage: 'Co-pagamento',
+    ingredients: ['levodopa', 'carbidopa'],
+    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
+  },
+  {
+    category: 'Contracepção',
+    coverage: 'Co-pagamento',
+    ingredients: ['medroxiprogesterona', 'etinilestradiol', 'levonorgestrel', 'noretisterona'],
+    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
+  },
+  {
+    category: 'Incontinência',
+    coverage: 'Co-pagamento',
+    ingredients: ['fralda geriatrica'],
+    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
+  }
+]);
+
+export const REFERENCE_BRAND_NAMES = new Map([
+  ['glifage', 'metformina'],
+  ['glifage xr', 'metformina'],
+  ['aradois', 'losartana'],
+  ['cozaar', 'losartana'],
+  ['selozok', 'metoprolol'],
+  ['selopress', 'metoprolol'],
+  ['pura t4', 'levotiroxina'],
+  ['synthroid', 'levotiroxina'],
+  ['levoid', 'levotiroxina'],
+  ['crestor', 'rosuvastatina'],
+  ['lipitor', 'atorvastatina'],
+  ['jardiance', 'empagliflozina'],
+  ['forxiga', 'dapagliflozina'],
+  ['xarelto', 'rivaroxabana'],
+  ['januvia', 'sitagliptina'],
+  ['galvus', 'vildagliptina'],
+  ['rivotril', 'clonazepam'],
+  ['lexapro', 'escitalopram'],
+  ['reconter', 'escitalopram'],
+  ['zoloft', 'sertralina'],
+  ['assert', 'sertralina'],
+  ['lyrica', 'pregabalina'],
+  ['insit', 'pregabalina'],
+  ['seroquel', 'quetiapina'],
+  ['quetros', 'quetiapina'],
+  ['novalgina', 'dipirona'],
+  ['tylenol', 'paracetamol'],
+  ['advil', 'ibuprofeno'],
+  ['alivium', 'ibuprofeno'],
+  ['cataflam', 'diclofenaco'],
+  ['voltaren', 'diclofenaco'],
+  ['buscopan', 'escopolamina']
+]);
+
+export function getFarmaciaPopularInfo(medicationName) {
+  if (!medicationName) return null;
+  const normalized = normalizePharmaceuticalText(medicationName);
+  for (const prog of FARMACIA_POPULAR_PROGRAM) {
+    if (prog.ingredients.some(ing => normalized.includes(ing))) {
+      return {
+        isFarmaciaPopular: true,
+        category: prog.category,
+        coverage: prog.coverage,
+        notes: prog.notes
+      };
+    }
+  }
+  return { isFarmaciaPopular: false };
+}
+
+export function resolveReferenceBrandName(brandName) {
+  if (!brandName) return '';
+  const normalized = normalizePharmaceuticalText(brandName);
+  return REFERENCE_BRAND_NAMES.get(normalized) || '';
+}
