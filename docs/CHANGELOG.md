@@ -6,6 +6,18 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Botão de Cancelamento de Cotação em Tempo Real
+- **Botão *"Cancelar Cotação"* (`cancel-quote`):** Adicionado botão vermelho destacado no painel de andamento da cotação (`QuoteProgressOverlay`). Permite interromper instantaneamente a consulta aos portais a qualquer momento, cancelando os robôs sem travar o aplicativo.
+
+### Layout Flexível sem Cortes de Conteúdo
+- **Visibilidade Total dos Alertas (`overflow: visible`):** Ajustados os contêineres `.search-card` e `.main-content` no `index.css`. Ao digitar múltiplos medicamentos, a página faz rolagem vertical suave sem cortar nenhum aviso, caixa de alerta da Santa Cruz ou botão de ação.
+
+### Suporte Nativo à Santa Cruz v12.0.118 Aberta
+- **Extração Dinâmica da Tabela de 15 Colunas (`santacruz-search.ps1`):** Atualizadas as funções `Find-TableControl` e `Read-SantaCruzRows` para reconhecer tabelas da Santa Cruz com 12 a 15 colunas (`v12.0.118`). O robô agora pesquisa e lê os preços da janela aberta do programa sem rejeitar a grade por contagem rígida de colunas.
+
+### Limite Rígido de 2 Minutos por Item
+- **Timeout Proporcional ao Número de Itens:** Ajustado o cálculo do tempo limite total da cotação no `main.js` para `quantidade_de_itens * 2 minutos`, garantindo que cada item pesquisado tenha até 2 minutos no máximo.
+
 ### Design e Alto Contraste no Front-End
 - **Visibilidade de Cartões e Títulos (`index.css`):** Elevado o contraste dos títulos (`#0f172a`), rótulos de campos, subtextos (`#334155`), badges de estatísticas (`#1e293b`) e caixas de prévia de inteligência para leitura nítida e profissional em qualquer iluminação de tela.
 - **Toggles de Distribuidoras Elegantes:** Reformulados os seletores de distribuidoras (`.supplier-label`). Quando selecionados, exibem um gradiente esmeralda moderno (`linear-gradient(135deg, #059669 0%, #0d9488 100%)`) com texto branco em negrito e checkmark brilhante.

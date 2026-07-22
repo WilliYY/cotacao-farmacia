@@ -1266,10 +1266,34 @@ textarea.search-textarea {
 }
 
 .quote-progress-footer {
-  padding-top: 0.8rem;
-  color: var(--text-muted);
-  font-size: 0.72rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+  color: #475569;
+  font-size: 0.76rem;
+  font-weight: 600;
   line-height: 1.4;
+}
+
+.btn-cancel-quote {
+  border: 1.5px solid #fca5a5 !important;
+  background: #fef2f2 !important;
+  color: #dc2626 !important;
+  font-weight: 800 !important;
+  font-size: 0.82rem !important;
+  padding: 0.4rem 0.85rem !important;
+  border-radius: 6px !important;
+  transition: all 180ms ease !important;
+}
+
+.btn-cancel-quote:hover:not(:disabled) {
+  border-color: #ef4444 !important;
+  background: #fee2e2 !important;
+  color: #b91c1c !important;
+  transform: translateY(-1px);
 }
 
 .spinner {

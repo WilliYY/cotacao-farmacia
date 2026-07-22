@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('get-all-supplier-credentials'),
   getSantaCruzStatus: () => ipcRenderer.invoke('get-santacruz-status'),
   prepareSantaCruz: () => ipcRenderer.invoke('prepare-santacruz'),
+  cancelQuote: () => ipcRenderer.invoke('cancel-quote'),
   getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
   ping: () => ipcRenderer.invoke('ping')
 });

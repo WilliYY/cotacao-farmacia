@@ -572,12 +572,12 @@ function SupplierProgressIcon({ status }) {
   return <PackageSearch size={18} aria-hidden="true" />;
 }
 
-function QuoteProgressOverlay({ progress, elapsedSeconds }) {
+function QuoteProgressOverlay({ progress, elapsedSeconds, onCancelQuote }) {
   const percent = getQuoteProgressPercent(progress);
   const supplierOrder = progress?.supplierOrder || [];
   const currentItem = progress?.currentItem || 0;
   const totalItems = progress?.totalItems || 0;
-  const timeoutSeconds = (progress?.timeoutMinutes || 10) * 60;
+  const timeoutSeconds = (progress?.timeoutMinutes || (totalItems > 0 ? totalItems * 2 : 2)) * 60;
 
   return (
     <div className="loading-overlay" role="status" aria-live="polite">
@@ -635,7 +635,18 @@ function QuoteProgressOverlay({ progress, elapsedSeconds }) {
         </div>
 
         <footer className="quote-progress-footer">
-          Cada distribuidora tem seu próprio limite. Se uma não responder, a cotação segue com as demais.
+          <span>Limite máximo de 2 min por item (ou encerra a distribuidora).</span>
+          {onCancelQuote && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-cancel-quote"
+              onClick={onCancelQuote}
+              title="Cancelar cotação a qualquer momento"
+            >
+              <CircleX size={16} aria-hidden="true" />
+              <span>Cancelar Cotação</span>
+            </button>
+          )}
         </footer>
       </section>
     </div>
@@ -973,6 +984,21 @@ function App() {
     } catch (e) {
       console.error(e);
       alert('Erro ao realizar a cotação. Verifique logs.');
+    } finally {
+      setLoading(false);
+      setQuoteProgress(null);
+      setQuoteStartedAt(null);
+      setQuoteElapsedSeconds(0);
+    }
+  };
+
+  const handleCancelQuote = async () => {
+    try {
+      if (api?.cancelQuote) {
+        await api.cancelQuote();
+      }
+    } catch (e) {
+      console.warn('Erro ao solicitar cancelamento da cotação:', e);
     } finally {
       setLoading(false);
       setQuoteProgress(null);
@@ -1374,7 +1400,11 @@ function App() {
       <main className="main-content">
         {loading ? (
           quoteProgress ? (
-            <QuoteProgressOverlay progress={quoteProgress} elapsedSeconds={quoteElapsedSeconds} />
+            <QuoteProgressOverlay
+              progress={quoteProgress}
+              elapsedSeconds={quoteElapsedSeconds}
+              onCancelQuote={handleCancelQuote}
+            />
           ) : (
             <div className="loading-overlay" role="status" aria-live="polite">
               <div className="spinner" aria-hidden="true" />

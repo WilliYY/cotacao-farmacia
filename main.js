@@ -246,9 +246,21 @@ app.on('will-quit', async () => {
   }
 });
 
+let activeQuoteController = null;
+
+ipcMain.handle('cancel-quote', async () => {
+  if (activeQuoteController) {
+    logger.info('User requested quotation cancellation. Aborting active quote controller.');
+    activeQuoteController.abort();
+    activeQuoteController = null;
+  }
+  return { success: true, message: 'Cotação cancelada pelo usuário.' };
+});
+
 // IPC Handler: Run Quote Process
 ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
   let quoteId = null;
+  let quoteController = null;
   try {
     const learnedAliases = await getLearnedCorrections();
     const searchPlans = analyzeQuoteBatch(rawTextList, { learnedAliases });
@@ -256,13 +268,18 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     quoteId = await createQuote('processing');
     const blockedSupplierReasons = {};
     const supplierList = Array.isArray(activeSuppliers) ? activeSuppliers : ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'];
-    const quoteTimeoutMs = getQuoteTimeoutMs();
+    
+    // Limit is 2 minutes (120,000ms) per item
+    const perItemTimeoutMs = 120_000;
+    const quoteTimeoutMs = Math.max(perItemTimeoutMs, searchPlans.length * perItemTimeoutMs);
     const quoteTimeoutMinutes = Math.max(1, Math.ceil(quoteTimeoutMs / 60_000));
-    const quoteController = new AbortController();
+    quoteController = new AbortController();
+    activeQuoteController = quoteController;
+
     let quoteReachedTimeout = false;
     const quoteTimeoutId = setTimeout(() => {
       quoteReachedTimeout = true;
-      logger.warn(`Quote #${quoteId} reached the ${quoteTimeoutMinutes}-minute total limit; stopping pending suppliers.`);
+      logger.warn(`Quote #${quoteId} reached the ${quoteTimeoutMinutes}-minute limit (${searchPlans.length} item(s) x 2 min); stopping pending suppliers.`);
       sendQuoteProgress(event, {
         phase: 'quote_timeout',
         quoteId,
@@ -358,6 +375,9 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
       }
     } finally {
       clearTimeout(quoteTimeoutId);
+      if (activeQuoteController === quoteController) {
+        activeQuoteController = null;
+      }
     }
 
     const finalStatus = quoteReachedTimeout ? 'completed_with_timeout' : 'completed';

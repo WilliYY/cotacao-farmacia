@@ -430,13 +430,13 @@ function Find-TableControl {
                 $name = [string]$element.Current.Name
                 if ($name) { $names.Add((ConvertTo-NormalizedText $name)) | Out-Null }
             }
-            if ($names.Contains("codigo ean") -and $names.Contains("descricao") -and
-                $names.Contains("preco nf") -and $names.Contains("entrega") -and
-                $names.Contains("ofertaol") -and $names.Contains("laboratorio")) {
+            if ($names.Contains("codigo ean") -and $names.Contains("descricao") -and $names.Contains("preco nf")) {
                 try {
                     $grid = $table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
-                    if ($grid.Current.ColumnCount -eq 18) { return $table }
-                } catch {}
+                    if ($grid.Current.ColumnCount -ge 12) { return $table }
+                } catch {
+                    return $table
+                }
             }
         }
     } catch { return $null }
@@ -857,7 +857,8 @@ function Read-SantaCruzRows {
     $output = New-Object System.Collections.Generic.List[object]
     try {
         $grid = $Table.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
-        if ($grid.Current.ColumnCount -lt 18) { return @() }
+        if ($grid.Current.ColumnCount -lt 12) { return @() }
+        $colCount = $grid.Current.ColumnCount
         for ($row = 0; $row -lt $grid.Current.RowCount; $row++) {
             $ean = Get-GridCellText $grid $row 0
             $name = Get-GridCellText $grid $row 2
@@ -872,6 +873,9 @@ function Read-SantaCruzRows {
             } else {
                 "estoque desconhecido"
             }
+            $lab = if ($colCount -ge 18) { Get-GridCellText $grid $row 17 } else { "" }
+            $cat = if ($colCount -ge 15) { Get-GridCellText $grid $row 14 } else { "" }
+            $listType = if ($colCount -ge 16) { Get-GridCellText $grid $row 15 } else { "" }
             $output.Add([PSCustomObject]@{
                 ean = $ean
                 name = $name
@@ -882,10 +886,10 @@ function Read-SantaCruzRows {
                 unitCostWithSt = $priceNf
                 stock = $stock
                 stockEvidence = $availabilityEvidence
-                laboratory = Get-GridCellText $grid $row 17
+                laboratory = $lab
                 quantityBox = Get-GridCellText $grid $row 5
-                category = Get-GridCellText $grid $row 14
-                listType = Get-GridCellText $grid $row 15
+                category = $cat
+                listType = $listType
             })
         }
     } catch { return @() }
