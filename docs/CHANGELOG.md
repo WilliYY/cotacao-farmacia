@@ -13,7 +13,8 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **Visibilidade Total dos Alertas (`overflow: visible`):** Ajustados os contêineres `.search-card` e `.main-content` no `index.css`. Ao digitar múltiplos medicamentos, a página faz rolagem vertical suave sem cortar nenhum aviso, caixa de alerta da Santa Cruz ou botão de ação.
 
 ### Suporte Nativo à Santa Cruz v12.0.118 Aberta
-- **Extração Dinâmica da Tabela de 15 Colunas (`santacruz-search.ps1`):** Atualizadas as funções `Find-TableControl` e `Read-SantaCruzRows` para reconhecer tabelas da Santa Cruz com 12 a 15 colunas (`v12.0.118`). O robô agora pesquisa e lê os preços da janela aberta do programa sem rejeitar a grade por contagem rígida de colunas.
+- **Manutenção Rígida da Janela Aberta:** Confirmado e documentado em `santacruz-search.ps1` e `AI_SYSTEM_GUIDE.md` que o aplicativo gráfico da Santa Cruz **permanece 100% aberto no computador** após cada pesquisa. O robô escreve o medicamento, extrai os preços da grade e conclui a leitura sem jamais fechar, minimizar ou encerrar a janela do programa.
+- **Extração Dinâmica da Tabela de 15 Colunas (`santacruz-search.ps1`):** Atualizadas as funções `Find-TableControl` e `Read-SantaCruzRows` para reconhecer tabelas da Santa Cruz com 12 a 15 colunas (`v12.0.118`). O robô pesquisa e lê os preços da janela aberta sem rejeitar a grade por contagem rígida de colunas.
 
 ### Limite Rígido de 2 Minutos por Item
 - **Timeout Proporcional ao Número de Itens:** Ajustado o cálculo do tempo limite total da cotação no `main.js` para `quantidade_de_itens * 2 minutos`, garantindo que cada item pesquisado tenha até 2 minutos no máximo.

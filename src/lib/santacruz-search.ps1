@@ -1214,4 +1214,6 @@ if (-not $hasMatchingResult) {
     Complete-SantaCruzResult "stale-results" "A grade exibida nao corresponde ao medicamento pesquisado" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
 }
 
+# CRITICAL: The Santa Cruz GUI application window is ALWAYS left OPEN on screen after a search.
+# It is NEVER closed, terminated, or hidden by the automation script so the operator can continue quoting.
 Complete-SantaCruzResult "ok" "Pesquisa concluida" $results $installation.InstallRoot $installation.LaunchPath $installation.Source
