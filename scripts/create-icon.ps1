@@ -1,69 +1,89 @@
 Add-Type -AssemblyName System.Drawing
 
-$width = 256
-$height = 256
+function Draw-WimifarmaIcon([int]$size) {
+    $bmp = New-Object System.Drawing.Bitmap $size, $size
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
 
-$bmp = New-Object System.Drawing.Bitmap $width, $height
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-$g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+    # Clear background to transparent (no black box!)
+    $g.Clear([System.Drawing.Color]::Transparent)
 
-# Outer background fill - Deep modern dark teal / navy
-$bgRect = New-Object System.Drawing.Rectangle 0, 0, $width, $height
-$bgBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush $bgRect, ([System.Drawing.Color]::FromArgb(255, 11, 15, 25)), ([System.Drawing.Color]::FromArgb(255, 6, 40, 48)), 45
-$g.FillRectangle($bgBrush, $bgRect)
+    $scale = $size / 256.0
 
-# Rounded Badge Container
-$margin = 16
-$badgeRect = New-Object System.Drawing.Rectangle $margin, $margin, ($width - 2 * $margin), ($height - 2 * $margin)
-$badgeBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush $badgeRect, ([System.Drawing.Color]::FromArgb(255, 8, 127, 91)), ([System.Drawing.Color]::FromArgb(255, 13, 148, 136)), 135
+    # 1. Outer Squircle Badge with rich gradient
+    $margin = [int](12 * $scale)
+    $badgeSize = $size - (2 * $margin)
+    $badgeRect = New-Object System.Drawing.Rectangle $margin, $margin, $badgeSize, $badgeSize
 
-$path = New-Object System.Drawing.Drawing2D.GraphicsPath
-$r = 44
-$path.AddArc($badgeRect.X, $badgeRect.Y, $r, $r, 180, 90)
-$path.AddArc(($badgeRect.Right - $r), $badgeRect.Y, $r, $r, 270, 90)
-$path.AddArc(($badgeRect.Right - $r), ($badgeRect.Bottom - $r), $r, $r, 0, 90)
-$path.AddArc($badgeRect.X, ($badgeRect.Bottom - $r), $r, $r, 90, 90)
-$path.CloseFigure()
+    $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush $badgeRect, 
+        ([System.Drawing.Color]::FromArgb(255, 11, 140, 96)), 
+        ([System.Drawing.Color]::FromArgb(255, 2, 132, 199)), 45
 
-$g.FillPath($badgeBrush, $path)
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $r = [int](52 * $scale)
+    $path.AddArc($badgeRect.X, $badgeRect.Y, $r, $r, 180, 90)
+    $path.AddArc(($badgeRect.Right - $r), $badgeRect.Y, $r, $r, 270, 90)
+    $path.AddArc(($badgeRect.Right - $r), ($badgeRect.Bottom - $r), $r, $r, 0, 90)
+    $path.AddArc($badgeRect.X, ($badgeRect.Bottom - $r), $r, $r, 90, 90)
+    $path.CloseFigure()
 
-# Glowing Cyan Accent Ring
-$pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(200, 6, 182, 212)), 6
-$g.DrawPath($pen, $path)
+    $g.FillPath($brush, $path)
 
-# White Pharmacy Cross / Capsule Accent
-$crossBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(240, 255, 255, 255))
+    # 2. Subtle Glowing Inner Border
+    $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(160, 255, 255, 255)), ([float](3 * $scale))
+    $g.DrawPath($pen, $path)
 
-# Vertical Bar
-$vPath = New-Object System.Drawing.Drawing2D.GraphicsPath
-$vPath.AddArc(110, 60, 36, 36, 180, 180)
-$vPath.AddArc(110, 160, 36, 36, 0, 180)
-$vPath.CloseFigure()
-$g.FillPath($crossBrush, $vPath)
+    # 3. Clean, Bold White Pharmacy Cross + Capsule Symbol
+    $whiteBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 255, 255, 255))
+    $accentBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 6, 182, 212))
 
-# Horizontal Bar
-$hPath = New-Object System.Drawing.Drawing2D.GraphicsPath
-$hPath.AddArc(60, 110, 36, 36, 90, 180)
-$hPath.AddArc(160, 110, 36, 36, 270, 180)
-$hPath.CloseFigure()
-$g.FillPath($crossBrush, $hPath)
+    # Cross Vertical Bar
+    $vWidth = [int](38 * $scale)
+    $vHeight = [int](116 * $scale)
+    $vX = [int](( $size - $vWidth ) / 2)
+    $vY = [int](( $size - $vHeight ) / 2)
+    $vRect = New-Object System.Drawing.Rectangle $vX, $vY, $vWidth, $vHeight
+    $vPath = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $vRadius = [int]($vWidth)
+    $vPath.AddArc($vRect.X, $vRect.Y, $vRadius, $vRadius, 180, 180)
+    $vPath.AddArc($vRect.X, ($vRect.Bottom - $vRadius), $vRadius, $vRadius, 0, 180)
+    $vPath.CloseFigure()
+    $g.FillPath($whiteBrush, $vPath)
 
-# Bold 'WF' Typography in Center
-$font = New-Object System.Drawing.Font("Segoe UI", [float]38, [System.Drawing.FontStyle]::Bold)
-$textBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 8, 127, 91))
-$sf = New-Object System.Drawing.StringFormat
-$sf.Alignment = [System.Drawing.StringAlignment]::Center
-$sf.LineAlignment = [System.Drawing.StringAlignment]::Center
-$layoutRect = New-Object System.Drawing.RectangleF 0, 2, $width, $height
-$g.DrawString('WF', $font, $textBrush, $layoutRect, $sf)
+    # Cross Horizontal Bar
+    $hWidth = [int](116 * $scale)
+    $hHeight = [int](38 * $scale)
+    $hX = [int](( $size - $hWidth ) / 2)
+    $hY = [int](( $size - $hHeight ) / 2)
+    $hRect = New-Object System.Drawing.Rectangle $hX, $hY, $hWidth, $hHeight
+    $hPath = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $hRadius = [int]($hHeight)
+    $hPath.AddArc($hRect.X, $hRect.Y, $hRadius, $hRadius, 90, 180)
+    $hPath.AddArc(($hRect.Right - $hRadius), $hRect.Y, $hRadius, $hRadius, 270, 180)
+    $hPath.CloseFigure()
+    $g.FillPath($whiteBrush, $hPath)
 
-# Save PNG and ICO
+    # Center Cyan Pill Accent Dot / Ring for high-end look
+    $dotSize = [int](22 * $scale)
+    $dotX = [int](( $size - $dotSize ) / 2)
+    $dotY = [int](( $size - $dotSize ) / 2)
+    $g.FillEllipse($accentBrush, $dotX, $dotY, $dotSize, $dotSize)
+
+    $g.Dispose()
+    return $bmp
+}
+
+# Generate 256x256 Master PNG and ICO
 if (-not (Test-Path 'assets')) { New-Item -ItemType Directory -Path 'assets' | Out-Null }
-$bmp.Save('assets/icon.png', [System.Drawing.Imaging.ImageFormat]::Png)
-$bmp.Save('public/icon.png', [System.Drawing.Imaging.ImageFormat]::Png)
 
-$hIcon = $bmp.GetHicon()
+$master256 = Draw-WimifarmaIcon 256
+$master256.Save('assets/icon.png', [System.Drawing.Imaging.ImageFormat]::Png)
+$master256.Save('public/icon.png', [System.Drawing.Imaging.ImageFormat]::Png)
+
+$hIcon = $master256.GetHicon()
 $icon = [System.Drawing.Icon]::FromHandle($hIcon)
 
 $fs = [System.IO.File]::Create((Join-Path (Get-Location) 'assets/icon.ico'))
@@ -74,4 +94,27 @@ $fs2 = [System.IO.File]::Create((Join-Path (Get-Location) 'public/favicon.ico'))
 $icon.Save($fs2)
 $fs2.Close()
 
-Write-Host 'Icon generated successfully at assets/icon.ico and public/favicon.ico!'
+# Update Desktop shortcut
+$WshShell = New-Object -ComObject WScript.Shell
+$desktopPath = [System.Environment]::GetFolderPath('Desktop')
+$shortcutPath = Join-Path $desktopPath 'wimi cotacao.lnk'
+$projectPath = (Get-Location).Path
+$iconPath = Join-Path $projectPath 'assets\icon.ico'
+$vbsPath = Join-Path $projectPath 'wimi cotacao.vbs'
+
+$Shortcut = $WshShell.CreateShortcut($shortcutPath)
+$Shortcut.TargetPath = $vbsPath
+$Shortcut.WorkingDirectory = $projectPath
+$Shortcut.IconLocation = "$iconPath, 0"
+$Shortcut.Description = 'Wimifarma Cotação - Sistema Inteligente de Cotação de Medicamentos'
+$Shortcut.Save()
+
+$localShortcutPath = Join-Path $projectPath 'wimi cotacao.lnk'
+$LocalShortcut = $WshShell.CreateShortcut($localShortcutPath)
+$LocalShortcut.TargetPath = $vbsPath
+$LocalShortcut.WorkingDirectory = $projectPath
+$LocalShortcut.IconLocation = "$iconPath, 0"
+$LocalShortcut.Description = 'Wimifarma Cotação'
+$LocalShortcut.Save()
+
+Write-Host 'Ultra-clean transparent icon generated and desktop shortcut updated!'
