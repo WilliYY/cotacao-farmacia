@@ -643,20 +643,57 @@ function Ensure-SantaCruzSearchInput {
     param($Element, [string]$TargetValue, [int]$MaxRetries = 3)
     if (-not $Element) { return $false }
 
+    $normTarget = ConvertTo-NormalizedText $TargetValue
+
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         try {
             try { $Element.SetFocus() } catch {}
             Start-Sleep -Milliseconds 80
 
-            [System.Windows.Forms.SendKeys]::SendWait("^a")
-            Start-Sleep -Milliseconds 40
-            [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
-            Start-Sleep -Milliseconds 60
-
+            # Step 1: Clear text box completely
             $valuePattern = $null
             if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
-                try { $valuePattern.SetValue($TargetValue) } catch {}
+                try { $valuePattern.SetValue("") } catch {}
             }
+            [System.Windows.Forms.SendKeys]::SendWait("^a")
+            Start-Sleep -Milliseconds 30
+            [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
+            [System.Windows.Forms.SendKeys]::SendWait("{DELETE}")
+            Start-Sleep -Milliseconds 50
+
+            # Step 2: Try SetValue first (cleanest insertion, avoids double typing)
+            $setValueSuccess = $false
+            if ($valuePattern) {
+                try {
+                    $valuePattern.SetValue($TargetValue)
+                    $setValueSuccess = $true
+                } catch {}
+            }
+
+            # Step 3: Check text after SetValue
+            $currentText = ""
+            if ($valuePattern) {
+                try { $currentText = [string]$valuePattern.Current.Value } catch {}
+            }
+            if (-not $currentText) {
+                try { $currentText = [string]$Element.Current.Name } catch {}
+            }
+
+            $normCurrent = ConvertTo-NormalizedText $currentText
+
+            # If SetValue produced exact match, return success
+            if ($normCurrent -and $normTarget -and $normCurrent -eq $normTarget) {
+                Write-SantaCruzTrace "input-success by SetValue text='$currentText'"
+                return $true
+            }
+
+            # Step 4: If SetValue didn't produce exact match, clear and type via SendKeys
+            if ($valuePattern) { try { $valuePattern.SetValue("") } catch {} }
+            [System.Windows.Forms.SendKeys]::SendWait("^a")
+            Start-Sleep -Milliseconds 30
+            [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
+            [System.Windows.Forms.SendKeys]::SendWait("{DELETE}")
+            Start-Sleep -Milliseconds 50
 
             if ($TargetValue) {
                 foreach ($character in $TargetValue.ToCharArray()) {
@@ -668,8 +705,9 @@ function Ensure-SantaCruzSearchInput {
 
             Start-Sleep -Milliseconds 120
 
+            # Step 5: Final verification — STRICT EXACT MATCH REQUIRED ($normCurrent -eq $normTarget)
             $currentText = ""
-            if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
+            if ($valuePattern) {
                 try { $currentText = [string]$valuePattern.Current.Value } catch {}
             }
             if (-not $currentText) {
@@ -677,11 +715,13 @@ function Ensure-SantaCruzSearchInput {
             }
 
             $normCurrent = ConvertTo-NormalizedText $currentText
-            $normTarget = ConvertTo-NormalizedText $TargetValue
 
-            if (-not $currentText -or ($normCurrent -and $normTarget -and $normCurrent.Contains($normTarget))) {
+            if (-not $TargetValue -or ($normCurrent -and $normTarget -and $normCurrent -eq $normTarget)) {
+                Write-SantaCruzTrace "input-success text='$currentText'"
                 return $true
             }
+
+            Write-SantaCruzTrace "input-mismatch attempt ${attempt}: current='$currentText' vs target='$TargetValue'"
         } catch {
             Write-SantaCruzTrace "typing attempt $attempt failed: $_"
         }
@@ -1181,6 +1221,9 @@ if (-not $SearchQuery -and -not $PrepareOnly) {
 
 $window = Find-SantaCruzWindow
 $existingProcess = Find-SantaCruzProcess
+if ($window -and -not $existingProcess) {
+    try { $existingProcess = Get-Process -Id $window.Current.ProcessId -ErrorAction SilentlyContinue } catch {}
+}
 $launchAttempted = $false
 
 if ($PrepareOnly -and $existingProcess -and -not $window) {
@@ -1193,13 +1236,18 @@ if ($PrepareOnly -and $existingProcess -and -not $window) {
         }
         $existingProcess = $null
     } catch {
-        Complete-SantaCruzResult "restart-failed" "Nao foi possivel reiniciar o processo Santa Cruz sem janela" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+        Complete-SantaCruzResult "restart-failed" "Nao foi possivel reiniciar o processo Santa Cruz sem janela" $(if ($installation) { $installation.InstallRoot }) $(if ($installation) { $installation.LaunchPath }) $(if ($installation) { $installation.Source })
     }
 }
 
 # CRITICAL: NEVER launch a second process if Santa Cruz is already running or open.
 # Launching a second instance of Pe - SantaCruz.exe triggers its single-instance watcher which kills the open software.
-if (-not $window -and -not $existingProcess -and $installation) {
+$anyRunningProcess = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.ProcessName -match '^(?i:javaw|java|digitador-sd|Pe - SantaCruz|SantaCruz)$' -or
+    $_.MainWindowTitle -match '(?i)santa\s*-?\s*cruz|pedido\s*eletr|digitador|vitrine'
+}
+
+if (-not $window -and -not $existingProcess -and -not $anyRunningProcess -and $installation) {
     try {
         Write-SantaCruzTrace "launching single Santa Cruz process (no existing process or window found)"
         $startArguments = @{
@@ -1211,11 +1259,11 @@ if (-not $window -and -not $existingProcess -and $installation) {
         Start-Process @startArguments | Out-Null
         $launchAttempted = $true
     } catch {
-        Complete-SantaCruzResult "launch-failed" "Falha ao abrir o aplicativo Santa Cruz" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+        Complete-SantaCruzResult "launch-failed" "Falha ao abrir o aplicativo Santa Cruz" $(if ($installation) { $installation.InstallRoot }) $(if ($installation) { $installation.LaunchPath }) $(if ($installation) { $installation.Source })
     }
 }
 
-if (-not $window -and -not $existingProcess -and -not $installation) {
+if (-not $window -and -not $existingProcess -and -not $anyRunningProcess -and -not $installation) {
     Complete-SantaCruzResult "not-installed" "Aplicativo Santa Cruz nao localizado"
 }
 

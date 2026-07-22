@@ -6,6 +6,10 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Proteção Estrita contra Duplicação de Texto e Fechamento da Santa Cruz
+- **Validação Estrita de Texto Exato (`Ensure-SantaCruzSearchInput`):** Alterada a validação do campo de busca de `.Contains()` para **igualdade exata de texto normalizado** (`$normCurrent -eq $normTarget`). Anteriormente, se a caixa de pesquisa já contivesse `losartana 50`, o robô concatenava o texto (`losartana 50losartana 50`), e como a string duplicada continha o termo buscado, o `.Contains()` aceitava a digitação incorreta. Agora a caixa é **limpa completamente com `SetValue("")` + `Ctrl+A` + `{BACKSPACE}` + `{DELETE}`** antes da digitação e qualquer divergência força a repetição da limpeza e reescrita do termo correto.
+- **Proteção Tripla contra Reabertura e Fechamento do Software:** Adicionada checagem tripla de segurança antes de qualquer chamada a `Start-Process`. O robô consulta `Get-Process` no sistema operacional por executáveis (`javaw`, `java`, `digitador-sd`, `Pe - SantaCruz`, `SantaCruz`) ou títulos de janela. Se o software já estiver aberto, o robô **nunca** executa um segundo `Start-Process`, prevenindo o encerramento forçado da Santa Cruz por seu monitor de instância única.
+
 ### Detecção Universal da Santa Cruz para Qualquer Computador
 - **Scan Direto de Janelas do Desktop (`Find-SantaCruzWindow`):** Novo algoritmo (Strategy 1) que varre **todas as janelas do sistema operacional** por título (`Pedido Eletrônico`, `SantaCruz`, `Digitador`, `Vitrine de Ofertas`, `Pedidos`) antes de tentar localizar o processo. Funciona independentemente de como a Santa Cruz foi instalada no PC.
 - **Detecção Multi-Camada de Processos (`Find-SantaCruzProcess`):** Reescrita completa com 3 camadas de prioridade:
