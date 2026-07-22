@@ -6,6 +6,11 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Correção e Estabilização de Pesquisa na Profarma
+- **Submissão Nativa de Enter via Electron (`electron-scraper.js`):** Adicionada a emissão de eventos nativos de teclado do SO (`sendInputEvent({ type: 'keyDown', keyCode: 'ENTER' })`) para a Profarma (`supplierId === 2`). Anteriormente, o campo de busca `#inputPP` recebia o texto mas os formulários reativos do Angular Material não disparavam a pesquisa sem o Enter nativo do sistema operacional, causando estouro de tempo limite.
+- **Ampliação das Páginas Válidas de Busca:** Adicionados os caminhos `/home`, `/inicio` e `/vitrine` como páginas válidas de consulta na ProfarmaOn, evitando travamento caso a distribuidora redirecione a navegação inicial.
+- **Limpeza do Campo entre Consultas:** O robô agora zera o valor do campo `#inputPP` antes de digitar o próximo item da cotação.
+
 ### Tolerância a Falhas e Re-Tentativa Automática por Item
 - **Regra de 3 Falhas Consecutivas (`main.js`):** Reformulada a lógica do circuit breaker durante cotações em lote. Se uma distribuidora (ANB, Profarma, Santa Cruz, DM Paraná) falhar ou der timeout no item 1, ela **não é mais desativada imediatamente**; o sistema tenta novamente no item 2 e item 3. A distribuidora só é ignorada nos itens restantes da cotação caso acumule **3 falhas consecutivas**. Se responder com sucesso em qualquer item intermediário, o contador de falhas é zerado.
 

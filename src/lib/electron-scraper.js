@@ -527,6 +527,9 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
         const isSearchPage = pathname.includes('/dashboard') ||
                              pathname.includes('/produtos') || 
                              pathname.includes('/novo-pedido') ||
+                             pathname.includes('/home') ||
+                             pathname.includes('/inicio') ||
+                             pathname.includes('/vitrine') ||
                              (pathname.includes('/pedido') && pathname !== '/') ||
                              (supplierId === 4 && pathname === '/home');
 
@@ -668,7 +671,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   return;
                 }
 
-                // If we haven't typed yet, type the search term
+                // If we haven't typed yet, clear input and type the search term
                 if (!typedSearch) {
                   typedSearch = true;
                   logger.info(`Typing search term "${searchTerm}"...`);
@@ -686,8 +689,13 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                           window.HTMLInputElement.prototype,
                           'value'
                         )?.set;
-                        if (setter) setter.call(searchInp, ${JSON.stringify(searchTerm)});
-                        else searchInp.value = ${JSON.stringify(searchTerm)};
+                        if (setter) {
+                          setter.call(searchInp, '');
+                          searchInp.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+                          setter.call(searchInp, ${JSON.stringify(searchTerm)});
+                        } else {
+                          searchInp.value = ${JSON.stringify(searchTerm)};
+                        }
                         searchInp.dispatchEvent(new InputEvent('input', {
                           bubbles: true,
                           inputType: 'insertText',
@@ -739,9 +747,10 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       }
                     })()
                   `).catch(() => {});
-                  if (supplierId === 4) {
+                  if (supplierId === 4 || supplierId === 2) {
                     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ENTER' });
                     win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ENTER' });
+                    win.webContents.sendInputEvent({ type: 'char', keyCode: '\r' });
                   }
                   return;
                 }
