@@ -330,6 +330,38 @@ function Get-ProcessPath {
 }
 
 function Find-SantaCruzWindow {
+    # --- Strategy 1: Scan ALL top-level windows by title (most reliable, works on any PC) ---
+    try {
+        $allWindows = $desktop.FindAll(
+            [System.Windows.Automation.TreeScope]::Children,
+            [System.Windows.Automation.PropertyCondition]::TrueCondition
+        )
+        $candidates = @()
+        foreach ($candidateWindow in $allWindows) {
+            try {
+                $title = [string]$candidateWindow.Current.Name
+                if (-not $title) { continue }
+                if ($title -match '(?i)santa\s*-?\s*cruz|pedido\s*eletr[oô]nico|digitador\s*-?\s*sd|vitrine\s*de\s*ofertas' -or $title -eq "Pedidos") {
+                    $bounds = $candidateWindow.Current.BoundingRectangle
+                    if ($bounds.Width -le 0 -or $bounds.Height -le 0) { continue }
+                    $score = [double]($bounds.Width * $bounds.Height)
+                    if ($title -eq "Pedidos") { $score += 10000000 }
+                    if ($title -match '(?i)^Pedido Eletr.nico SantaCruz') { $score += 1000000 }
+                    if ($title -match '(?i)vitrine') { $score += 500000 }
+                    $candidates += [PSCustomObject]@{ Window = $candidateWindow; Score = $score; Title = $title }
+                }
+            } catch {}
+        }
+        $winner = $candidates | Sort-Object Score -Descending | Select-Object -First 1
+        if ($winner) {
+            Write-SantaCruzTrace "window-scan found title='$($winner.Title)' score=$($winner.Score)"
+            return $winner.Window
+        }
+    } catch {
+        Write-SantaCruzTrace "window-scan failed: $_"
+    }
+
+    # --- Strategy 2: Find process first, then its windows (fallback for headless startup) ---
     $process = Find-SantaCruzProcess
     if (-not $process) { return $null }
     try {
@@ -361,20 +393,75 @@ function Find-SantaCruzWindow {
 }
 
 function Find-SantaCruzProcess {
+    $santaCruzPattern = '(?i)santa\s*-?\s*cruz|digitador[\s_-]*sd|pe\s*-?\s*santacruz|pedido[\s_-]*eletronico'
+
+    # --- Priority 1: Process name matches known Santa Cruz executables ---
+    $knownProcessNames = @('digitador-sd', 'Pe - SantaCruz', 'pedido-eletronico')
     foreach ($process in Get-Process -ErrorAction SilentlyContinue) {
         try {
             $pName = [string]$process.ProcessName
-            if ($pName -match '^(?i:javaw|java|digitador-sd|Pe - SantaCruz|SantaCruz)$') {
-                try {
-                    $pPath = [string]$process.Path
-                    if ($pPath -and $pPath -match '(?i)santa\s*-?\s*cruz|digitador-sd|pe\s*-?\s*santacruz') {
+            foreach ($known in $knownProcessNames) {
+                if ($pName -eq $known) {
+                    Write-SantaCruzTrace "process-match by known name='$pName' pid=$($process.Id)"
+                    return $process
+                }
+            }
+        } catch {}
+    }
+
+    # --- Priority 2: Java processes with Santa Cruz in their path or window title ---
+    foreach ($process in Get-Process -Name 'javaw', 'java' -ErrorAction SilentlyContinue) {
+        try {
+            # Check process path
+            $pPath = ""
+            try { $pPath = [string]$process.Path } catch {}
+            if ($pPath -and $pPath -match $santaCruzPattern) {
+                Write-SantaCruzTrace "process-match by path='$pPath' pid=$($process.Id)"
+                return $process
+            }
+
+            # Check main window title
+            $mwTitle = ""
+            try { $mwTitle = [string]$process.MainWindowTitle } catch {}
+            if ($mwTitle -and $mwTitle -match $santaCruzPattern) {
+                Write-SantaCruzTrace "process-match by MainWindowTitle='$mwTitle' pid=$($process.Id)"
+                return $process
+            }
+
+            # Check command line arguments (WMI)
+            try {
+                $wmiProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($process.Id)" -ErrorAction SilentlyContinue
+                $cmdLine = [string]$wmiProc.CommandLine
+                if ($cmdLine -and $cmdLine -match $santaCruzPattern) {
+                    Write-SantaCruzTrace "process-match by CommandLine pid=$($process.Id)"
+                    return $process
+                }
+            } catch {}
+
+            # Check modules (jars loaded by javaw)
+            try {
+                $modules = $process.Modules | Select-Object -First 30 -ErrorAction SilentlyContinue
+                foreach ($mod in $modules) {
+                    if ([string]$mod.FileName -match $santaCruzPattern) {
+                        Write-SantaCruzTrace "process-match by module='$($mod.FileName)' pid=$($process.Id)"
                         return $process
                     }
-                } catch {}
+                }
+            } catch {}
+        } catch {}
+    }
+
+    # --- Priority 3: Any process name matching SantaCruz pattern loosely ---
+    foreach ($process in Get-Process -ErrorAction SilentlyContinue) {
+        try {
+            $pName = [string]$process.ProcessName
+            if ($pName -match '(?i)^santacruz$') {
+                Write-SantaCruzTrace "process-match by loose name='$pName' pid=$($process.Id)"
                 return $process
             }
         } catch {}
     }
+
     return $null
 }
 
@@ -1007,18 +1094,22 @@ if ($DiscoveryOnly) {
 }
 
 if ($StatusOnly) {
-    if (-not $installation) {
-        Complete-SantaCruzResult "not-installed" "Aplicativo Santa Cruz nao localizado neste computador" @() "" "" "" @{
-            ready = $false
-            processRunning = $false
-            windowDetected = $false
-            requiresOperator = $true
-            canAutoPrepare = $false
-        }
-    }
-
+    # ALWAYS check process and window FIRST, even if installation path is unknown.
+    # On some PCs the installation path varies, but the software may already be running.
     $statusProcess = Find-SantaCruzProcess
-    if (-not $statusProcess) {
+    $statusWindow = Find-SantaCruzWindow
+
+    # If both process and window are absent, then check installation
+    if (-not $statusProcess -and -not $statusWindow) {
+        if (-not $installation) {
+            Complete-SantaCruzResult "not-installed" "Aplicativo Santa Cruz nao localizado neste computador" @() "" "" "" @{
+                ready = $false
+                processRunning = $false
+                windowDetected = $false
+                requiresOperator = $true
+                canAutoPrepare = $false
+            }
+        }
         Complete-SantaCruzResult "closed" "Abra a Santa Cruz para o sistema cotar; o robo tambem pode abrir e entrar sozinho" @() $installation.InstallRoot $installation.LaunchPath $installation.Source @{
             ready = $false
             processRunning = $false
@@ -1028,15 +1119,18 @@ if ($StatusOnly) {
         }
     }
 
-    $statusWindow = Find-SantaCruzWindow
-    if (-not $statusWindow) {
-        $statusIssue = Get-RecentSantaCruzStartupIssue $installation.InstallRoot
+    # Process running but no window accessible
+    if ($statusProcess -and -not $statusWindow) {
+        $statusIssue = Get-RecentSantaCruzStartupIssue $(if ($installation) { $installation.InstallRoot } else { "" })
         $statusReason = if ($statusIssue) {
             "$statusIssue; o processo ficou sem janela. Tente Reiniciar e preparar ou aguarde o fornecedor"
         } else {
             "Santa Cruz esta em execucao, mas sem janela acessivel; use Reiniciar e preparar"
         }
-        Complete-SantaCruzResult "running-without-window" $statusReason @() $installation.InstallRoot $installation.LaunchPath $installation.Source @{
+        $installRoot = if ($installation) { $installation.InstallRoot } else { "" }
+        $launchPath = if ($installation) { $installation.LaunchPath } else { "" }
+        $discoverySource = if ($installation) { $installation.Source } else { "" }
+        Complete-SantaCruzResult "running-without-window" $statusReason @() $installRoot $launchPath $discoverySource @{
             ready = $false
             processRunning = $true
             windowDetected = $false
@@ -1045,17 +1139,21 @@ if ($StatusOnly) {
         }
     }
 
+    # Window found — analyze its state
     $statusTitle = [string]$statusWindow.Current.Name
+    $installRoot = if ($installation) { $installation.InstallRoot } else { "" }
+    $launchPath = if ($installation) { $installation.LaunchPath } else { "" }
+    $discoverySource = if ($installation) { $installation.Source } else { "" }
     $statusDetails = @{
         ready = $false
-        processRunning = $true
+        processRunning = [bool]$statusProcess
         windowDetected = $true
         windowTitle = $statusTitle
         requiresOperator = $false
         canAutoPrepare = $true
     }
     if (Test-SantaCruzUpdating $statusWindow) {
-        Complete-SantaCruzResult "updating" "Santa Cruz esta atualizando; aguarde a tela concluir" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+        Complete-SantaCruzResult "updating" "Santa Cruz esta atualizando; aguarde a tela concluir" @() $installRoot $launchPath $discoverySource $statusDetails
     }
 
     $statusTable = Find-TableControl $statusWindow
@@ -1063,18 +1161,18 @@ if ($StatusOnly) {
     if ($statusTable -and $statusSearch) {
         $statusDetails.ready = $true
         $statusDetails.canAutoPrepare = $false
-        Complete-SantaCruzResult "ready" "Santa Cruz pronta; a cotacao reutilizara a tela de pesquisa ja aberta" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+        Complete-SantaCruzResult "ready" "Santa Cruz pronta; a cotacao reutilizara a tela de pesquisa ja aberta" @() $installRoot $launchPath $discoverySource $statusDetails
     }
     if (Test-LoginScreenPresent $statusWindow) {
-        Complete-SantaCruzResult "login-required" "Santa Cruz aberta na tela de login; o robo usara as credenciais salvas" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+        Complete-SantaCruzResult "login-required" "Santa Cruz aberta na tela de login; o robo usara as credenciais salvas" @() $installRoot $launchPath $discoverySource $statusDetails
     }
     if ($statusTitle -match '(?i)\s-\sHome\s-') {
-        Complete-SantaCruzResult "logged-in-home" "Santa Cruz aberta e conectada; o robo abrira o Digitalizador" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+        Complete-SantaCruzResult "logged-in-home" "Santa Cruz aberta e conectada; o robo abrira o Digitalizador" @() $installRoot $launchPath $discoverySource $statusDetails
     }
     if ($statusTitle -match '(?i)\s-\sPedidos\s-' -or $statusTitle.Trim() -eq "Pedidos") {
-        Complete-SantaCruzResult "logged-in-orders" "Santa Cruz aberta em Pedidos; o robo abrira ou aplicara o Novo Pedido" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+        Complete-SantaCruzResult "logged-in-orders" "Santa Cruz aberta em Pedidos; o robo abrira ou aplicara o Novo Pedido" @() $installRoot $launchPath $discoverySource $statusDetails
     }
-    Complete-SantaCruzResult "open-not-ready" "Santa Cruz esta aberta, mas a rota de pesquisa ainda nao foi reconhecida" @() $installation.InstallRoot $installation.LaunchPath $installation.Source $statusDetails
+    Complete-SantaCruzResult "open-not-ready" "Santa Cruz esta aberta, mas a rota de pesquisa ainda nao foi reconhecida" @() $installRoot $launchPath $discoverySource $statusDetails
 }
 
 if (-not $SearchQuery -and -not $PrepareOnly) {

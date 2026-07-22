@@ -6,6 +6,15 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Detecção Universal da Santa Cruz para Qualquer Computador
+- **Scan Direto de Janelas do Desktop (`Find-SantaCruzWindow`):** Novo algoritmo (Strategy 1) que varre **todas as janelas do sistema operacional** por título (`Pedido Eletrônico`, `SantaCruz`, `Digitador`, `Vitrine de Ofertas`, `Pedidos`) antes de tentar localizar o processo. Funciona independentemente de como a Santa Cruz foi instalada no PC.
+- **Detecção Multi-Camada de Processos (`Find-SantaCruzProcess`):** Reescrita completa com 3 camadas de prioridade:
+  1. **Processos com nome exato** (`digitador-sd`, `Pe - SantaCruz`, `pedido-eletronico`).
+  2. **Processos Java (`javaw`/`java`)** validados pelo *path*, *MainWindowTitle*, *CommandLine (WMI)* e *modules carregados* para confirmar que é a Santa Cruz e não outro programa Java.
+  3. **Nome de processo genérico** (`SantaCruz`) como fallback final.
+- **Correção Crítica no Fluxo `--status-only`:** Anteriormente, se o `Find-SantaCruzInstallation` não encontrasse o caminho de instalação (comum em PCs com instalação não-padrão), o script imediatamente retornava `not-installed` sem sequer verificar se o processo ou janela estavam ativos. Agora, o script **sempre verifica processo e janela ANTES** de concluir que o software não está instalado.
+- **Proteção contra Erro de Acesso a `$installation`:** Todos os acessos a `$installation.InstallRoot`, `$installation.LaunchPath` e `$installation.Source` agora usam ternário `$(if ($installation) {...})` evitando erros em PCs onde a instalação não foi localizada mas o software está aberto.
+
 ### Correção e Estabilização de Pesquisa na Profarma
 - **Submissão Nativa de Enter via Electron (`electron-scraper.js`):** Adicionada a emissão de eventos nativos de teclado do SO (`sendInputEvent({ type: 'keyDown', keyCode: 'ENTER' })`) para a Profarma (`supplierId === 2`). Anteriormente, o campo de busca `#inputPP` recebia o texto mas os formulários reativos do Angular Material não disparavam a pesquisa sem o Enter nativo do sistema operacional, causando estouro de tempo limite.
 - **Ampliação das Páginas Válidas de Busca:** Adicionados os caminhos `/home`, `/inicio` e `/vitrine` como páginas válidas de consulta na ProfarmaOn, evitando travamento caso a distribuidora redirecione a navegação inicial.
