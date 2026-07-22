@@ -6,7 +6,10 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
-### Proteção Estrita contra Duplicação de Texto e Fechamento da Santa Cruz
+### Expansão do Cérebro Farmacêutico e Inteligência de Cotações
+- **Dicionário Farmacêutico Expandido (`ACTIVE_INGREDIENTS`):** Adicionados mais de 35 novos compostos ativos da curva A farmacêutica brasileira (empagliflozina, semaglutida, rosuvastatina, atorvastatina, rivaroxabana, apixabana, tadalafila, escitalopram, sertralina, pregabalina, quetiapina, etc.).
+- **Mapas de Abreviaturas de Balcão (`EXACT_INGREDIENT_ALIASES`):** Adicionados reconhecimentos automáticos para termos curtos de balcão de farmácia (`pot` -> `potássica`, `sod` -> `sódica`, `clor` / `hcl` -> `cloridrato`, `metf` -> `metformina`, `losar` -> `losartana`, `sinvas` -> `sinvastatina`, `rosu` -> `rosuvastatina`, `atorva` -> `atorvastatina`, `esci` -> `escitalopram`, `sertra` -> `sertralina`, `tada` -> `tadalafila`).
+- **Desambiguação de Dosagens Múltiplas (`COMMON_STRENGTHS_MG`):** Expandidas dosagens comuns para desambiguação automática de lotes e buscas sem perda de precisão fiscal.
 - **Remoção do Banner Visual de Checagem (`santacruz-readiness`):** Removido da interface do usuário o bloco visual em azul (*"Verificando Santa Cruz - Verificando se a Santa Cruz está aberta e pronta"*). O sistema agora identifica a Santa Cruz instantânea e silenciosamente no momento da cotação ao vivo, eliminando qualquer atraso visual ou caixa de aguardo na tela inicial.
 - **Remoção de Bloqueio em Segundo Plano no Node (`windowsHide: false`):** Alterado o parâmetro de execução do processo PowerShell em `santacruz-real.js` de `windowsHide: true` para `windowsHide: false`. No Windows, a execução do PowerShell em modo oculta (hidden) travava o loop de mensagens da ponte COM UIAutomation, impedindo o retorno dos resultados para a interface do Electron.
 - **Validação de Teste Real E2E ("metformina 500mg"):** Validado o fluxo completo de ponta a ponta chamando o conector oficial `SantaCruzRealConnector.searchProduct`. A automação desminimizou a Santa Cruz, focou o campo de pesquisa, digitou `metformina 500mg`, acionou a busca e retornou com sucesso o item cotado (`Preço NF: R$ 16,14`), mantendo o software da Santa Cruz 100% aberto na tela.

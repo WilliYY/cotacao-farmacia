@@ -19,10 +19,19 @@ const PRESENTATION_WORDS = new Set([
 // Known strengths are used only to disambiguate compact multi-dose input. They never validate a quote price.
 const COMMON_STRENGTHS_MG = new Map([
   ['dapagliflozina', new Set(['5', '10'])],
+  ['empagliflozina', new Set(['10', '25'])],
   ['hidroclorotiazida', new Set(['12.5', '25', '50'])],
   ['losartana', new Set(['25', '50', '100'])],
   ['metformina', new Set(['500', '750', '850', '1000'])],
-  ['sinvastatina', new Set(['10', '20', '40', '80'])]
+  ['rosuvastatina', new Set(['5', '10', '20', '40'])],
+  ['atorvastatina', new Set(['10', '20', '40', '80'])],
+  ['sinvastatina', new Set(['10', '20', '40', '80'])],
+  ['rivaroxabana', new Set(['2.5', '10', '15', '20'])],
+  ['tadalafila', new Set(['5', '20'])],
+  ['escitalopram', new Set(['10', '15', '20'])],
+  ['pregabalina', new Set(['50', '75', '150'])],
+  ['quetiapina', new Set(['25', '100', '200', '300'])],
+  ['venlafaxina', new Set(['37.5', '75', '150'])]
 ]);
 
 function extractRawName(value) {
