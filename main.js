@@ -145,14 +145,19 @@ function createWindow() {
     mainWindow.show();
   });
 
-  const isDev = !app.isPackaged;
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
-    if (process.env.OPEN_DEVTOOLS === 'true') {
-      mainWindow.webContents.openDevTools();
-    }
+  const distPath = path.join(__dirname, 'dist', 'index.html');
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+
+  if (devServerUrl) {
+    mainWindow.loadURL(devServerUrl);
+  } else if (fs.existsSync(distPath)) {
+    mainWindow.loadFile(distPath);
   } else {
-    mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
+    mainWindow.loadURL('http://localhost:5173');
+  }
+
+  if (process.env.OPEN_DEVTOOLS === 'true') {
+    mainWindow.webContents.openDevTools();
   }
 
   mainWindow.webContents.on('did-finish-load', () => {

@@ -6,6 +6,9 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Carregamento Confiável da Interface (`dist/index.html`)
+- **Fim da Tela Preta ao Abrir:** Ajustado o carregamento do `BrowserWindow` no `main.js` para detectar automaticamente se a compilação local `dist/index.html` existe e carregá-la diretamente quando a URL de desenvolvimento (`localhost:5173`) não estiver ativa.
+
 ### Bloqueio de Instância Dupla
 - **Instância Única Rigorosa (`requestSingleInstanceLock`):** Implementada trava no `main.js` com `process.exit(0)` imediato se uma segunda instância do aplicativo for iniciada. Ao tentar abrir novamente, o aplicativo existente em execução é imediatamente restaurado e trazido ao foco na tela.
 
