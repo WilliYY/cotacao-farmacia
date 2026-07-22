@@ -6,6 +6,12 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Design e Alto Contraste no Front-End
+- **Visibilidade de Cartões e Títulos (`index.css`):** Elevado o contraste dos títulos (`#0f172a`), rótulos de campos, subtextos (`#334155`), badges de estatísticas (`#1e293b`) e caixas de prévia de inteligência para leitura nítida e profissional em qualquer iluminação de tela.
+- **Toggles de Distribuidoras Elegantes:** Reformulados os seletores de distribuidoras (`.supplier-label`). Quando selecionados, exibem um gradiente esmeralda moderno (`linear-gradient(135deg, #059669 0%, #0d9488 100%)`) com texto branco em negrito e checkmark brilhante.
+- **Banners de Status de Distribuidoras (Santa Cruz):** Redesenvolvidos os alertas de prontidão (`.santacruz-readiness`) com fundos luminosos (âmbar/esmeralda), bordas destacadas e tipografia em alto contraste.
+- **Botões de Ação com Efeito Fluido:** O botão principal *"Pesquisar preços"* ganhou tom gradiente vibrante, sombra com profundidade (`box-shadow`) e efeito de elevação suave ao passar o ponteiro do mouse (`hover`).
+
 ### Carregamento Confiável da Interface (`dist/index.html`)
 - **Fim da Tela Preta ao Abrir:** Ajustado o carregamento do `BrowserWindow` no `main.js` para detectar automaticamente se a compilação local `dist/index.html` existe e carregá-la diretamente quando a URL de desenvolvimento (`localhost:5173`) não estiver ativa.
 
