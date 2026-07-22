@@ -6,6 +6,9 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ## [1.7.2] - 2026-07-22
 
+### Tolerância a Falhas e Re-Tentativa Automática por Item
+- **Regra de 3 Falhas Consecutivas (`main.js`):** Reformulada a lógica do circuit breaker durante cotações em lote. Se uma distribuidora (ANB, Profarma, Santa Cruz, DM Paraná) falhar ou der timeout no item 1, ela **não é mais desativada imediatamente**; o sistema tenta novamente no item 2 e item 3. A distribuidora só é ignorada nos itens restantes da cotação caso acumule **3 falhas consecutivas**. Se responder com sucesso em qualquer item intermediário, o contador de falhas é zerado.
+
 ### Proteção Estrita contra Fechamento da Santa Cruz
 - **Bloqueio de Duplo Lançamento (`santacruz-search.ps1`):** Adicionada verificação rígida `if (-not $window -and -not $existingProcess -and $installation)`. Se o processo da Santa Cruz já estiver rodando, o robô **nunca** dispara um segundo `Start-Process`, pois o inicializador nativo da Santa Cruz encerrava a instância aberta ao detectar uma segunda chamada. A janela aberta permanece 100% ativa no computador do operador.
 

@@ -267,6 +267,8 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     logger.info(`Starting new Quote process for ${rawTextList.length} input lines and ${searchPlans.length} planned searches`);
     quoteId = await createQuote('processing');
     const blockedSupplierReasons = {};
+    const consecutiveSupplierFailures = {};
+    const MAX_CONSECUTIVE_FAILURES = 3;
     const supplierList = Array.isArray(activeSuppliers) ? activeSuppliers : ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'];
     
     // Limit is 2 minutes (120,000ms) per item
@@ -334,9 +336,30 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
             ...progressContext
           })
         });
-        for (const result of quote.results) {
-          if (result.source && result.liveFailureReason) {
-            blockedSupplierReasons[result.source] = result.liveFailureReason;
+        for (const supplier of supplierList) {
+          const supplierResults = quote.results.filter(r => r.source === supplier);
+          if (supplierResults.length === 0) continue;
+
+          const failureResult = supplierResults.find(r => Boolean(r.liveFailureReason));
+          if (failureResult) {
+            const failReason = failureResult.liveFailureReason || 'Falha de conexão com a distribuidora';
+            consecutiveSupplierFailures[supplier] = (consecutiveSupplierFailures[supplier] || 0) + 1;
+            const currentFailCount = consecutiveSupplierFailures[supplier];
+
+            if (currentFailCount >= MAX_CONSECUTIVE_FAILURES) {
+              blockedSupplierReasons[supplier] = `Falhou consecutivamente em ${MAX_CONSECUTIVE_FAILURES} itens (${failReason})`;
+              logger.warn(`Supplier ${supplier} blocked after ${MAX_CONSECUTIVE_FAILURES} consecutive failures: ${failReason}`);
+              sendQuoteProgress(event, {
+                phase: 'supplier_blocked',
+                ...progressContext,
+                supplier,
+                message: `${supplier} desativado nesta cotação por apresentar falha consecutiva em ${MAX_CONSECUTIVE_FAILURES} itens.`
+              });
+            } else {
+              logger.info(`Supplier ${supplier} failed on item #${planIndex + 1} (${currentFailCount}/${MAX_CONSECUTIVE_FAILURES}); will retry on next item.`);
+            }
+          } else {
+            consecutiveSupplierFailures[supplier] = 0;
           }
         }
 
