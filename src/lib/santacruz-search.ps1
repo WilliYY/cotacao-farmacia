@@ -569,7 +569,30 @@ function Find-SearchControl {
         }
         $winner = $scored | Sort-Object Score -Descending | Select-Object -First 1
         if ($winner -and $winner.Score -ge 60) { return $winner.Element }
-    } catch { return $null }
+    } catch {}
+
+    if ($Table) {
+        try {
+            $tb = $Table.Current.BoundingRectangle
+            if ($tb.Width -gt 0 -and $tb.Height -gt 0) {
+                $syntheticRect = New-Object System.Windows.Rect(
+                    [double]($tb.Left + 10),
+                    [double]($tb.Top - 28),
+                    [double]($tb.Width * 0.60),
+                    [double](24)
+                )
+                return [PSCustomObject]@{
+                    Current = [PSCustomObject]@{
+                        BoundingRectangle = $syntheticRect
+                        IsEnabled = $true
+                        IsOffscreen = $false
+                        Name = "Busca inteligente"
+                        AutomationId = "synthetic-search-input"
+                    }
+                }
+            }
+        } catch {}
+    }
     return $null
 }
 
@@ -1327,36 +1350,11 @@ if ($PrepareOnly) {
 }
 
 $table = Find-TableControl $readyWindow
-$searchSubmitControl = Find-SearchSubmitControl $readyWindow $searchControl
 $previousSignature = Get-TableSignature $table
 $clearedSignature = $previousSignature
 
 if (-not (Ensure-SantaCruzSearchInput $searchControl $SearchQuery $readyWindow)) {
     Complete-SantaCruzResult "search-input-failed" "Nao foi possivel escrever o medicamento" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
-}
-
-if ($searchSubmitControl) {
-    if (-not (Invoke-AutomationControl $searchSubmitControl)) {
-        Complete-SantaCruzResult "search-submit-failed" "Nao foi possivel clicar na lupa de pesquisa" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
-    }
-} else {
-    try {
-        try {
-            $bounds = $searchControl.Current.BoundingRectangle
-            if ($bounds.Width -gt 0 -and $bounds.Height -gt 0) {
-                $cx = [int]($bounds.Left + ($bounds.Width / 2))
-                $cy = [int]($bounds.Top + ($bounds.Height / 2))
-                [SantaCruzMouse]::SetCursorPos($cx, $cy) | Out-Null
-                [SantaCruzMouse]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
-                [SantaCruzMouse]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
-                Start-Sleep -Milliseconds 60
-            }
-        } catch {}
-        try { $searchControl.SetFocus() } catch {}
-        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-    } catch {
-        Complete-SantaCruzResult "search-submit-failed" "Nao foi possivel iniciar a pesquisa" $(if ($installation) { $installation.InstallRoot }) $(if ($installation) { $installation.LaunchPath }) $(if ($installation) { $installation.Source })
-    }
 }
 
 $normalizedQuery = ConvertTo-NormalizedText $SearchQuery
