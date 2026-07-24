@@ -188,6 +188,12 @@ if (!gotSingleInstanceLock) {
 }
 
 app.whenReady().then(async () => {
+  if (isLiveDiagnostic || isSantaCruzPrepareDiagnostic) {
+    const diagnosticUserDataPath = app.getPath('userData');
+    console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
+    await initDatabase(diagnosticUserDataPath);
+  }
+
   if (isLiveDiagnostic) {
     const { runLiveDiagnostic } = await import('./scripts/live-diagnostic.mjs');
     const diagnosticArgs = process.argv.slice(2).filter(value => value !== '--live-diagnostic');
@@ -251,7 +257,7 @@ let activeQuoteController = null;
 ipcMain.handle('cancel-quote', async () => {
   if (activeQuoteController) {
     logger.info('User requested quotation cancellation. Aborting active quote controller.');
-    activeQuoteController.abort();
+    activeQuoteController.abort('USER_CANCELLED');
     activeQuoteController = null;
   }
   return { success: true, message: 'Cotação cancelada pelo usuário.' };
@@ -288,7 +294,7 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
         totalItems: searchPlans.length,
         message: `Limite total de ${quoteTimeoutMinutes} minutos atingido; encerrando as consultas pendentes.`
       });
-      quoteController.abort();
+      quoteController.abort('QUOTE_TIMEOUT');
     }, quoteTimeoutMs);
 
     sendQuoteProgress(event, {
@@ -302,6 +308,8 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
 
     try {
       for (const [planIndex, plan] of searchPlans.entries()) {
+        if (quoteController.signal.aborted) break;
+
         const progressContext = {
           quoteId,
           currentItem: planIndex + 1,
@@ -336,6 +344,8 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
             ...progressContext
           })
         });
+        const quoteCancelledDuringItem = quoteController.signal.aborted &&
+          quoteController.signal.reason === 'USER_CANCELLED';
         for (const supplier of supplierList) {
           const supplierResults = quote.results.filter(r => r.source === supplier);
           if (supplierResults.length === 0) continue;
@@ -366,9 +376,11 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
         const hasLiveEvidence = quote.results.some(result => result.source !== 'N/A' && !result.liveFailureReason);
         const hasTimeout = quote.results.some(isTimeoutFailure);
         const allSupplierFailures = quote.results.length > 0 && quote.results.every(result => Boolean(result.liveFailureReason));
-        const itemStatus = hasTimeout
-          ? (hasLiveEvidence ? 'completed_with_timeout' : 'supplier_timeout')
-          : (hasLiveEvidence ? 'completed' : (allSupplierFailures ? 'supplier_error' : 'not_found'));
+        const itemStatus = quoteCancelledDuringItem
+          ? 'cancelled'
+          : (hasTimeout
+              ? (hasLiveEvidence ? 'completed_with_timeout' : 'supplier_timeout')
+              : (hasLiveEvidence ? 'completed' : (allSupplierFailures ? 'supplier_error' : 'not_found')));
         quoteReachedTimeout = quoteReachedTimeout || hasTimeout;
         const itemId = await createQuoteItem(quoteId, plan.originalText, quote.parsed, itemStatus, plan);
 
@@ -403,26 +415,46 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
       }
     }
 
-    const finalStatus = quoteReachedTimeout ? 'completed_with_timeout' : 'completed';
+    const quoteCancelledByUser = quoteController.signal.aborted &&
+      quoteController.signal.reason === 'USER_CANCELLED';
+    const finalStatus = quoteCancelledByUser
+      ? 'cancelled'
+      : (quoteReachedTimeout ? 'completed_with_timeout' : 'completed');
     await updateQuoteStatus(quoteId, finalStatus);
     logger.info(`Quote process completed for ID: ${quoteId} with status ${finalStatus}`);
     sendQuoteProgress(event, {
-      phase: 'quote_completed',
+      phase: quoteCancelledByUser ? 'quote_cancelled' : 'quote_completed',
       quoteId,
       currentItem: searchPlans.length,
       totalItems: searchPlans.length,
-      message: quoteReachedTimeout
-        ? 'Cotação concluída com uma ou mais distribuidoras encerradas por tempo limite.'
-        : 'Cotação concluída. Abrindo os resultados conferidos.'
+      message: quoteCancelledByUser
+        ? 'Cotação cancelada. Os resultados concluídos foram preservados.'
+        : (quoteReachedTimeout
+            ? 'Cotação concluída com uma ou mais distribuidoras encerradas por tempo limite.'
+            : 'Cotação concluída. Abrindo os resultados conferidos.')
     });
     return await getQuoteDetails(quoteId);
   } catch (error) {
     logger.error(`Quote execution failed: ${error.message}`);
+    const abortReason = quoteController?.signal?.reason;
+    const failureStatus = abortReason === 'USER_CANCELLED'
+      ? 'cancelled'
+      : (abortReason === 'QUOTE_TIMEOUT' ? 'completed_with_timeout' : 'failed');
+    if (quoteId) {
+      try {
+        await updateQuoteStatus(quoteId, failureStatus);
+      } catch (statusError) {
+        logger.error(`Could not terminalize quote #${quoteId} as ${failureStatus}: ${statusError.message}`);
+      }
+    }
     sendQuoteProgress(event, {
-      phase: 'quote_error',
+      phase: failureStatus === 'cancelled' ? 'quote_cancelled' : 'quote_error',
       quoteId,
       message: `A cotação foi interrompida: ${error.message}`
     });
+    if (failureStatus === 'cancelled' && quoteId) {
+      return await getQuoteDetails(quoteId);
+    }
     throw error;
   }
 });

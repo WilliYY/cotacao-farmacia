@@ -20,6 +20,17 @@ export function normalizeProfarmaUrl(url) {
   }
 }
 
+export function getProfarmaRetryTerm(searchTerm) {
+  const original = String(searchTerm || '').replace(/\s+/g, ' ').trim();
+  if (!/\d+(?:[.,]\d+)?\s*mg\b/i.test(original)) return '';
+
+  const retryTerm = original
+    .replace(/(\d+(?:[.,]\d+)?)\s*mg\b/gi, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return retryTerm && retryTerm !== original ? retryTerm : '';
+}
+
 export class ProfarmaRealConnector extends SupplierConnector {
   constructor() {
     super('Profarma');
@@ -44,15 +55,24 @@ export class ProfarmaRealConnector extends SupplierConnector {
     logger.info(`Initiating autonomous portal search on Profarma for: "${searchTerm}"`);
 
     try {
-      const results = await scrapePortal(
-        2, 
-        normalizeProfarmaUrl(creds.url),
-        creds.username, 
-        creds.password, 
-        creds.clientCode, 
-        searchTerm,
+      const portalUrl = normalizeProfarmaUrl(creds.url);
+      const runSearch = term => scrapePortal(
+        2,
+        portalUrl,
+        creds.username,
+        creds.password,
+        creds.clientCode,
+        term,
         { signal: options.signal }
       );
+      let results = await runSearch(searchTerm);
+      const retryTerm = !parsedQuery.ean && results.length === 0
+        ? getProfarmaRetryTerm(searchTerm)
+        : '';
+      if (retryTerm) {
+        logger.info(`Profarma returned no products; retrying once without the mg suffix: "${retryTerm}"`);
+        results = await runSearch(retryTerm);
+      }
       
       return results.map(res => ({
         ...res,

@@ -4,6 +4,21 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ---
 
+## [1.7.4] - 2026-07-24
+
+### Auditoria real das quatro distribuidoras
+- **Diagnostico com credenciais locais:** os modos `--live-diagnostic` e `--prepare-santacruz` agora inicializam o SQLite antes de ler as configuracoes, evitando o falso aviso de credencial ausente.
+- **Falha de portal nao vira produto inexistente:** mensagens como `CLIENT_FETCH_ERROR`, `Failed to fetch`, `NetworkError` e erros de conexao ocorridos depois do envio da pesquisa bloqueiam uma grade vazia como falha tecnica. O sistema nao grava nem reutiliza preco nesse caso.
+- **Grade vazia fail-closed:** ANB e Profarma somente confirmam lista vazia quando a pagina mostra uma mensagem explicita de zero resultados. A passagem de tres segundos, sozinha, nao confirma mais `not_found`.
+- **Fallback Profarma sem sufixo:** uma busca vazia com dose em `mg` e repetida uma unica vez sem o sufixo, por exemplo `metformina 500mg` para `metformina 500`; a dose original continua obrigatoria na auditoria dos resultados.
+- **Erros transitorios ampliados:** `net::ERR_NAME_NOT_RESOLVED`, `ERR_TIMED_OUT`, `ERR_FAILED`, `CLIENT_FETCH_ERROR` e `Failed to fetch` sao falhas tecnicas elegiveis para a repeticao limitada do conector.
+- **Cancelamento terminal:** cancelar interrompe novos itens, preserva ofertas ja capturadas e conclui a cotacao como `cancelled`. Timeout total usa `completed_with_timeout` e excecoes inesperadas deixam de ficar presas em `processing`, terminando como `failed`.
+- **Santa Cruz aberta e autonoma:** a sessao existente foi detectada como pronta, reutilizada sem reiniciar ou fechar o aplicativo, percorreu todas as linhas e limpou o campo depois de cada item.
+- **Validacao Santa Cruz:** `losartana 50` retornou `Preco NF: R$ 2,94`; `hidroclorotiazida 25`, `Preco NF: R$ 1,70`; `metformina 500`, `Preco NF: R$ 4,28`. Somente itens disponiveis e compativeis com a dose foram considerados.
+- **Validacao web:** ANB confirmou `Unit c/ST` de R$ 2,80, R$ 1,55 e R$ 3,92 para os tres itens. DM Parana confirmou `Preco final: R$` de R$ 2,66, R$ 1,50 e R$ 3,88. Profarma confirmou losartana a R$ 2,70 e bloqueou hidroclorotiazida sem ST. Para metformina, `500mg` e `500` retornaram vazio confirmado; a busca ampla ficou sem resposta e foi interrompida pelo timeout tecnico, sem inventar preco.
+
+---
+
 ## [1.7.3] - 2026-07-24
 
 ### Pesquisa Santa Cruz portátil e protegida

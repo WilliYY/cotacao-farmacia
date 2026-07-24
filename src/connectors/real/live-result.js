@@ -20,5 +20,6 @@ export function createLiveUnavailableResult(supplierName, parsedQuery, reason, o
 }
 
 export function isRetryablePortalError(error) {
-  return /timeout|timed out|err_|network|net::|connection|conexao/i.test(String(error?.message || error || ''));
+  return /timeout|timed out|err_|network|net::|connection|conexao|failed to fetch|client_fetch_error/i
+    .test(String(error?.message || error || ''));
 }

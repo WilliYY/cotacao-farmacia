@@ -10,7 +10,7 @@ import { parseSearchQuery, levenshteinDistance, fuzzyMatch } from '../src/lib/pa
 import { analyzeQuoteBatch, INPUT_STATUS } from '../src/lib/search-intelligence.js';
 import { isValidST, getVisualStatusLabel, getSTPriority } from '../src/lib/st-rules.js';
 import { callConnectorWithTimeout, callWithEanFallback, callWithRetry, isFreshLiveCapture, isTimeoutFailure, matchesSupplierProduct, processQuoteQuery, shouldRetryLiveResults } from '../src/lib/recommendation.js';
-import { createLiveUnavailableResult } from '../src/connectors/real/live-result.js';
+import { createLiveUnavailableResult, isRetryablePortalError } from '../src/connectors/real/live-result.js';
 import { AUDIT_STATUS, auditQuoteResult } from '../src/lib/quote-auditor.js';
 import {
   createSantaCruzProcessEnvironment,
@@ -19,10 +19,17 @@ import {
   getSantaCruzStStatus,
   normalizeSantaCruzGuiPayload
 } from '../src/connectors/real/santacruz-real.js';
-import { normalizeProfarmaUrl } from '../src/connectors/real/profarma-real.js';
+import { getProfarmaRetryTerm, normalizeProfarmaUrl } from '../src/connectors/real/profarma-real.js';
 import { normalizeDmParanaUrl } from '../src/connectors/real/dm-parana-real.js';
 import { getFarmaciaPopularInfo, resolveReferenceBrandName } from '../src/lib/pharmaceutical-context.js';
-import { isDirectDmProductMatch, parseAnbTableRow, parseDmParanaCard, parseProfarmaTableRow } from '../src/lib/electron-scraper.js';
+import {
+  didPortalFetchFailDuringSearch,
+  isDirectDmProductMatch,
+  isPortalFetchFailureMessage,
+  parseAnbTableRow,
+  parseDmParanaCard,
+  parseProfarmaTableRow
+} from '../src/lib/electron-scraper.js';
 import { isRetryableAnbError, normalizeAnbUrl } from '../src/connectors/real/anb-real.js';
 import { resolveConnectorMode } from '../src/connectors/connector-registry.js';
 import {
@@ -89,6 +96,20 @@ test('Quote summary - reports reliable backend indicators', () => {
     estimatedSavings: 2,
     comparableSavingsItemCount: 1
   });
+});
+
+test('Quote summary - flags a cancelled item while preserving captured offers', () => {
+  const summary = buildQuoteSummary([{
+    status: 'cancelled',
+    results: [
+      { source: 'ANB', price: 2.8, quantity: 1, unitPrice: 2.8, isValidOption: 1, auditStatus: 'OK' }
+    ]
+  }]);
+
+  assert.strictEqual(summary.offerCount, 1);
+  assert.strictEqual(summary.itemsWithValidOption, 1);
+  assert.strictEqual(summary.needsReview, 1);
+  assert.strictEqual(summary.failedItemCount, 1);
 });
 
 test('PostgreSQL rows - restores application camelCase fields', () => {
@@ -299,9 +320,22 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
     const mainSource = fs.readFileSync(path.join(projectRoot, 'main.js'), 'utf8');
     const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    const diagnosticDatabaseInit = mainSource.indexOf('if (isLiveDiagnostic || isSantaCruzPrepareDiagnostic)');
+    const liveDiagnosticBranch = mainSource.indexOf('if (isLiveDiagnostic) {', diagnosticDatabaseInit + 1);
     assert.match(mainSource, /process\.argv\.includes\('--prepare-santacruz'\)/);
+    assert.ok(diagnosticDatabaseInit > 0 && liveDiagnosticBranch > diagnosticDatabaseInit);
+    assert.match(mainSource, /await initDatabase\(diagnosticUserDataPath\)/);
     assert.match(mainSource, /await prepareSantaCruz\(\)/);
     assert.strictEqual(packageJson.scripts['diagnose:santacruz'], 'electron . --prepare-santacruz');
+  });
+
+  await t.test('terminalizes cancelled, timed-out and failed quotations', () => {
+    const mainSource = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'main.js'), 'utf8');
+    assert.match(mainSource, /activeQuoteController\.abort\('USER_CANCELLED'\)/);
+    assert.match(mainSource, /quoteController\.abort\('QUOTE_TIMEOUT'\)/);
+    assert.match(mainSource, /quoteController\.signal\.aborted\) break/);
+    assert.match(mainSource, /quoteCancelledByUser\s*\?\s*'cancelled'/);
+    assert.match(mainSource, /await updateQuoteStatus\(quoteId, failureStatus\)/);
   });
 });
 
@@ -623,6 +657,36 @@ test('Santa Cruz Portable Automation', async (t) => {
 });
 
 test('Profarma Novo Pedido Parser', async (t) => {
+  await t.test('Retries a confirmed empty dosage search once without the mg suffix', () => {
+    assert.strictEqual(getProfarmaRetryTerm('metformina 500mg'), 'metformina 500');
+    assert.strictEqual(
+      getProfarmaRetryTerm('olmesartana 40mg + hidroclorotiazida 12,5mg'),
+      'olmesartana 40 + hidroclorotiazida 12,5'
+    );
+    assert.strictEqual(getProfarmaRetryTerm('metformina 500'), '');
+    assert.strictEqual(getProfarmaRetryTerm('7891721000614'), '');
+  });
+
+  await t.test('Treats a failed portal request as a technical failure, never as not found', () => {
+    assert.strictEqual(isPortalFetchFailureMessage('[next-auth][error][CLIENT_FETCH_ERROR] Failed to fetch'), true);
+    assert.strictEqual(isPortalFetchFailureMessage('net::ERR_NETWORK_CHANGED'), true);
+    assert.strictEqual(isPortalFetchFailureMessage('net::ERR_NAME_NOT_RESOLVED'), true);
+    assert.strictEqual(isPortalFetchFailureMessage('net::ERR_TIMED_OUT'), true);
+    assert.strictEqual(isPortalFetchFailureMessage('net::ERR_FAILED'), true);
+    assert.strictEqual(isPortalFetchFailureMessage('Warning: harmless rendering message'), false);
+    assert.strictEqual(isRetryablePortalError(new Error('CLIENT_FETCH_ERROR: Failed to fetch')), true);
+    assert.strictEqual(didPortalFetchFailDuringSearch(1200, 1200), true);
+    assert.strictEqual(didPortalFetchFailDuringSearch(1199, 1200), false);
+
+    const scraperSource = fs.readFileSync(new URL('../src/lib/electron-scraper.js', import.meta.url), 'utf8');
+    assert.match(
+      scraperSource,
+      /didPortalFetchFailDuringSearch\(\s*portalFetchFailureAt,\s*submittedSearchAt\s*\)/
+    );
+    assert.match(scraperSource, /supplierId === 2 \? 7000 : 0/);
+    assert.doesNotMatch(scraperSource, /\(explicitlyEmpty \|\| searchSettled\) \? \[\] : null/);
+  });
+
   await t.test('Uses Preco Final and requires ST for medicines', () => {
     const withSt = parseProfarmaTableRow([
       'Pex', '7896181915638', 'LOSARTANA POT 50MG 30CPR BIOS', '0', '2,70',

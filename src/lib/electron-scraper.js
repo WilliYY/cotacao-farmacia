@@ -10,6 +10,18 @@ function parsePositiveCurrency(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+export function isPortalFetchFailureMessage(message) {
+  return /CLIENT_FETCH_ERROR|Failed to fetch|NetworkError|net::ERR_|ERR_(?:NETWORK|INTERNET|CONNECTION|FAILED|TIMED_OUT|NAME_NOT_RESOLVED)/i
+    .test(String(message || ''));
+}
+
+export function didPortalFetchFailDuringSearch(failureAt, searchSubmittedAt) {
+  return Number.isFinite(failureAt) &&
+    Number.isFinite(searchSubmittedAt) &&
+    searchSubmittedAt > 0 &&
+    failureAt >= searchSubmittedAt;
+}
+
 export function isDirectDmProductMatch(searchTerm, productName) {
   const normalize = value => String(value || '')
     .normalize('NFD')
@@ -233,8 +245,15 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
       }
     });
 
+    let portalFetchFailureAt = 0;
+    let portalFetchFailureMessage = '';
+
     win.webContents.on('console-message', (event, level, message, line, sourceId) => {
       logger.info(`[BROWSER CONSOLE] ${message}`);
+      if (isPortalFetchFailureMessage(message)) {
+        portalFetchFailureAt = Date.now();
+        portalFetchFailureMessage = String(message || 'Falha de rede no portal');
+      }
     });
 
     let hasResolved = false;
@@ -899,8 +918,9 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       bodyText.includes('0 produtos') ||
                       bodyText.includes('0 registros') ||
                       bodyText.includes('0 resultados');
-                    const searchSettled = ${Date.now() - submittedSearchAt} >= 3000;
-                    return (explicitlyEmpty || searchSettled) ? [] : null;
+                    const emptyConfirmationMs = supplierId === 2 ? 7000 : 0;
+                    const emptyStateSettled = ${Date.now() - submittedSearchAt} >= emptyConfirmationMs;
+                    return explicitlyEmpty && emptyStateSettled ? [] : null;
                   }
 
                   while (hasNext && pageCount < maxPages) {
@@ -1100,6 +1120,20 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   return finalResults;
                 })()
               `);
+
+              const portalFetchFailed = didPortalFetchFailDuringSearch(
+                portalFetchFailureAt,
+                submittedSearchAt
+              );
+              if (
+                portalFetchFailed &&
+                Date.now() - submittedSearchAt >= 3000 &&
+                (results === null || results.length === 0)
+              ) {
+                throw new Error(
+                  `Supplier portal request failed during search: ${portalFetchFailureMessage || 'Failed to fetch'}`
+                );
+              }
 
               if (results !== null) {
                 if ((supplierId === 1 || supplierId === 2 || supplierId === 4) && results.length > 0) {

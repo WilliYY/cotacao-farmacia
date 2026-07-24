@@ -68,6 +68,10 @@ npm run diagnose:live -- "losartana 50mg" "amitriptilina 25mg" "clonazepam 2mg"
 ```
 O relatório sanitizado fica em `logs/live-diagnostic-latest.json`. Use `--suppliers=ANB,Profarma` para limitar fornecedores e `--output=logs/arquivo.json` para preservar uma rodada específica.
 
+O diagnóstico inicializa o banco local antes de consultar as distribuidoras. Uma grade vazia só significa produto não encontrado quando o portal confirma isso explicitamente; `Failed to fetch`, `CLIENT_FETCH_ERROR`, queda de internet ou timeout são registrados como falha técnica e nunca viram preço zero ou cotação válida.
+
+Na Profarma, uma busca vazia com dose em `mg` é repetida uma única vez sem o sufixo, mantendo a dose original como filtro obrigatório. Cancelamento e timeout interrompem novos itens, preservam resultados concluídos e sempre gravam um estado terminal no histórico.
+
 ### 3. Gerar o Build Desktop (Instalador para Windows)
 Para gerar o executável instalável (.exe) para distribuição interna no Windows:
 ```bash

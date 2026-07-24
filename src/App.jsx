@@ -1162,7 +1162,7 @@ function App() {
     activeQuote.items.forEach(item => {
       const results = item.results || [];
       const validFilteredResults = results.filter(res => {
-        const forceVisible = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(item.status);
+        const forceVisible = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout', 'cancelled'].includes(item.status);
         if (!forceVisible && filterSupplier !== 'All' && res.source !== filterSupplier) return false;
         if (!forceVisible && filterOnlyST && !(res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_SEPARADO')) return false;
         if (!forceVisible && !filterShowIgnored && res.stStatus === 'SEM_ST') return false;
@@ -1670,9 +1670,11 @@ function App() {
                   Realizada em: {new Date(activeQuote.createdAt).toLocaleString('pt-BR')}
                 </div>
                 <div className="results-health" aria-label="Resumo rápido da cotação">
-                  <span className={activeQuote.status === 'completed_with_timeout' || metrics.failedItems > 0 ? 'is-warning' : 'is-success'}>
-                    {activeQuote.status === 'completed_with_timeout' || metrics.failedItems > 0 ? <CircleAlert size={14} /> : <CheckCircle2 size={14} />}
-                    {activeQuote.status === 'completed_with_timeout'
+                  <span className={activeQuote.status === 'completed_with_timeout' || activeQuote.status === 'cancelled' || metrics.failedItems > 0 ? 'is-warning' : 'is-success'}>
+                    {activeQuote.status === 'completed_with_timeout' || activeQuote.status === 'cancelled' || metrics.failedItems > 0 ? <CircleAlert size={14} /> : <CheckCircle2 size={14} />}
+                    {activeQuote.status === 'cancelled'
+                      ? 'Cotação cancelada'
+                      : activeQuote.status === 'completed_with_timeout'
                       ? 'Concluída com resultado parcial'
                       : metrics.failedItems > 0
                         ? 'Concluída com pendências'
@@ -1705,6 +1707,15 @@ function App() {
                 <div>
                   <strong>Cotação concluída com limite de tempo</strong>
                   <span>O sistema atingiu o limite configurado e parou automaticamente. Os preços já capturados foram preservados e as fontes pendentes estão sinalizadas abaixo.</span>
+                </div>
+              </section>
+            )}
+            {activeQuote.status === 'cancelled' && (
+              <section className="quote-timeout-notice" role="status" aria-label="Cotação cancelada">
+                <CircleAlert size={19} aria-hidden="true" />
+                <div>
+                  <strong>Cotação cancelada pelo usuário</strong>
+                  <span>Novas consultas foram interrompidas e os resultados já concluídos foram preservados.</span>
                 </div>
               </section>
             )}
@@ -1743,11 +1754,13 @@ function App() {
                   {activeQuote.items
                     .filter(item => item.correctionMessage || item.status !== 'completed')
                     .map(item => {
-                      const isProblem = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(item.status);
+                      const isProblem = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout', 'cancelled'].includes(item.status);
                       const statusText = item.status === 'needs_info'
                         ? item.refinementSuggestion || 'Informe mais detalhes para pesquisar.'
                         : item.status === 'not_found'
                           ? 'Não encontrado nas distribuidoras consultadas. Revise nome, dose ou EAN.'
+                          : item.status === 'cancelled'
+                            ? 'Cotação cancelada. Somente os resultados concluídos antes do cancelamento foram preservados.'
                           : item.status === 'supplier_timeout'
                             ? 'Tempo limite atingido. Nenhuma fonte respondeu a tempo e nenhum preço antigo foi reutilizado.'
                             : item.status === 'completed_with_timeout'
