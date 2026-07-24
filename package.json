@@ -12,6 +12,8 @@
     "build": "vite build",
     "diagnose:live": "electron . --live-diagnostic",
     "diagnose:santacruz": "electron . --prepare-santacruz",
+    "diagnose:santacruz:discover": "powershell -NoProfile -ExecutionPolicy Bypass -File src/lib/santacruz-search.ps1 --discover-only",
+    "diagnose:santacruz:status": "powershell -NoProfile -ExecutionPolicy Bypass -File src/lib/santacruz-search.ps1 --status-only",
     "package": "electron-builder",
     "test": "node --test tests/all.test.js",
     "lint": "oxlint",

@@ -4,6 +4,24 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ---
 
+## [1.7.3] - 2026-07-24
+
+### Pesquisa Santa Cruz portátil e protegida
+- **Preço NF validado pelo cabeçalho:** a automação resolve `Código EAN`, `Descrição`, `Disp.`, `ST` e `Preço NF` pelos cabeçalhos literais da grade. Cabeçalho ausente ou duplicado bloqueia a cotação, sem usar outra coluna monetária.
+- **Pesquisa reutilizável:** o robô reutiliza a janela aberta, acessa `Lista de Produtos [F3]` somente quando a grade não está disponível, confirma o texto exato e limpa o campo ao terminar.
+- **Fallback pelo princípio ativo:** quando nome + dose confirma zero resultados, a mesma sessão tenta uma vez apenas o princípio ativo com `Enter`, mantendo a dose original como filtro obrigatório em todas as linhas.
+- **Estoque visual real:** o ponto verde/vermelho de `Disp.` é lido no centro da célula visível com coordenadas calculadas pela grade. Verde libera, vermelho bloqueia e evidência ambígua continua bloqueada.
+- **Grade nova e estável:** preços somente são aceitos quando a assinatura final da grade é diferente da anterior e permanece igual em leituras consecutivas; uma grade vazia precisa ser confirmada em leituras estáveis antes do fallback.
+- **Rolagem proporcional:** páginas são percorridas em incrementos calculados pelo tamanho visível da grade, cobrindo listas longas sem atalhos globais.
+- **Cobertura completa:** somente linhas não ocultas pelo JavaFX contam como observadas; prazo excedido, cobertura parcial ou `Disp.` ilegível em qualquer apresentação compatível bloqueiam a fonte inteira, sem escolher um falso menor preço.
+- **Travamento fail-closed:** `not-responding` interrompe a fonte sem fechar a Santa Cruz e sem transformar falha técnica em produto inexistente ou preço zero. Timeout ou cancelamento dispara uma tentativa limitada de limpar o campo e restaurar a rolagem.
+- **Portabilidade entre computadores:** removidos caminho absoluto do Framework do Windows, unidade `C:` presumida e deslocamento fixo da lupa. Assemblies, `LocalApplicationData`, unidade do sistema, instalação da Santa Cruz, DPI, limites dos controles e rolagem são descobertos na máquina atual. Processos Java de outros programas não bloqueiam mais a abertura.
+- **Diagnósticos novos:** `npm run diagnose:santacruz:discover` localiza a instalação sem abrir o aplicativo e `npm run diagnose:santacruz:status` verifica a sessão atual sem pesquisar.
+- **Validação real:** `losartana 50mg` retornou vazio, o fallback `losartana` percorreu 47 linhas e reteve 9 apresentações de 50mg. O menor valor bruto de R$ 2,82 estava sem estoque; o menor elegível foi `Preço NF: R$ 3,02`, EAN `7896181915638`, com o campo limpo ao final.
+- **Falha externa validada:** em uma tentativa posterior, o atualizador da Santa Cruz respondeu `503 Service Unavailable`. O preflight marcou `running-without-window`, bloqueou a distribuidora e preservou a evidência técnica, sem reutilizar a cotação anterior.
+
+---
+
 ## [1.7.2] - 2026-07-22
 
 ### Expansão do Cérebro Farmacêutico e Inteligência de Cotações

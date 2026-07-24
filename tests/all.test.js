@@ -12,7 +12,13 @@ import { isValidST, getVisualStatusLabel, getSTPriority } from '../src/lib/st-ru
 import { callConnectorWithTimeout, callWithEanFallback, callWithRetry, isFreshLiveCapture, isTimeoutFailure, matchesSupplierProduct, processQuoteQuery, shouldRetryLiveResults } from '../src/lib/recommendation.js';
 import { createLiveUnavailableResult } from '../src/connectors/real/live-result.js';
 import { AUDIT_STATUS, auditQuoteResult } from '../src/lib/quote-auditor.js';
-import { createSantaCruzProcessEnvironment, getSantaCruzFinalPrice, normalizeSantaCruzGuiPayload } from '../src/connectors/real/santacruz-real.js';
+import {
+  createSantaCruzProcessEnvironment,
+  getSantaCruzFinalPrice,
+  getSantaCruzRetryTerm,
+  getSantaCruzStStatus,
+  normalizeSantaCruzGuiPayload
+} from '../src/connectors/real/santacruz-real.js';
 import { normalizeProfarmaUrl } from '../src/connectors/real/profarma-real.js';
 import { normalizeDmParanaUrl } from '../src/connectors/real/dm-parana-real.js';
 import { getFarmaciaPopularInfo, resolveReferenceBrandName } from '../src/lib/pharmaceutical-context.js';
@@ -438,10 +444,12 @@ test('Santa Cruz Portable Automation', async (t) => {
       status: 'ok',
       installRoot: 'D:\\Apps\\Pe - SantaCruz',
       discoverySource: 'shortcut',
+      searchCleared: false,
       results: [{ ean: '7890000000000', unitCostWithSt: 7.5 }]
     }));
     assert.strictEqual(structured.status, 'ok');
     assert.strictEqual(structured.discoverySource, 'shortcut');
+    assert.strictEqual(structured.searchCleared, false);
     assert.strictEqual(structured.results.length, 1);
 
     const legacy = normalizeSantaCruzGuiPayload('[{"ean":"7890000000000"}]');
@@ -451,7 +459,33 @@ test('Santa Cruz Portable Automation', async (t) => {
 
   await t.test('Uses Preco NF as the authoritative Santa Cruz final price', () => {
     assert.strictEqual(getSantaCruzFinalPrice({ priceNf: 53.35, unitCostWithSt: 999, price: 116.12 }), 53.35);
-    assert.strictEqual(getSantaCruzFinalPrice({ unitCostWithSt: 71.13, price: 116.15 }), 71.13);
+    assert.strictEqual(getSantaCruzFinalPrice({ unitCostWithSt: 71.13, price: 116.15 }), 0);
+    assert.strictEqual(getSantaCruzFinalPrice({ priceNf: 0, unitCostWithSt: 71.13 }), 0);
+  });
+
+  await t.test('preserves raw Santa Cruz ST evidence and exempts only explicit cosmetic categories', () => {
+    assert.strictEqual(getSantaCruzStStatus({ st: 0.95, stRaw: 'R$ 0,95', category: 'GEN' }), 'COM_ST');
+    assert.strictEqual(getSantaCruzStStatus({ st: 0, stRaw: '-', category: 'GEN' }), 'SEM_ST');
+    assert.strictEqual(getSantaCruzStStatus({ st: 0, stRaw: 'R$ 0,00', category: 'GEN' }), 'SEM_ST');
+    assert.strictEqual(getSantaCruzStStatus({ st: 0, stRaw: '-', category: 'DERM' }), 'ST_ISENTO');
+    assert.strictEqual(getSantaCruzStStatus({ st: 0, stRaw: '', category: 'GEN' }), 'ST_DESCONHECIDO');
+  });
+
+  await t.test('retries an empty milligram search without mg and submits it with Enter', () => {
+    assert.strictEqual(getSantaCruzRetryTerm('losartana 50mg', 'losartana'), 'losartana');
+    assert.strictEqual(
+      getSantaCruzRetryTerm('olmesartana 40 mg + hidroclorotiazida 25mg'),
+      'olmesartana + hidroclorotiazida'
+    );
+    assert.strictEqual(getSantaCruzRetryTerm('7896004719016'), '');
+    assert.strictEqual(getSantaCruzRetryTerm('losartana 50'), '');
+
+    const script = fs.readFileSync(new URL('../src/lib/santacruz-search.ps1', import.meta.url), 'utf8');
+    const connector = fs.readFileSync(new URL('../src/connectors/real/santacruz-real.js', import.meta.url), 'utf8');
+    assert.match(script, /\$FallbackSearchQuery = if \(\$args\.Count -gt 4\)/);
+    assert.match(script, /submitting search with Enter/);
+    assert.match(script, /requiredDosages/);
+    assert.match(connector, /fallbackQuery: retryTerm/);
   });
 
   await t.test('preserves portable readiness evidence from the GUI probe', () => {
@@ -474,6 +508,88 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.match(payload.windowTitle, /Pedidos/);
     assert.strictEqual(payload.requiresOperator, false);
     assert.strictEqual(payload.canAutoPrepare, false);
+  });
+
+  await t.test('keeps the Santa Cruz field clean and reads only the authoritative Preco NF column', () => {
+    const script = fs.readFileSync(new URL('../src/lib/santacruz-search.ps1', import.meta.url), 'utf8');
+    assert.match(script, /function Clear-SantaCruzSearchInput/);
+    assert.match(script, /searchCleared = \$cleared/);
+    assert.match(script, /Read-AllSantaCruzRowsWithScroll/);
+    assert.match(script, /ScrollPattern\]::NoScroll/);
+    assert.match(script, /\$originalHorizontalPercent/);
+    assert.match(script, /\$scrollPattern\.SetScrollPercent\(\s*\[double\]0/);
+    assert.match(script, /\$PageStart/);
+    assert.match(script, /\$PageCount/);
+    assert.match(script, /\$scanResult\.Complete/);
+    assert.match(script, /scan-timeout/);
+    assert.match(script, /stale-empty/);
+    assert.doesNotMatch(script, /Min\(\$grid\.Current\.RowCount, 500\)/);
+    assert.match(script, /function Get-SantaCruzColumnMap/);
+    assert.match(script, /function Get-SantaCruzGridAvailability/);
+    assert.match(script, /GetPixel\(\$dc/);
+    assert.match(script, /indicador visual: \$pixelAvailability/);
+    assert.match(script, /PriceNf = "preco nf"/);
+    assert.match(script, /\$priceNf = Parse-DoubleSafe \(Get-GridCellText \$grid \$row \$Columns\.PriceNf\)/);
+    assert.doesNotMatch(script, /\$priceNf -le 0\) \{ \$priceNf = Parse-DoubleSafe/);
+    assert.doesNotMatch(script, /Get-GridCellText \$grid \$row 13/);
+    assert.doesNotMatch(script, /if \(\$results\.Count -eq 0 -and -not \$isEanSearch/);
+    assert.match(script, /function Invoke-SantaCruzSearchSubmit/);
+    assert.match(script, /click search magnifier/);
+    assert.doesNotMatch(script, /function Find-SearchSubmitControl/);
+    assert.doesNotMatch(script, /\$combos = \$Window\.FindAll/);
+    assert.match(script, /function Test-SantaCruzWindowResponsive/);
+    assert.match(script, /function Find-SantaCruzMainWindowProcess/);
+    assert.match(script, /\$CleanupOnly = \$SearchQuery -eq "--cleanup"/);
+    assert.match(script, /ok-cleanup-warning/);
+    assert.match(script, /nenhum preco foi considerado/);
+    assert.match(script, /\$freshStableGridObserved = \$false/);
+    assert.match(script, /\$stableFreshCount -ge 2/);
+    assert.match(script, /if \(-not \$freshStableGridObserved\)/);
+    assert.match(script, /\$viewSize \* 0\.75/);
+  });
+
+  await t.test('keeps Santa Cruz automation portable across Windows users, drives and DPI scales', () => {
+    const script = fs.readFileSync(new URL('../src/lib/santacruz-search.ps1', import.meta.url), 'utf8');
+    const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+    assert.match(script, /Add-Type -AssemblyName UIAutomationClient/);
+    assert.match(script, /GetFolderPath\("LocalApplicationData"\)/);
+    assert.match(script, /\$env:SystemDrive/);
+    assert.match(script, /\$searchBounds\.Height \* 1\.35/);
+    assert.match(script, /\$searchBounds\.Height \* 0\.6/);
+    assert.doesNotMatch(script, /C:\\Windows\\Microsoft\.NET/);
+    assert.doesNotMatch(script, /C:\\Users\\Williany/);
+    assert.doesNotMatch(script, /\b(?:7538530|16908|1775|1195|1920)\b/);
+    assert.match(script, /GetFolderPath\("CommonDesktopDirectory"\)/);
+    assert.match(script, /GetFolderPath\("CommonStartMenu"\)/);
+    assert.match(script, /Win32_Process/);
+    assert.match(script, /System\.IO\.DriveInfo\]::GetDrives/);
+    assert.match(script, /\$cell\.Current\.IsOffscreen/);
+    assert.ok(
+      (script.match(/\$observedRows\.Count -ge \$totalRows/g) || []).length >= 2,
+      'Os caminhos com e sem rolagem devem exigir cobertura total das linhas.'
+    );
+    assert.match(script, /matching rows contain unresolved Disp\. evidence; supplier result blocked/);
+    assert.match(script, /\$anyRunningProcess = if \(\$existingProcess\).*Find-SantaCruzProcess/);
+    assert.doesNotMatch(script, /\$anyRunningProcess = Get-Process/);
+    assert.doesNotMatch(script, /\$knownProcessNames = @\([^)]*pedido-eletronico/);
+    assert.doesNotMatch(script, /\$santaCruzPattern = .*pedido\[\\s_/);
+    assert.ok(packageJson.scripts['diagnose:santacruz:discover']);
+    assert.ok(packageJson.scripts['diagnose:santacruz:status']);
+  });
+
+  await t.test('allows the ready Santa Cruz window to be reused before requiring saved credentials', () => {
+    const connector = fs.readFileSync(new URL('../src/connectors/real/santacruz-real.js', import.meta.url), 'utf8');
+    const statusCheck = connector.indexOf('const currentStatus = await getSantaCruzStatus()');
+    const unavailableResult = connector.indexOf('const statusReason = describeGuiFailure(currentStatus)');
+    const guiSearch = connector.indexOf('const guiPayload = await runSantaCruzGuiCommand');
+    assert.ok(statusCheck > 0);
+    assert.ok(unavailableResult > statusCheck);
+    assert.ok(guiSearch > unavailableResult);
+    assert.match(connector, /currentStatus\.ready/);
+    assert.match(connector, /currentStatus\.status === 'not-responding'/);
+    assert.match(connector, /'stock-unresolved'/);
+    assert.match(connector, /await triggerSantaCruzCleanup\(scriptPath, credentials\)/);
   });
 
   await t.test('provides read-only status and autonomous prepare modes', () => {

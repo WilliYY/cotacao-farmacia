@@ -22,6 +22,17 @@ O sistema roda localmente no computador da farmácia. Certifique-se de possuir o
 3. Cadastre ANB, Profarma, Santa Cruz e **DM Paraná**. A URL da DM é `https://portal.dmparana.com.br/login`.
 4. Faça uma cotação curta e confira se cada fonte aparece como consultada ao vivo.
 
+Cada computador descobre sua própria instalação da Santa Cruz; não copie o arquivo de cache entre máquinas. O robô procura a configuração opcional `SANTACRUZ_APP_PATH`, o cache local validado, atalhos do usuário e públicos, Registro do Windows, pastas padrão e, por último, discos fixos com limite de tempo. Posição da lupa, rolagem, colunas e o indicador verde/vermelho de `Disp.` são calculados pela árvore de acessibilidade e pelas dimensões reais da janela, sem coordenadas de um monitor específico. A sessão Windows precisa estar aberta e desbloqueada para a automação visual.
+
+Na Santa Cruz, o sistema tenta primeiro nome + dose. Se a grade confirmar zero resultados, ele limpa o campo e tenta uma vez pelo princípio ativo com `Enter`; a dose original continua obrigatória ao filtrar as linhas. Exemplo: `losartana 50mg` pode ser pesquisada como `losartana`, mas somente itens de 50mg concorrem ao menor `Preço NF`.
+
+Use estes diagnósticos não destrutivos no computador novo:
+```bash
+npm run diagnose:santacruz:discover
+npm run diagnose:santacruz:status
+node scripts/bootstrap.mjs --diagnose
+```
+
 Se o Node.js estiver ausente, o inicializador oculto mostra uma mensagem em vez de falhar silenciosamente. Se o Git estiver ausente ou a pasta `.git` não tiver sido copiada, o aplicativo abre a versão local e exibe por que a atualização automática não está disponível.
 
 As senhas não ficam no Git. Com `CREDENTIAL_STORAGE_MODE=plain`, configuração operacional padrão, elas ficam codificadas no SQLite local e podem acompanhar uma cópia autorizada do banco para outro computador. Esse modo não é criptografia: limite o acesso à pasta e nunca envie `.env` ou `data/cotador-st.db` ao repositório. O histórico pode permanecer local, mas nunca é usado como fonte de preço para uma nova cotação.

@@ -67,13 +67,69 @@ export function normalizeSantaCruzGuiPayload(stdout) {
     windowTitle: String(parsed.windowTitle || ''),
     requiresOperator: Boolean(parsed.requiresOperator),
     canAutoPrepare: Boolean(parsed.canAutoPrepare),
+    searchCleared: parsed.searchCleared !== false,
     results: Array.isArray(parsed.results) ? parsed.results : []
   };
 }
 
 export function getSantaCruzFinalPrice(result = {}) {
-  const price = Number(result.priceNf ?? result.unitCostWithSt ?? result.price ?? 0);
+  const price = Number(result.priceNf ?? 0);
   return Number.isFinite(price) && price > 0 ? price : 0;
+}
+
+export function getSantaCruzStStatus(result = {}) {
+  if (Number(result.st) > 0) return 'COM_ST';
+  const rawSt = String(result.stRaw ?? '').trim();
+  if (!rawSt) return 'ST_DESCONHECIDO';
+  const exemptionEvidence = `${result.category || ''} ${result.name || ''} ${result.supplierProductName || ''}`
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  const explicitlyExempt = ['cosmet', 'derm', 'perfum', 'higiene']
+    .some(term => exemptionEvidence.includes(term));
+  return explicitlyExempt ? 'ST_ISENTO' : 'SEM_ST';
+}
+
+export function getSantaCruzRetryTerm(searchTerm = '', productName = '') {
+  const original = String(searchTerm || '').replace(/\s+/g, ' ').trim();
+  if (!original || /^\d{13}$/.test(original)) return '';
+  if (!/\d+(?:[.,]\d+)?\s*mg\b/i.test(original)) return '';
+  const activeIngredient = String(productName || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const broadTerm = activeIngredient || original
+    .replace(/\b\d+(?:[.,]\d+)?\s*mg\b/gi, ' ')
+    .replace(/\s*\+\s*/g, ' + ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return broadTerm && broadTerm !== original ? broadTerm : '';
+}
+
+function triggerSantaCruzCleanup(scriptPath, credentials) {
+  return new Promise((resolve) => {
+    execFile('powershell', [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', scriptPath,
+      '--cleanup',
+      credentials?.username || '',
+      credentials?.password || '',
+      credentials?.clientCode || ''
+    ], {
+      windowsHide: true,
+      timeout: 15000,
+      maxBuffer: 1024 * 1024,
+      env: createSantaCruzProcessEnvironment(credentials)
+    }, (cleanupError, stdout) => {
+      const cleanupPayload = normalizeSantaCruzGuiPayload(stdout);
+      if (cleanupError || cleanupPayload.searchCleared === false) {
+        logger.warn('Santa Cruz best-effort cleanup could not confirm an empty search field.');
+      } else {
+        logger.info('Santa Cruz search field was cleaned after the interrupted automation.');
+      }
+      resolve(cleanupPayload);
+    });
+  });
 }
 
 function runSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) {
@@ -91,19 +147,23 @@ function runSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) 
       command,
       credentials?.username || '',
       credentials?.password || '',
-      credentials?.clientCode || ''
+      credentials?.clientCode || '',
+      options.fallbackQuery || ''
     ], {
       windowsHide: false,
       timeout,
       maxBuffer: 4 * 1024 * 1024,
       env: createSantaCruzProcessEnvironment(credentials),
       signal: options.signal
-    }, (error, stdout, stderr) => {
+    }, async (error, stdout, stderr) => {
       const payload = normalizeSantaCruzGuiPayload(stdout);
       if (error && payload.status === 'automation-failed') {
         logger.warn(`Santa Cruz GUI automation failed: ${error.message}`);
         if (stderr) logger.debug(`Santa Cruz PowerShell diagnostic: ${String(stderr).trim()}`);
         const aborted = error.name === 'AbortError' || error.code === 'ABORT_ERR';
+        if (aborted || error.killed) {
+          await triggerSantaCruzCleanup(scriptPath, credentials);
+        }
         return resolve({
           ...payload,
           reason: aborted || error.killed ? 'Tempo limite da automacao excedido' : payload.reason
@@ -163,7 +223,11 @@ function describeGuiFailure(payload) {
     'search-input-failed': 'falha ao escrever o medicamento',
     'search-submit-failed': 'falha ao iniciar a pesquisa',
     'stale-results': 'a grade nao foi atualizada para o medicamento pesquisado',
+    'scan-timeout': 'a grade excedeu o prazo da varredura completa',
+    'stock-unresolved': 'uma apresentacao compativel ficou sem evidencia visual de estoque',
     'table-not-found': 'grade de resultados nao encontrada',
+    'price-column-not-found': 'cabecalho literal Preco NF nao encontrado ou ambiguo',
+    'not-responding': 'Santa Cruz esta aberta, mas nao esta respondendo',
     'running-without-window': 'processo ativo sem janela de pesquisa',
     'not-installed': 'aplicativo nao localizado',
     'launch-failed': 'falha ao abrir o aplicativo'
@@ -189,18 +253,42 @@ export class SantaCruzRealConnector extends SupplierConnector {
 
     const credentials = await getSupplierCredentials(3);
     if (!credentials?.username || !credentials?.password) {
-      return [createLiveUnavailableResult('Santa Cruz', parsedQuery, 'credenciais nao configuradas')];
+      const currentStatus = await getSantaCruzStatus();
+      if (!currentStatus.ready) {
+        const statusReason = describeGuiFailure(currentStatus);
+        const failureReason = currentStatus.status === 'not-responding'
+          ? statusReason
+          : `credenciais nao configuradas; ${statusReason}`;
+        return [createLiveUnavailableResult(
+          'Santa Cruz',
+          parsedQuery,
+          failureReason
+        )];
+      }
+      logger.info('Santa Cruz is already open and authenticated; reusing the ready window without stored credentials.');
     }
     const scriptPath = getSantaCruzScriptPath();
     logger.info(`Searching Santa Cruz for: "${searchTerm}"...`);
     logger.info('Locating the Santa Cruz installation and starting autonomous GUI search...');
 
-    const guiPayload = await runSantaCruzGuiCommand(scriptPath, searchTerm, credentials, options);
+    const retryTerm = getSantaCruzRetryTerm(searchTerm, parsedQuery.name);
+    if (retryTerm) {
+      logger.info(`Santa Cruz will retry with the active ingredient "${retryTerm}" if the dosage search is empty.`);
+    }
+    const guiPayload = await runSantaCruzGuiCommand(
+      scriptPath,
+      searchTerm,
+      credentials,
+      { ...options, fallbackQuery: retryTerm }
+    );
     let rawResults = [];
 
-    if (guiPayload.status === 'ok') {
+    if (guiPayload.status === 'ok' || guiPayload.status === 'ok-cleanup-warning') {
       rawResults = guiPayload.results;
       logger.info(`Santa Cruz GUI search returned ${rawResults.length} items.`);
+      if (guiPayload.status === 'ok-cleanup-warning') {
+        logger.warn('Santa Cruz returned current prices, but the search field cleanup needs attention before the next query.');
+      }
     } else if (guiPayload.status === 'empty') {
       logger.info('Santa Cruz GUI search completed without matching products.');
       return [];
@@ -234,7 +322,9 @@ export class SantaCruzRealConnector extends SupplierConnector {
         dosage: parsedQuery.dosage || '',
         presentation: parsedQuery.presentation || '',
         price: finalPrice,
-        stStatus: result.st > 0 ? 'COM_ST' : 'SEM_ST',
+        stStatus: getSantaCruzStStatus(result),
+        stRaw: result.stRaw || '',
+        category: result.category || '',
         availability: result.stock || 'disponivel',
         quantity: parsedQuantity,
         unitPrice: finalPrice / parsedQuantity,
