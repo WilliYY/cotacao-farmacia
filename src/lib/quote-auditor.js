@@ -22,18 +22,52 @@ export function getDosageNumber(dosageStr) {
   return match ? parseFloat(match[1].replace(',', '.')) : null;
 }
 
-function dosageMatches(queryDosage, resultDosage) {
-  if (!queryDosage) return true;
-  if (!resultDosage) return false;
+function normalizeDosagePart(value, unit) {
+  const number = Number.parseFloat(String(value).replace(',', '.'));
+  const normalizedUnit = String(unit || '').toLowerCase();
+  if (!Number.isFinite(number)) return null;
+  if (normalizedUnit === 'g') return { family: 'mass', value: number * 1000 };
+  if (normalizedUnit === 'mg') return { family: 'mass', value: number };
+  if (normalizedUnit === 'mcg') return { family: 'mass', value: number / 1000 };
+  return { family: normalizedUnit, value: number };
+}
 
-  const queryNumber = getDosageNumber(queryDosage);
-  const resultNumber = getDosageNumber(resultDosage);
-  if (queryNumber !== null && resultNumber !== null) {
-    return queryNumber === resultNumber;
+function extractDosageParts(value) {
+  const text = normalizeText(value).replace(/,/g, '.');
+  const parts = [];
+  const add = (number, unit) => {
+    const part = normalizeDosagePart(number, unit);
+    if (!part) return;
+    if (!parts.some(existing => existing.family === part.family && Math.abs(existing.value - part.value) < 0.000001)) {
+      parts.push(part);
+    }
+  };
+
+  for (const match of text.matchAll(/(\d+(?:\.\d+)?)\s*[+/]\s*(\d+(?:\.\d+)?)\s*(mcg|mg|g|ml|ui)\b/g)) {
+    add(match[1], match[3]);
+    add(match[2], match[3]);
+  }
+  for (const match of text.matchAll(/(\d+(?:\.\d+)?)\s*(mcg|mg|g|ml|ui)\b/g)) {
+    add(match[1], match[2]);
+  }
+  return parts;
+}
+
+function dosageMatches(queryDosage, resultDosage, resultText = '') {
+  if (!queryDosage) return true;
+  if (!resultDosage && !resultText) return false;
+
+  const queryParts = extractDosageParts(queryDosage);
+  const resultParts = extractDosageParts(`${resultDosage || ''} ${resultText || ''}`);
+  if (queryParts.length > 0 && resultParts.length > 0) {
+    return queryParts.every(queryPart => resultParts.some(resultPart =>
+      queryPart.family === resultPart.family &&
+      Math.abs(queryPart.value - resultPart.value) < 0.000001
+    ));
   }
 
   const query = normalizeText(queryDosage);
-  const result = normalizeText(resultDosage);
+  const result = normalizeText(`${resultDosage || ''} ${resultText || ''}`);
   return query.includes(result) || result.includes(query);
 }
 
@@ -60,6 +94,12 @@ export function auditQuoteResult(parsed, result) {
   const price = Number(result.price || 0);
   const availability = normalizeText(result.availability || 'disponivel');
   const stStatus = result.stStatus || '';
+  const exactEanMatch = Boolean(
+    parsed.ean &&
+    result.ean &&
+    String(result.ean) === String(parsed.ean)
+  );
+  const eanIsOnlyIdentity = exactEanMatch && !String(parsed.name || '').trim();
 
   if (!result.source) {
     warnings.push('Fonte da captura nao informada');
@@ -89,17 +129,17 @@ export function auditQuoteResult(parsed, result) {
     warnings.push('EAN nao retornado pelo fornecedor');
   }
 
-  if (parsed.name && supplierProductName && !fuzzyMatch(parsed.name, supplierProductName)) {
+  if (!eanIsOnlyIdentity && parsed.name && supplierProductName && !fuzzyMatch(parsed.name, supplierProductName)) {
     blocks.push('Produto encontrado nao confere com a busca');
   }
 
-  if (!combinationMatches(parsed.originalTerms || parsed.name || '', supplierProductName)) {
+  if (!eanIsOnlyIdentity && !combinationMatches(parsed.originalTerms || parsed.name || '', supplierProductName)) {
     blocks.push(parsed.isCombination
       ? 'Associacao encontrada nao confere com os principios ativos pesquisados'
       : 'Produto combinado nao confere com a busca de principio ativo unico');
   }
 
-  if (!dosageMatches(parsed.dosage, result.dosage)) {
+  if (!dosageMatches(parsed.dosage, result.dosage, supplierProductName)) {
     blocks.push('Dosagem encontrada nao confere');
   }
 

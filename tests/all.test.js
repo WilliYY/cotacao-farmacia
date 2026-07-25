@@ -24,13 +24,16 @@ import { normalizeDmParanaUrl } from '../src/connectors/real/dm-parana-real.js';
 import { getFarmaciaPopularInfo, resolveReferenceBrandName } from '../src/lib/pharmaceutical-context.js';
 import {
   didPortalFetchFailDuringSearch,
+  getDmCardEan,
+  inferProductPresentation,
+  isConfirmedDmEmptyState,
   isDirectDmProductMatch,
   isPortalFetchFailureMessage,
   parseAnbTableRow,
   parseDmParanaCard,
   parseProfarmaTableRow
 } from '../src/lib/electron-scraper.js';
-import { isRetryableAnbError, normalizeAnbUrl } from '../src/connectors/real/anb-real.js';
+import { applyAnbEanEvidence, isRetryableAnbError, normalizeAnbUrl } from '../src/connectors/real/anb-real.js';
 import { resolveConnectorMode } from '../src/connectors/connector-registry.js';
 import {
   initDatabase,
@@ -363,6 +366,34 @@ test('Parser Utility - EAN, Quantities and Presentations', async (t) => {
     assert.strictEqual(creamRes.presentation, 'creme');
   });
 
+  await t.test('interprets Clenil numeric strengths as micrograms without replacing the brand search', () => {
+    const parsed = parseSearchQuery('clenil 250');
+    const explicitUnit = parseSearchQuery('clenil 250 mcg inalador');
+    const plans = analyzeQuoteBatch(['clenil 250']);
+    assert.strictEqual(parsed.name, 'clenil');
+    assert.strictEqual(parsed.dosage, '250mcg');
+    assert.strictEqual(explicitUnit.name, 'clenil');
+    assert.strictEqual(explicitUnit.dosage, '250mcg');
+    assert.strictEqual(explicitUnit.presentation, 'spray');
+    assert.strictEqual(plans[0].searchText, 'clenil 250');
+    assert.strictEqual(plans[0].parsed.dosage, '250mcg');
+  });
+
+  await t.test('preserves both strengths in compact associated dosages', () => {
+    const parsed = parseSearchQuery('olmesartana hidrocloro 20/12,5mg 30 comp');
+    assert.strictEqual(parsed.name, 'olmesartana hidroclorotiazida');
+    assert.strictEqual(parsed.dosage, '20/12.5mg');
+    assert.strictEqual(parsed.isCombination, true);
+  });
+
+  await t.test('blocks invalid standalone EAN candidates before a portal search', () => {
+    const parsed = parseSearchQuery('7891721201807');
+    assert.strictEqual(parsed.ean, '');
+    assert.strictEqual(parsed.name, '');
+    assert.strictEqual(parsed.confidenceStatus, 'DESCRICAO_INSUFICIENTE');
+    assert.match(parsed.refinementSuggestion, /EAN-13 valido/);
+  });
+
   await t.test('Expands safe medication abbreviations before supplier searches', () => {
     const res = parseSearchQuery('hidrocloro 25mg 30 comp');
     assert.strictEqual(res.name, 'hidroclorotiazida');
@@ -507,6 +538,7 @@ test('Santa Cruz Portable Automation', async (t) => {
 
   await t.test('retries an empty milligram search without mg and submits it with Enter', () => {
     assert.strictEqual(getSantaCruzRetryTerm('losartana 50mg', 'losartana'), 'losartana');
+    assert.strictEqual(getSantaCruzRetryTerm('clenil 250mcg', 'clenil'), 'clenil');
     assert.strictEqual(
       getSantaCruzRetryTerm('olmesartana 40 mg + hidroclorotiazida 25mg'),
       'olmesartana + hidroclorotiazida'
@@ -745,6 +777,8 @@ test('Farmacia Popular & Reference Brand Intelligence', async (t) => {
     assert.strictEqual(resolveReferenceBrandName('Selozok'), 'metoprolol');
     assert.strictEqual(resolveReferenceBrandName('Pura T4'), 'levotiroxina');
     assert.strictEqual(resolveReferenceBrandName('Novalgina'), 'dipirona');
+    assert.strictEqual(resolveReferenceBrandName('Clenil'), 'beclometasona');
+    assert.strictEqual(fuzzyMatch('clenil', 'Dipropionato de beclometasona 250mcg spray'), true);
   });
 });
 
@@ -761,6 +795,12 @@ test('ANB product grid contract', async (t) => {
     assert.strictEqual(result.laboratory, 'ACHE GEN');
   });
 
+  await t.test('recognizes inhaler presentations instead of defaulting them to tablets', () => {
+    assert.strictEqual(inferProductPresentation('CLENIL HFA 250MCG SPRAY 200 DOSES'), 'spray');
+    assert.strictEqual(inferProductPresentation('CLENIL HFA 250MCG JET 10ML'), 'spray');
+    assert.strictEqual(inferProductPresentation('CLENIL HFA 250MCG INALADOR'), 'spray');
+  });
+
   await t.test('fails closed when the authoritative price header is absent', () => {
     assert.strictEqual(parseAnbTableRow(headers.filter(value => value !== 'Unit c/St.'), columns), null);
   });
@@ -774,6 +814,32 @@ test('ANB product grid contract', async (t) => {
     assert.strictEqual(isRetryableAnbError(new Error('net::ERR_CONNECTION_RESET')), true);
     assert.strictEqual(isRetryableAnbError(new Error('Timed out waiting for the product grid')), true);
     assert.strictEqual(isRetryableAnbError(new Error('Supplier commercial condition selector did not open.')), false);
+  });
+
+  await t.test('records exact EAN search evidence without overwriting a returned barcode', () => {
+    const exactSearch = applyAnbEanEvidence([
+      { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: null }
+    ], '7891721201806');
+    assert.strictEqual(exactSearch[0].ean, '7891721201806');
+    assert.strictEqual(exactSearch[0].eanEvidence, 'EXACT_SEARCH');
+
+    const conflicting = applyAnbEanEvidence([
+      { supplierProductName: 'OUTRO PRODUTO', ean: '7890000000000' }
+    ], '7891721201806');
+    assert.strictEqual(conflicting[0].ean, '7890000000000');
+    assert.strictEqual(conflicting[0].eanEvidence, undefined);
+
+    const ambiguous = applyAnbEanEvidence([
+      { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: null },
+      { supplierProductName: 'OUTRO PRODUTO 500MG 30CPR', ean: null }
+    ], '7891721201806');
+    assert.strictEqual(ambiguous[0].ean, null);
+    assert.strictEqual(ambiguous[1].ean, null);
+
+    const nameSearch = applyAnbEanEvidence([
+      { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: null }
+    ], 'metformina 500mg');
+    assert.strictEqual(nameSearch[0].ean, null);
   });
 });
 
@@ -828,6 +894,33 @@ test('DM Parana Card Parser', async (t) => {
     assert.strictEqual(isDirectDmProductMatch('hidroclorotiazida', 'Amilorida+hidroclorotiazida 5/50mg'), false);
     assert.strictEqual(isDirectDmProductMatch('hidroclorotiazida', 'Gen Diclor Hidroxizina 25mg'), false);
     assert.strictEqual(isDirectDmProductMatch('olmesartana hidroclorotiazida', 'Olmesartana+Hidroclorotiazida 20/12,5mg'), true);
+  });
+
+  await t.test('matches an EAN search against the barcode shown on the card', () => {
+    assert.strictEqual(getDmCardEan('EAN: 7891721201806\nPreço final: R$ 7,90'), '7891721201806');
+    assert.strictEqual(
+      isDirectDmProductMatch('7891721201806', 'Glifage XR 500mg 30cpr', '7891721201806'),
+      true
+    );
+    assert.strictEqual(
+      isDirectDmProductMatch('7891721201806', 'Glifage XR 500mg 30cpr', '7891721201813'),
+      false
+    );
+  });
+
+  await t.test('accepts a silent empty DM grid only after a stable retry', () => {
+    const settled = {
+      inputValue: '7891721201806',
+      cardCount: 0,
+      loading: false,
+      explicitlyEmpty: false
+    };
+    assert.strictEqual(isConfirmedDmEmptyState(settled, '7891721201806', 7000, 1), true);
+    assert.strictEqual(isConfirmedDmEmptyState({ ...settled, loading: true }, '7891721201806', 7000, 1), false);
+    assert.strictEqual(isConfirmedDmEmptyState({ ...settled, cardCount: 1 }, '7891721201806', 7000, 1), false);
+    assert.strictEqual(isConfirmedDmEmptyState(settled, '7891721201806', 6999, 1), false);
+    assert.strictEqual(isConfirmedDmEmptyState(settled, '7891721201806', 7000, 0), false);
+    assert.strictEqual(isConfirmedDmEmptyState({ ...settled, fetchFailed: true }, '7891721201806', 7000, 1), false);
   });
 });
 
@@ -926,6 +1019,21 @@ test('Live Quote Source Safety', async (t) => {
     assert.strictEqual(calls[0].ean, '7896004719016');
     assert.strictEqual(calls[1].ean, '');
     assert.strictEqual(results[0].searchFallback, 'EAN_NAO_ENCONTRADO_NOME');
+  });
+
+  await t.test('does not repeat an EAN-only search as if the barcode were a product name', async () => {
+    let callCount = 0;
+    const connector = {
+      supplierName: 'ANB',
+      searchProduct: async () => {
+        callCount++;
+        return [];
+      }
+    };
+    const parsed = parseSearchQuery('7891721201806');
+    const results = await callWithEanFallback(connector, parsed, { retries: 0 });
+    assert.strictEqual(callCount, 1);
+    assert.deepStrictEqual(results, []);
   });
 
   await t.test('does not hide a portal failure behind an EAN name fallback', async () => {
@@ -1079,6 +1187,53 @@ test('Quote Auditor - Result Integrity Checks', async (t) => {
     const audit = auditQuoteResult(parsed, { ...baseResult, ean: '7896004719023' });
     assert.strictEqual(audit.status, AUDIT_STATUS.BLOCKED);
     assert.ok(audit.summary.includes('EAN retornado diferente'));
+  });
+
+  await t.test('uses an exact barcode as product identity for EAN-only searches', () => {
+    const eanOnly = parseSearchQuery('7891721201806');
+    const audit = auditQuoteResult(eanOnly, {
+      ...baseResult,
+      supplierProductName: 'GLIFAGE XR 500MG 30 comprimidos',
+      dosage: '500mg',
+      ean: '7891721201806'
+    });
+    assert.strictEqual(audit.status, AUDIT_STATUS.OK, audit.summary);
+  });
+
+  await t.test('does not let a matching EAN hide a conflicting supplied description', () => {
+    const mixed = parseSearchQuery('7891721201806 losartana 50mg');
+    const audit = auditQuoteResult(mixed, {
+      ...baseResult,
+      supplierProductName: 'AMOXICILINA 50MG 30 CAPSULAS',
+      dosage: '50mg',
+      presentation: 'capsula',
+      ean: '7891721201806'
+    });
+    assert.strictEqual(audit.status, AUDIT_STATUS.BLOCKED);
+    assert.match(audit.summary, /Produto encontrado nao confere/);
+  });
+
+  await t.test('compares dosage units and all strengths in associated products', () => {
+    const clenil = parseSearchQuery('clenil 250mcg');
+    const wrongUnit = auditQuoteResult(clenil, {
+      ...baseResult,
+      supplierProductName: 'CLENIL HFA 250MG SPRAY',
+      dosage: '250mg',
+      presentation: 'spray',
+      ean: '7896672202902'
+    });
+    assert.strictEqual(wrongUnit.status, AUDIT_STATUS.BLOCKED);
+    assert.match(wrongUnit.summary, /Dosagem encontrada nao confere/);
+
+    const association = parseSearchQuery('olmesartana hidrocloro 20/12,5mg 30 comp');
+    const matchingAssociation = auditQuoteResult(association, {
+      ...baseResult,
+      supplierProductName: 'OLMESARTANA 20MG + HIDROCLOROTIAZIDA 12,5MG 30 COMPRIMIDOS',
+      dosage: '20mg',
+      presentation: 'comprimido',
+      ean: '7890000000001'
+    });
+    assert.notStrictEqual(matchingAssociation.status, AUDIT_STATUS.BLOCKED, matchingAssociation.summary);
   });
 
   await t.test('Warns when package quantity differs from the search', () => {

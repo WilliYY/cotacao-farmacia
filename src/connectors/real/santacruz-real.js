@@ -93,12 +93,12 @@ export function getSantaCruzStStatus(result = {}) {
 export function getSantaCruzRetryTerm(searchTerm = '', productName = '') {
   const original = String(searchTerm || '').replace(/\s+/g, ' ').trim();
   if (!original || /^\d{13}$/.test(original)) return '';
-  if (!/\d+(?:[.,]\d+)?\s*mg\b/i.test(original)) return '';
+  if (!/\d+(?:[.,]\d+)?\s*(?:mcg|mg)\b/i.test(original)) return '';
   const activeIngredient = String(productName || '')
     .replace(/\s+/g, ' ')
     .trim();
   const broadTerm = activeIngredient || original
-    .replace(/\b\d+(?:[.,]\d+)?\s*mg\b/gi, ' ')
+    .replace(/\b\d+(?:[.,]\d+)?\s*(?:mcg|mg)\b/gi, ' ')
     .replace(/\s*\+\s*/g, ' + ')
     .replace(/\s+/g, ' ')
     .trim();

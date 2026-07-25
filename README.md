@@ -104,6 +104,9 @@ Antes de abrir cada fornecedor, a descricao recebe uma normalizacao compartilhad
 - Erros inequivocos e prefixos unicos, como `dapaglifozina` ou `dapagli`, sao corrigidos para `dapagliflozina` antes de abrir os portais, e a alteracao fica visivel na tela.
 - Termos ambiguos ou sem informacao suficiente ficam vermelhos e nao abrem os fornecedores ate receberem complemento.
 - Quando a linha contem EAN e nome, o sistema tenta o EAN primeiro. Somente um retorno realmente vazio permite nova busca pelo nome; falha de portal nunca e mascarada pelo fallback.
+- Um EAN-13 invalido fica bloqueado para correcao. Mesmo com EAN valido, uma descricao conflitante na mesma linha impede a recomendacao automatica.
+- Marcas conhecidas sao comparadas com o principio ativo sem alterar o texto enviado ao portal. Exemplo: `clenil 250`, `clenil 250 mcg` e `clenil 250 inalador` reconhecem beclometasona 250mcg em spray.
+- A dose confere valor e unidade; `250mcg` nao pode ser aceito como `250mg`. Associacoes compactas como `20/12,5mg` exigem as duas concentracoes no produto retornado.
 - O aprendizado local guarda apenas correcoes de escrita confirmadas por resultado real. Precos, estoque e ST antigos nunca alimentam uma nova cotacao.
 
 ### 2. Regra de ST (Fase 2)
@@ -156,6 +159,7 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - Antes da cotação, a faixa da Santa Cruz verifica a instalação e a janela a cada 30 segundos. Ela informa se o programa está pronto, fechado, atualizando, na tela de login, aberto em Home/Pedidos, sem janela ou não instalado.
 - **Abrir e preparar** localiza o executável de cada computador, inicia o programa, preenche o login salvo e navega até Digitalizador/Novo Pedido. Se existir um processo validado sem janela, o comando explícito muda para **Reiniciar e preparar**; a cotação comum nunca encerra o programa automaticamente.
 - A pesquisa mostra quantos itens serão cotados e quais distribuidoras estão selecionadas antes de iniciar o robô.
+- A tela inicial usa faixas funcionais e cores distintas para ANB, Profarma, Santa Cruz e DM Parana, mantendo exemplos, fontes e acoes legiveis em janelas grandes e compactas.
 - A prévia explica cada correção ou herança de contexto antes da cotação. Linhas incompletas permanecem vermelhas e visíveis para ajuste.
 - Cada resultado exibe a origem exata do valor utilizado: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final` e DM Paraná `Preço final: R$`.
 - O resultado consolidado separa cobertura, opções válidas, itens não encontrados, falhas/tempo limite e revisão necessária. A economia só aparece quando existe outra oferta realmente comparável em ST, apresentação e quantidade.

@@ -12,6 +12,7 @@ export const ACTIVE_INGREDIENTS = [
   'atorvastatina',
   'azitromicina',
   'bilastina',
+  'beclometasona',
   'bisoprolol',
   'candesartana',
   'captopril',
@@ -312,7 +313,9 @@ export const REFERENCE_BRAND_NAMES = new Map([
   ['alivium', 'ibuprofeno'],
   ['cataflam', 'diclofenaco'],
   ['voltaren', 'diclofenaco'],
-  ['buscopan', 'escopolamina']
+  ['buscopan', 'escopolamina'],
+  ['clenil', 'beclometasona'],
+  ['clenil hfa', 'beclometasona']
 ]);
 
 export function getFarmaciaPopularInfo(medicationName) {
@@ -334,5 +337,14 @@ export function getFarmaciaPopularInfo(medicationName) {
 export function resolveReferenceBrandName(brandName) {
   if (!brandName) return '';
   const normalized = normalizePharmaceuticalText(brandName);
-  return REFERENCE_BRAND_NAMES.get(normalized) || '';
+  const exactMatch = REFERENCE_BRAND_NAMES.get(normalized);
+  if (exactMatch) return exactMatch;
+
+  const padded = ` ${normalized} `;
+  const ingredients = new Set(
+    [...REFERENCE_BRAND_NAMES.entries()]
+      .filter(([brand]) => padded.includes(` ${brand} `))
+      .map(([, ingredient]) => ingredient)
+  );
+  return ingredients.size === 1 ? [...ingredients][0] : '';
 }

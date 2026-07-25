@@ -187,7 +187,13 @@ export async function callWithRetry(connector, parsedQuery, options = {}) {
 export async function callWithEanFallback(connector, parsedQuery, options = {}) {
   const firstResults = await callWithRetry(connector, parsedQuery, options);
   if (options.signal?.aborted) throw createAbortError();
-  const canFallbackByName = Boolean(parsedQuery.ean && parsedQuery.name);
+  const suppliedName = String(parsedQuery.name || '').trim();
+  const canFallbackByName = Boolean(
+    parsedQuery.ean &&
+    suppliedName &&
+    suppliedName !== String(parsedQuery.ean) &&
+    /[a-z]/i.test(suppliedName)
+  );
   if (!canFallbackByName || !Array.isArray(firstResults) || firstResults.length > 0) {
     return firstResults;
   }

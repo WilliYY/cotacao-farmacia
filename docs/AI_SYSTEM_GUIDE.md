@@ -124,8 +124,8 @@ erDiagram
 
 ### 1. Normalization Parser (`parser.js`)
 Extracts structured terms from unstructured text lines using regular expressions and dictionary matching:
-- **EAN-13 Check Digit Verification:** Extracts 13-digit sequence candidates `/\b(\d{13})\b/` and validates them using EAN-13 check digit formula (summing odd positions and even positions $\times 3$, mod 10 subtraction). This prevents invalid numbers (like CNPJs or phone numbers) from triggering barcode lookups.
-- **Dosage Extraction & Negative Lookahead:** Extracts dosage units (mg, mcg, g, ml, ui) with optional spaces. Standardizes standalone dosage numbers (e.g. "50" -> "50mg"), but utilizes a negative lookahead `(?!\s*(?:capsulas|comp...))` to ignore pack counts (e.g. "30" in "losartana 30 cp") preventing them from polluting dosage attributes.
+- **EAN-13 Check Digit Verification:** Extracts 13-digit sequence candidates `/\b(\d{13})\b/` and validates them using EAN-13 check digit formula (summing odd positions and even positions $\times 3$, mod 10 subtraction). Invalid standalone candidates become `DESCRICAO_INSUFICIENTE` and never reach a supplier as a product name.
+- **Dosage Extraction & Negative Lookahead:** Extracts dosage units (mg, mcg, g, ml, ui) with optional spaces and compact combinations such as `20/12,5mg`. Standardizes standalone dosage numbers (e.g. "50" -> "50mg"), but utilizes a negative lookahead `(?!\s*(?:capsulas|comp...))` to ignore pack counts (e.g. "30" in "losartana 30 cp") preventing them from polluting dosage attributes.
 - **Presentation Matching:** Converts abbreviations (`comp`, `cp`, `caps`, `gts`) to standard forms (`comprimido`, `capsula`, `gotas`) using the `SYNONYMS` table.
 - **Quantity Capture:** Extracts package size/count (e.g., "30 comp" $\rightarrow$ quantity `30`).
 - **Confidence Rating:** Emits `ALTA` status if both dosage and presentation are verified; otherwise emits `PRODUTO_PARECIDO_REVISAR`.
@@ -137,6 +137,7 @@ Extracts structured terms from unstructured text lines using regular expressions
 - Keeps the single-ingredient safety gate: a supplier combination is blocked unless the query requests the complete association.
 - Treats `xarope` and `suspensao oral` as equivalent while excluding ophthalmic, injectable, nasal, otologic, and other non-oral solutions.
 - The same helpers are used by the parser, recommendation pre-check, and final quote auditor to prevent contradictory decisions.
+- Reference brands are mapped to their active ingredient for matching without replacing the term sent to suppliers. For example, `clenil 250` remains a brand search while supplier rows containing beclometasona 250mcg are recognized.
 
 #### Contextual Search Intelligence (`search-intelligence.js`)
 - `analyzeQuoteBatch()` evaluates the complete list before any supplier is opened, preserving safe context from the preceding line.
@@ -144,7 +145,7 @@ Extracts structured terms from unstructured text lines using regular expressions
 - Known compact strengths are expanded into independent plans, so `sinvastatina 20 40` means 20 mg and 40 mg rather than quantity 40.
 - Controlled spelling corrections and unique DCB prefixes are applied before the live search and persisted with original text, resolved text, reason, and confidence.
 - `QueryCorrection` learns aliases only after a successful live result and only at high confidence or after repeated confirmation. It never stores or supplies price, stock, ST, or a recommendation.
-- For input containing EAN plus description, the connector tries EAN first and retries by name only after a genuine empty response. Infrastructure errors stay blocked.
+- For input containing EAN plus description, the connector tries EAN first and retries by name only after a genuine empty response. Infrastructure errors stay blocked, and an exact barcode does not bypass a conflicting description supplied on the same line.
 
 ### 2. Substituição Tributária (ST) Rules Engine (`st-rules.js`)
 Classifies tax conditions into four operational categories:
@@ -160,7 +161,7 @@ Classifies tax conditions into four operational categories:
 Ranks matching supplier results:
 1. Filter out unavailable options (`availability !== 'disponível'`) and rejected reviews.
 2. Reject `SEM_ST` before ranking. A product without ST must never be marked as `isValidOption` and must never receive `Melhor preço com ST`.
-3. **Exact Numerical Dosage Check:** Extracts the raw numeric value of dosages (e.g. `"50mg"` $\rightarrow$ `50.0`, `"5mg"` $\rightarrow$ `5.0`) and requires exact mathematical equality (`queryDosage === resultDosage`). This avoids false positive substring matches (like matching "50mg" with "5mg" or "25mg" with "250mg") to prevent costly purchase mistakes. If the search contains name and dosage but omits presentation, matching supplier rows can still be recommended; the audit layer handles missing evidence as warnings instead of forcing every row into "produto parecido".
+3. **Dosage and Unit Check:** Parses value + unit, converts equivalent mass units (`g`, `mg`, `mcg`) to a canonical amount and requires every requested strength in compact associations. Therefore `250mcg` never matches `250mg`, while `1000mcg` may match `1mg`. If the search contains name and dosage but omits presentation, matching supplier rows can still be recommended; the audit layer handles missing evidence as warnings instead of forcing every row into "produto parecido".
 4. Run the Quote Auditor before ranking. Blocked rows are marked as `auditStatus='BLOQUEADO'`, removed from automatic recommendation, and sent to manual review. Warning rows keep `auditStatus='ATENCAO'` and remain visible with an explanation in `auditSummary`.
 5. Group options that pass the valid ST test (`COM_ST`, `ST_INCLUSO`, `ST_SEPARADO`, or the explicit exemption `ST_ISENTO`) and pass the audit gate.
 6. Sort by:
@@ -178,12 +179,12 @@ Validates whether each supplier result is safe to use in the quotation:
 - Persists the outcome in `QuoteResult.auditStatus` and `QuoteResult.auditSummary`; the UI and XLSX export show these fields and route non-OK rows to review.
 
 ### 5. Real Supplier Extraction Rules
-- **ANB:** searches with EAN when available; otherwise sends name + dosage + presentation. The captured quote price must come directly from the literal `Unit c/ST` grid column. Required headers are validated before extraction, the previous grid signature cannot satisfy a new search, and missing/zero `Unit c/ST` blocks the row. Never fall back to `Preço`, `Preço + ST`, or a package calculation.
+- **ANB:** searches with EAN when available; otherwise sends name + dosage + presentation. The captured quote price must come directly from the literal `Unit c/ST` grid column. Required headers are validated before extraction, the previous grid signature cannot satisfy a new search, and missing/zero `Unit c/ST` blocks the row. An exact EAN search can supply missing barcode evidence only when the portal returned one unambiguous row. Never fall back to `Preço`, `Preço + ST`, or a package calculation.
 - **Profarma:** uses the Electron BrowserWindow scraper, normalizes old addresses to `https://pedido.profarma.com.br/`, opens `Novo Pedido`, and accepts only `Preço Final`. A medicine with `ST R$ -` is blocked unless its category is explicitly ST-exempt.
 - **Santa Cruz:** uses `src/lib/santacruz-search.ps1` for the local JavaFX program. Discovery checks an optional environment override, a validated machine-local path cache, Desktop/Start Menu shortcuts, uninstall registry entries, standard install folders, and finally a time-bounded fixed-drive scan. It opens the app, handles login, waits for updates, enters Digitalizador/Novo Pedido, writes the medication, requires a changed live grid for every accepted price, extracts only column `Preço NF`, and requires green visual stock evidence from `Disp.`.
 - **Santa Cruz preflight:** `--status-only` is read-only and reports `closed`, `ready`, `updating`, `login-required`, `logged-in-home`, `logged-in-orders`, `not-responding`, `running-without-window`, `open-not-ready`, or `not-installed`. The renderer polls this through `get-santacruz-status` every 30 seconds while Santa Cruz is selected.
 - **Santa Cruz preparation:** `--prepare` reuses the same login/navigation path but stops after the live search grid is ready. Only this explicit operator command may restart a validated Santa Cruz `javaw` that has no accessible window; normal quotations remain fail-closed and never terminate the supplier application. An unrelated Java process never blocks startup. A `503 Service Unavailable` from the supplier updater remains a technical failure and must be retried later, never converted into an empty quote.
-- **Santa Cruz repeated searches:** the robot reuses the open order screen, requests `Lista de Produtos [F3]` only when the grid is absent, verifies the exact typed value, and clears the input before returning. It first submits name + dosage through the magnifier. A confirmed empty grid triggers one same-session retry using only the active ingredient and `Enter`; the original dosage remains mandatory while the full virtual grid is scanned, so 100mg rows cannot satisfy a 50mg quote.
+- **Santa Cruz repeated searches:** the robot reuses the open order screen, requests `Lista de Produtos [F3]` only when the grid is absent, verifies the exact typed value, and clears the input before returning. It first submits name + dosage through the magnifier. A confirmed empty `mg` or `mcg` grid triggers one same-session retry using only the active ingredient and `Enter`; the original dosage remains mandatory while the full virtual grid is scanned, so 100mg rows cannot satisfy a 50mg quote.
 - **Santa Cruz column contract:** UI Automation must expose one unambiguous literal `Preço NF` header together with `Código EAN`, `Descrição`, `Disp.` and `ST`. Columns are resolved from `TablePattern` when available or by horizontally revealing the header band and matching each label to live cell bounds. Missing or duplicated required headers block every row.
 - **Santa Cruz stock contract:** JavaFX exposes `Disp.` as an unnamed colored marker. The robot samples only the center of the current visible `Disp.` cell using its runtime bounds: green dominance means available, red means unavailable, and ambiguous/off-screen evidence remains blocked. Only non-off-screen grid rows count as observed, deduplication may replace unknown stock only with later visible evidence, and incomplete row coverage blocks the entire supplier result. If any presentation compatible with the requested dose still has unresolved `Disp.`, the supplier is blocked because that row could invalidate the claimed lowest available price.
 - **Santa Cruz hang safety:** if the JavaFX process stops responding before or during a query, the connector returns a blocked `not-responding` result. No previous, partial, empty, or zero price is accepted. Timeout/abort starts a bounded best-effort cleanup of the search field and scroll position while leaving the supplier application open for operator recovery.
@@ -305,7 +306,7 @@ The Node test suite validates the high-risk pharmacy purchase paths:
 - SQLite quote persistence plus manual review recalculation.
 - XLSX export workbook structure and best/ignored sheet routing.
 - Startup update safety for disabled updates, dirty worktrees, missing upstreams, and clean tracked repositories.
-- Current validation: `npm test` 57/57, `npm run build` approved, and `npm run lint` without blocking errors.
+- Current validation: `npm test` 115/115, `npm run build` approved, `npm run lint` without blocking errors, plus live `clenil 250` checks on all four suppliers.
 
 ### Delivery Workflow
 - Every completed project change includes synchronized documentation, executable validation, a scoped Git commit, and a push of the current branch by default.

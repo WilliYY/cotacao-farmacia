@@ -22,7 +22,23 @@ export function didPortalFetchFailDuringSearch(failureAt, searchSubmittedAt) {
     failureAt >= searchSubmittedAt;
 }
 
-export function isDirectDmProductMatch(searchTerm, productName) {
+export function getDmCardEan(value) {
+  return String(value || '').match(/EAN:\s*(\d{13})/i)?.[1] || '';
+}
+
+export function isConfirmedDmEmptyState(state, searchTerm, elapsedMs, retryCount) {
+  const inputMatches = String(state?.inputValue || '').trim().toLowerCase() ===
+    String(searchTerm || '').trim().toLowerCase();
+  return inputMatches &&
+    !state?.fetchFailed &&
+    !state?.loading &&
+    !state?.explicitlyEmpty &&
+    Number(state?.cardCount || 0) === 0 &&
+    elapsedMs >= 7000 &&
+    retryCount >= 1;
+}
+
+export function isDirectDmProductMatch(searchTerm, productName, productEan = '') {
   const normalize = value => String(value || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -31,10 +47,30 @@ export function isDirectDmProductMatch(searchTerm, productName) {
     .replace(/\s+/g, ' ')
     .trim();
   const query = normalize(searchTerm);
+  if (/^\d{13}$/.test(query)) {
+    return query === String(productEan || '').replace(/\D/g, '');
+  }
   const product = normalize(productName);
   const queryWords = query.split(/\s+/).filter(word => word.length >= 3);
   if (queryWords.length === 0 || !queryWords.every(word => product.includes(word))) return false;
   return queryWords.length > 1 || !product.includes('+');
+}
+
+export function inferProductPresentation(value) {
+  const normalized = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  if (/\b(?:spray|jet|aerossol|inalador)\b/.test(normalized)) return 'spray';
+  if (normalized.includes('caps')) return 'capsula';
+  if (normalized.includes('creme') || normalized.includes('pomada')) return 'creme';
+  if (
+    normalized.includes('gotas') ||
+    normalized.includes('solucao') ||
+    normalized.includes('xarope') ||
+    normalized.includes('suspensao')
+  ) return 'liquido';
+  return 'comprimido';
 }
 
 export function parseAnbTableRow(headers, columns) {
@@ -65,10 +101,7 @@ export function parseAnbTableRow(headers, columns) {
     !stockText.includes('indispon') &&
     (!Number.isFinite(stockNumber) || stockNumber > 0);
   const normalizedName = normalize(name);
-  let presentation = 'comprimido';
-  if (normalizedName.includes('caps')) presentation = 'capsula';
-  else if (normalizedName.includes('creme') || normalizedName.includes('pomada')) presentation = 'creme';
-  else if (normalizedName.includes('gotas') || normalizedName.includes('solucao') || normalizedName.includes('xarope')) presentation = 'liquido';
+  const presentation = inferProductPresentation(normalizedName);
   const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
   const quantityMatch = name.match(/(?:c\/?|com\s+)(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i) ||
     name.match(/(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i);
@@ -132,10 +165,7 @@ export function parseDmParanaCard(cardData = {}) {
   const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
   const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
   const ean = text.match(/EAN:\s*(\d{13})/i)?.[1] || '';
-  let presentation = 'comprimido';
-  if (normalizedName.includes('caps')) presentation = 'capsula';
-  else if (normalizedName.includes('creme') || normalizedName.includes('pomada')) presentation = 'creme';
-  else if (normalizedName.includes('gotas') || normalizedName.includes('solucao') || normalizedName.includes('xarope')) presentation = 'liquido';
+  const presentation = inferProductPresentation(normalizedName);
 
   return {
     supplierProductName: name,
@@ -189,10 +219,7 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
   const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
   const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
   const normalizedName = normalize(name);
-  let presentation = 'comprimido';
-  if (normalizedName.includes('caps')) presentation = 'capsula';
-  else if (normalizedName.includes('creme') || normalizedName.includes('pomada')) presentation = 'creme';
-  else if (normalizedName.includes('gotas') || normalizedName.includes('solucao') || normalizedName.includes('xarope')) presentation = 'liquido';
+  const presentation = inferProductPresentation(normalizedName);
 
   return {
     supplierProductName: name,
@@ -805,9 +832,10 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 const dmGridState = await win.webContents.executeJavaScript(`
                   (() => {
                     const isDirectMatch = ${isDirectDmProductMatch.toString()};
+                    const getCardEan = ${getDmCardEan.toString()};
                     const prices = Array.from(document.querySelectorAll('span'))
                       .filter(el => /^pre[cç]o\\s*final:\\s*R\\$/i.test((el.textContent || '').trim()));
-                    const names = prices.map(priceNode => {
+                    const cards = prices.map(priceNode => {
                       let card = priceNode;
                       while (card && card !== document.body) {
                         const text = card.innerText || '';
@@ -820,13 +848,19 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                             return alt && !/^brasil$/i.test(alt) && !/^logo/i.test(alt);
                           })
                         : null;
-                      return image?.getAttribute('alt')?.trim() || '';
-                    }).filter(Boolean);
+                      const cardText = card && card !== document.body ? card.innerText || '' : '';
+                      return {
+                        name: image?.getAttribute('alt')?.trim() || '',
+                        ean: getCardEan(cardText)
+                      };
+                    }).filter(card => card.name || card.ean);
                     const body = (document.body?.innerText || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
                     const input = document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
                     return {
                       inputValue: input?.value || '',
-                      hasDirectMatch: names.some(name => isDirectMatch(${JSON.stringify(searchTerm)}, name)),
+                      hasDirectMatch: cards.some(card => isDirectMatch(${JSON.stringify(searchTerm)}, card.name, card.ean)),
+                      cardCount: cards.length,
+                      cardEvidence: cards.slice(0, 8),
                       loading: body.includes('carregando') || body.includes('aguarde'),
                       explicitlyEmpty: body.includes('nenhum produto') || body.includes('nao encontramos') || body.includes('sem produtos encontrados')
                     };
@@ -834,12 +868,37 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 `).catch(() => null);
                 const elapsed = Date.now() - submittedSearchAt;
                 if (!dmGridState || elapsed < 2500 || dmGridState.loading) return;
+                const portalFetchFailed = didPortalFetchFailDuringSearch(
+                  portalFetchFailureAt,
+                  submittedSearchAt
+                );
+                dmGridState.fetchFailed = portalFetchFailed;
+                if (portalFetchFailed && elapsed >= 3000) {
+                  hasResolved = true;
+                  clearInterval(pollInterval);
+                  reject(new Error(
+                    `Supplier portal request failed during search: ${portalFetchFailureMessage || 'Failed to fetch'}`
+                  ));
+                  setTimeout(cleanup, 2000);
+                  return;
+                }
                 const inputMatches = String(dmGridState.inputValue).trim().toLowerCase() === String(searchTerm).trim().toLowerCase();
+                if (isConfirmedDmEmptyState(dmGridState, searchTerm, elapsed, dmGridRetries)) {
+                  logger.info('DM confirmed an empty product grid after a stable retry.');
+                  hasResolved = true;
+                  clearInterval(pollInterval);
+                  resolve([]);
+                  setTimeout(cleanup, 2000);
+                  return;
+                }
                 if (!dmGridState.explicitlyEmpty && (!inputMatches || !dmGridState.hasDirectMatch)) {
                   if (elapsed < 7000) return;
                   if (dmGridRetries < 1) {
                     dmGridRetries++;
-                    logger.warn('DM result grid did not match the requested product; clearing and submitting once more.');
+                    logger.warn(
+                      `DM result grid did not match the requested product; input=${JSON.stringify(dmGridState.inputValue)}; ` +
+                      `cards=${JSON.stringify(dmGridState.cardEvidence || [])}; clearing and submitting once more.`
+                    );
                     await win.webContents.executeJavaScript(`
                       (() => {
                         const input = document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
@@ -870,11 +929,12 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
               const results = await win.webContents.executeJavaScript(`
                 (async () => {
                   const wait = ms => new Promise(r => setTimeout(r, ms));
-                   const results = [];
-                   const visitedEans = new Set();
-                   const supplierId = ${Number(supplierId)};
-                   const parsePositiveCurrency = ${parsePositiveCurrency.toString()};
-                   const parseAnbRow = ${parseAnbTableRow.toString()};
+                    const results = [];
+                    const visitedEans = new Set();
+                    const supplierId = ${Number(supplierId)};
+                    const parsePositiveCurrency = ${parsePositiveCurrency.toString()};
+                    const inferProductPresentation = ${inferProductPresentation.toString()};
+                    const parseAnbRow = ${parseAnbTableRow.toString()};
                    const parseProfarmaRow = ${parseProfarmaTableRow.toString()};
                    const parseDmParanaCardFn = ${parseDmParanaCard.toString()};
                    const isDirectDmProductMatchFn = ${isDirectDmProductMatch.toString()};
@@ -1103,7 +1163,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   }
 
                   const finalResults = supplierId === 4
-                    ? results.filter(result => isDirectDmProductMatchFn(${JSON.stringify(searchTerm)}, result.supplierProductName))
+                    ? results.filter(result => isDirectDmProductMatchFn(${JSON.stringify(searchTerm)}, result.supplierProductName, result.ean))
                     : results;
 
                   if ((supplierId === 2 || supplierId === 4) && finalResults.length === 0) {

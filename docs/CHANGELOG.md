@@ -4,6 +4,20 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 
 ---
 
+## [1.7.5] - 2026-07-25
+
+### Identidade do produto, Clenil e interface de pesquisa
+- **EAN fail-closed:** codigos EAN-13 invalidos deixam de ser enviados como nome; a ANB somente associa a evidencia da busca exata quando existe uma unica linha, e consultas com EAN + descricao continuam obrigadas a conferir o nome informado.
+- **Dose com unidade e associacoes:** a auditoria diferencia `mcg`, `mg`, `g`, `ml` e `ui`, converte unidades de massa equivalentes e exige todas as doses de associacoes compactas como `20/12,5mg`.
+- **Clenil por marca ou principio ativo:** `clenil 250`, `clenil 250 mcg` e `clenil 250 inalador` sao interpretados como beclometasona 250mcg em spray, mantendo a marca como texto pesquisado nos portais.
+- **Santa Cruz com `mcg`:** uma busca vazia por `clenil 250mcg` pode repetir uma unica vez por `clenil`, mantendo 250mcg como filtro obrigatorio e extraindo somente `Preco NF`.
+- **DM Parana e falha de rede:** uma grade silenciosamente vazia so vira `not_found` depois de uma repeticao estavel; falha de rede detectada durante a busca interrompe antes dessa classificacao.
+- **Interface mais legivel:** a tela inicial ocupa melhor janelas grandes, reduz espacos vazios, separa exemplos, fontes e acoes em faixas funcionais e identifica as quatro distribuidoras por cores distintas.
+- **Validacao real de `clenil 250`:** ANB retornou `Unit c/ST` de R$ 37,21 (uma linha disponivel e outra bloqueada sem estoque), Profarma retornou `Preco Final` de R$ 36,73, Santa Cruz retornou `Preco NF` de R$ 37,21 e bloqueou a linha sem estoque; DM Parana confirmou ausencia sem fabricar preco.
+- **Validacao automatizada:** `npm test` 115/115, `npm run build` aprovado, `npm run lint` sem erros bloqueantes e verificacao visual em 1440x900 e 1024x768 sem sobreposicao ou rolagem horizontal.
+
+---
+
 ## [1.7.4] - 2026-07-24
 
 ### Auditoria real das quatro distribuidoras

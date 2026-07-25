@@ -3,7 +3,8 @@ import {
   expandMedicationAliases,
   extractActiveIngredients,
   isCombinationRequest,
-  normalizePharmaceuticalText
+  normalizePharmaceuticalText,
+  resolveReferenceBrandName
 } from './pharmaceutical-context.js';
 
 const MIN_SAFE_FUZZY_LENGTH = 6;
@@ -40,7 +41,9 @@ const SYNONYMS = {
   solucao: 'solucao',
   sol: 'solucao',
   spray: 'spray',
-  inalador: 'inalador',
+  jet: 'spray',
+  aerossol: 'spray',
+  inalador: 'spray',
   adesivo: 'adesivo',
   shampoo: 'shampoo',
   shamp: 'shampoo',
@@ -83,7 +86,9 @@ const SYNONYMS = {
   solucao: 'solucao',
   sol: 'solucao',
   spray: 'spray',
-  inalador: 'inalador',
+  jet: 'spray',
+  aerossol: 'spray',
+  inalador: 'spray',
   adesivo: 'adesivo',
   shampoo: 'shampoo',
   shamp: 'shampoo',
@@ -164,11 +169,12 @@ export function parseSearchQuery(rawText) {
   const ean = isValidEAN13(matchedEan) ? matchedEan : '';
 
   // 2. Extract dosage (e.g. 500mg, 250mcg, 20mg, 10ml, 50g, etc.)
-  const dosageMatch = cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) || 
+  const dosageMatch = cleaned.match(/((?:\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui)?\s*[+/]\s*)+\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) ||
+                      cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) ||
                       cleaned.match(/\b(\d{1,4})\b(?!\s*(?:capsulas?|caps?|comprimidos?|comp?s?|cprs?|cps?|gotas?|gts|unidades?|unds?|envelopes?|env?s?|tablets?|tbls?|flaconetes?|flac?s?))/i);
   let dosage = '';
   if (dosageMatch) {
-    dosage = dosageMatch[0].trim();
+    dosage = dosageMatch[0].replace(/\s+/g, '').toLowerCase();
     if (/^\d+$/.test(dosage)) {
       const lowerCleaned = cleaned.toLowerCase();
       const isMcgMed = Array.from(MCG_MEDICATIONS).some(med => lowerCleaned.includes(med));
@@ -216,12 +222,17 @@ export function parseSearchQuery(rawText) {
   let nameWords = [];
   const dosageStr = dosageMatch ? dosageMatch[0].toLowerCase() : '';
   const dosageNum = dosageMatch ? dosageMatch[1].toLowerCase() : '';
+  const dosageNumbers = dosageStr.match(/\d+(?:[.,]\d+)?/g) || [];
   const qtyToken = qtyMatch ? qtyMatch[0] : '';
   
   for (const word of words) {
     const cleanWord = normalizePharmaceuticalText(word).replace(/[+/.%]/g, '');
-    const isEan = ean && word.includes(ean);
-    const isDosageWord = (dosageStr && (word.includes(dosageStr) || word.includes(dosageNum)));
+    const isEan = matchedEan && word.includes(matchedEan);
+    const isDosageWord = Boolean(dosageStr && (
+      word.includes(dosageStr) ||
+      word.includes(dosageNum) ||
+      dosageNumbers.includes(cleanWord)
+    ));
     
     const isQtyWord = qtyToken && word.includes(qtyToken) || 
                        (qtyMatch && word.includes(qtyMatch[1])) || 
@@ -230,14 +241,14 @@ export function parseSearchQuery(rawText) {
     const isPresentationWord = SYNONYMS[cleanWord] !== undefined || (presentation && cleanWord.endsWith(presentation));
 
     if (!isPresentationWord && !isDosageWord && !isEan && !isQtyWord && 
-        cleanWord !== 'mg' && cleanWord !== 'ml' && cleanWord !== 'g' && 
+        cleanWord !== 'mg' && cleanWord !== 'mcg' && cleanWord !== 'ml' && cleanWord !== 'g' && cleanWord !== 'ui' &&
         cleanWord !== 'cp' && cleanWord !== 'cps' && cleanWord !== 'comp' && cleanWord !== 'caps') {
       nameWords.push(word);
     }
   }
 
   let name = canonicalizeMedicationName(nameWords.join(' ').trim());
-  if (!name && words.length > 0) {
+  if (!name && words.length > 0 && !matchedEan) {
     name = canonicalizeMedicationName(words[0]);
   }
 
@@ -251,7 +262,11 @@ export function parseSearchQuery(rawText) {
   // Determine if search query is extremely vague (single word matching category)
   const isVague = Object.keys(VAGUE_SUGGESTIONS).some(key => cleaned === key || cleaned === key + 's');
   
-  if (isVague) {
+  if (matchedEan && !ean && !name) {
+    confidence = 0.1;
+    confidenceStatus = 'DESCRICAO_INSUFICIENTE';
+    refinementSuggestion = 'O codigo informado nao e um EAN-13 valido. Confira os 13 digitos ou informe o nome do produto.';
+  } else if (isVague) {
     confidence = 0.1;
     confidenceStatus = 'DESCRICAO_INSUFICIENTE';
     const key = Object.keys(VAGUE_SUGGESTIONS).find(k => cleaned === k || cleaned === k + 's');
@@ -308,9 +323,15 @@ export function fuzzyMatch(query, target) {
   const t = canonicalizeMedicationName(target);
   if (!q || !t) return false;
 
-  const queryIngredients = extractActiveIngredients(q);
+  const queryReferenceIngredient = resolveReferenceBrandName(q);
+  const queryIngredients = queryReferenceIngredient
+    ? [queryReferenceIngredient]
+    : extractActiveIngredients(q);
   if (queryIngredients.length > 0) {
-    const targetIngredients = extractActiveIngredients(t);
+    const targetReferenceIngredient = resolveReferenceBrandName(t);
+    const targetIngredients = targetReferenceIngredient
+      ? [...new Set([...extractActiveIngredients(t), targetReferenceIngredient])]
+      : extractActiveIngredients(t);
     return queryIngredients.every(ingredient => targetIngredients.includes(ingredient));
   }
 
@@ -335,4 +356,3 @@ export function fuzzyMatch(query, target) {
   }
   return false;
 }
-
