@@ -28,9 +28,10 @@ import {
   closeDatabase
 } from './src/lib/database.js';
 import { getQuoteTimeoutMs, isTimeoutFailure, processQuoteQuery } from './src/lib/recommendation.js';
-import { analyzeQuoteBatch, INPUT_STATUS } from './src/lib/search-intelligence.js';
+import { analyzeQuoteBatch, deriveApprovedCorrection, INPUT_STATUS } from './src/lib/search-intelligence.js';
 import { generateExcelBuffer } from './src/lib/exporter.js';
 import { logger } from './src/lib/logger.js';
+import { createQuoteRunCoordinator } from './src/lib/quote-run-coordinator.js';
 import { getSantaCruzStatus, prepareSantaCruz } from './src/connectors/real/santacruz-real.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -252,14 +253,17 @@ app.on('will-quit', async () => {
   }
 });
 
-let activeQuoteController = null;
+const quoteRunCoordinator = createQuoteRunCoordinator();
 
 ipcMain.handle('cancel-quote', async () => {
-  if (activeQuoteController) {
-    logger.info('User requested quotation cancellation. Aborting active quote controller.');
-    activeQuoteController.abort('USER_CANCELLED');
-    activeQuoteController = null;
+  const cancellation = quoteRunCoordinator.requestCancellation('USER_CANCELLED');
+  if (!cancellation.accepted) {
+    const message = cancellation.reason === 'QUOTE_FINALIZING'
+      ? 'A cotacao ja esta encerrando e nao aceita novo cancelamento.'
+      : 'Nenhuma cotacao ativa para cancelar.';
+    return { success: false, message };
   }
+  logger.info('User requested quotation cancellation. Aborting active quote controller.');
   return { success: true, message: 'Cotação cancelada pelo usuário.' };
 });
 
@@ -267,7 +271,13 @@ ipcMain.handle('cancel-quote', async () => {
 ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
   let quoteId = null;
   let quoteController = null;
+  let quoteTimeoutId = null;
   try {
+    quoteController = new AbortController();
+    if (!quoteRunCoordinator.start(quoteController)) {
+      throw new Error('Cotacao anterior ainda esta encerrando. Aguarde a limpeza das distribuidoras.');
+    }
+
     const learnedAliases = await getLearnedCorrections();
     const searchPlans = analyzeQuoteBatch(rawTextList, { learnedAliases });
     logger.info(`Starting new Quote process for ${rawTextList.length} input lines and ${searchPlans.length} planned searches`);
@@ -277,17 +287,12 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     const MAX_CONSECUTIVE_FAILURES = 3;
     const supplierList = Array.isArray(activeSuppliers) ? activeSuppliers : ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'];
     
-    // Limit is 2 minutes (120,000ms) per item
-    const perItemTimeoutMs = 120_000;
-    const quoteTimeoutMs = Math.max(perItemTimeoutMs, searchPlans.length * perItemTimeoutMs);
+    const quoteTimeoutMs = getQuoteTimeoutMs();
     const quoteTimeoutMinutes = Math.max(1, Math.ceil(quoteTimeoutMs / 60_000));
-    quoteController = new AbortController();
-    activeQuoteController = quoteController;
-
     let quoteReachedTimeout = false;
-    const quoteTimeoutId = setTimeout(() => {
+    quoteTimeoutId = setTimeout(() => {
       quoteReachedTimeout = true;
-      logger.warn(`Quote #${quoteId} reached the ${quoteTimeoutMinutes}-minute limit (${searchPlans.length} item(s) x 2 min); stopping pending suppliers.`);
+      logger.warn(`Quote #${quoteId} reached the ${quoteTimeoutMinutes}-minute total limit; stopping pending suppliers.`);
       sendQuoteProgress(event, {
         phase: 'quote_timeout',
         quoteId,
@@ -306,8 +311,7 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
       message: 'Cotação iniciada. Preparando as consultas ao vivo.'
     });
 
-    try {
-      for (const [planIndex, plan] of searchPlans.entries()) {
+    for (const [planIndex, plan] of searchPlans.entries()) {
         if (quoteController.signal.aborted) break;
 
         const progressContext = {
@@ -395,26 +399,15 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
           });
         }
 
-        const hasConfirmedMatch = quote.results.some(result => result.isValidOption && result.price > 0);
-        if (hasConfirmedMatch && plan.alias && plan.canonicalName && plan.alias !== plan.canonicalName) {
-          const confidence = plan.correctionType === 'BATCH_CONTEXT' ? 0.75 : 1;
-          await recordQueryCorrection(plan.alias, plan.canonicalName, plan.correctionType, confidence);
-        }
-
         sendQuoteProgress(event, {
           phase: 'item_completed',
           ...progressContext,
           resultCount: quote.results.length,
           message: `Resultados de “${plan.originalText}” conferidos e salvos.`
         });
-      }
-    } finally {
-      clearTimeout(quoteTimeoutId);
-      if (activeQuoteController === quoteController) {
-        activeQuoteController = null;
-      }
     }
 
+    quoteRunCoordinator.markFinalizing(quoteController);
     const quoteCancelledByUser = quoteController.signal.aborted &&
       quoteController.signal.reason === 'USER_CANCELLED';
     const finalStatus = quoteCancelledByUser
@@ -435,6 +428,7 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     });
     return await getQuoteDetails(quoteId);
   } catch (error) {
+    quoteRunCoordinator.markFinalizing(quoteController);
     logger.error(`Quote execution failed: ${error.message}`);
     const abortReason = quoteController?.signal?.reason;
     const failureStatus = abortReason === 'USER_CANCELLED'
@@ -456,6 +450,9 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
       return await getQuoteDetails(quoteId);
     }
     throw error;
+  } finally {
+    if (quoteTimeoutId) clearTimeout(quoteTimeoutId);
+    quoteRunCoordinator.finish(quoteController);
   }
 });
 
@@ -484,7 +481,29 @@ ipcMain.handle('update-result', async (event, resultId, fields) => {
   try {
     const quoteItemId = await updateQuoteResult(resultId, fields);
     const dbInstance = getDb();
-    const item = await dbInstance.get('SELECT quoteId FROM QuoteItem WHERE id = ?', quoteItemId);
+    const item = await dbInstance.get(
+      `SELECT qi.quoteId, qi.rawText, qi.normalizedName, qr.supplierProductName
+       FROM QuoteItem qi
+       JOIN QuoteResult qr ON qr.quoteItemId = qi.id
+       WHERE qi.id = ? AND qr.id = ?`,
+      quoteItemId,
+      resultId
+    );
+    if (fields?.reviewStatus === 'APROVADO' && item?.rawText && item?.normalizedName) {
+      const approvedCorrection = deriveApprovedCorrection(
+        item.rawText,
+        item.supplierProductName,
+        item.normalizedName
+      );
+      if (approvedCorrection) {
+        await recordQueryCorrection(
+          approvedCorrection.alias,
+          approvedCorrection.canonicalName,
+          'MANUAL_REVIEW',
+          1
+        );
+      }
+    }
     return await getQuoteDetails(item.quoteId);
   } catch (error) {
     console.error('Error updating result:', error);

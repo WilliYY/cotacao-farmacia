@@ -88,6 +88,7 @@ export function reduceQuoteProgress(previousState, event = {}) {
 
   const supplierStatuses = {
     supplier_started: 'searching',
+    supplier_stopping: 'stopping',
     supplier_completed: 'completed',
     supplier_empty: 'empty',
     supplier_error: 'error',

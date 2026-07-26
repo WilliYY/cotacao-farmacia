@@ -29,11 +29,13 @@ function normalizeDosagePart(value, unit) {
   if (normalizedUnit === 'g') return { family: 'mass', value: number * 1000 };
   if (normalizedUnit === 'mg') return { family: 'mass', value: number };
   if (normalizedUnit === 'mcg') return { family: 'mass', value: number / 1000 };
+  if (normalizedUnit === '%') return { family: 'concentration', value: number };
   return { family: normalizedUnit, value: number };
 }
 
 function extractDosageParts(value) {
   const text = normalizeText(value).replace(/,/g, '.');
+  const massPerVolumePattern = /(\d+(?:\.\d+)?)\s*(mcg|mg|g)\s*\/\s*(?:(\d+(?:\.\d+)?)\s*)?ml\b/g;
   const parts = [];
   const add = (number, unit) => {
     const part = normalizeDosagePart(number, unit);
@@ -43,14 +45,62 @@ function extractDosageParts(value) {
     }
   };
 
-  for (const match of text.matchAll(/(\d+(?:\.\d+)?)\s*[+/]\s*(\d+(?:\.\d+)?)\s*(mcg|mg|g|ml|ui)\b/g)) {
+  for (const match of text.matchAll(massPerVolumePattern)) {
+    const numerator = normalizeDosagePart(match[1], match[2]);
+    const denominator = Number.parseFloat(match[3] || '1');
+    if (numerator && Number.isFinite(denominator) && denominator > 0) {
+      const concentration = {
+        family: 'mass_per_volume',
+        value: numerator.value / denominator
+      };
+      if (!parts.some(existing =>
+        existing.family === concentration.family &&
+        Math.abs(existing.value - concentration.value) < 0.000001
+      )) {
+        parts.push(concentration);
+      }
+    }
+  }
+  const textWithoutMassPerVolume = text.replace(massPerVolumePattern, ' ');
+  for (const match of textWithoutMassPerVolume.matchAll(/(\d+(?:\.\d+)?)\s*[+/]\s*(\d+(?:\.\d+)?)\s*(mcg|mg|g|ml|ui)\b/g)) {
     add(match[1], match[3]);
     add(match[2], match[3]);
   }
-  for (const match of text.matchAll(/(\d+(?:\.\d+)?)\s*(mcg|mg|g|ml|ui)\b/g)) {
+  for (const match of textWithoutMassPerVolume.matchAll(/(\d+(?:\.\d+)?)\s*(mcg|mg|g|ml|ui|%)(?=\s|$|[+/])/g)) {
     add(match[1], match[2]);
   }
   return parts;
+}
+
+function normalizePackageMeasurement(value) {
+  const match = normalizeText(value).replace(/,/g, '.').match(/(\d+(?:\.\d+)?)\s*(g|ml)\b/);
+  if (!match) return null;
+  return {
+    family: match[2],
+    value: Number.parseFloat(match[1])
+  };
+}
+
+function packageSizeMatches(queryPackageSize, resultPackaging = '', resultText = '') {
+  if (!queryPackageSize) return true;
+  const queryMeasurement = normalizePackageMeasurement(queryPackageSize);
+  if (!queryMeasurement) return true;
+
+  const resultMeasurements = [];
+  const explicitPackaging = String(resultPackaging || '').trim();
+  const normalizedResult = normalizeText(explicitPackaging || resultText)
+    .replace(/,/g, '.')
+    .replace(/(\d+(?:\.\d+)?)\s*(?:mcg|mg|g)\s*\/\s*(?:(\d+(?:\.\d+)?)\s*)?ml\b/g, ' ');
+  for (const match of normalizedResult.matchAll(/(\d+(?:\.\d+)?)\s*(g|ml)\b/g)) {
+    resultMeasurements.push({
+      family: match[2],
+      value: Number.parseFloat(match[1])
+    });
+  }
+  return resultMeasurements.some(measurement =>
+    measurement.family === queryMeasurement.family &&
+    Math.abs(measurement.value - queryMeasurement.value) < 0.000001
+  );
 }
 
 function dosageMatches(queryDosage, resultDosage, resultText = '') {
@@ -143,11 +193,19 @@ export function auditQuoteResult(parsed, result) {
     blocks.push('Dosagem encontrada nao confere');
   }
 
-  if (!presentationsMatch(parsed.presentation, result.presentation, {
+  if (!eanIsOnlyIdentity && !presentationsMatch(parsed.presentation, result.presentation, {
     queryText: parsed.originalTerms || parsed.name,
     resultText: supplierProductName
   })) {
     blocks.push('Apresentacao encontrada nao confere');
+  }
+
+  if (!packageSizeMatches(
+    parsed.packageSize,
+    result.packaging,
+    supplierProductName
+  )) {
+    blocks.push('Embalagem em massa ou volume nao confere');
   }
 
   if (parsed.quantity > 1 && result.quantity > 1 && Number(parsed.quantity) !== Number(result.quantity)) {

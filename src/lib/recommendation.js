@@ -10,9 +10,11 @@ import { logger } from './logger.js';
 dotenv.config();
 
 const MAX_LIVE_CAPTURE_AGE_MS = 5 * 60 * 1000;
-const DEFAULT_CONNECTOR_TIMEOUT_MS = 2 * 60 * 1000;
-const DEFAULT_SANTACRUZ_TIMEOUT_MS = 2 * 60 * 1000;
-const DEFAULT_QUOTE_TIMEOUT_MS = 4 * 60 * 1000;
+const DEFAULT_CONNECTOR_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_SANTACRUZ_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_QUOTE_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_CONNECTOR_ABORT_SETTLE_GRACE_MS = 3_000;
+const DEFAULT_SANTACRUZ_ABORT_SETTLE_GRACE_MS = 20_000;
 
 export function isFreshLiveCapture(result, now = Date.now(), maxAgeMs = MAX_LIVE_CAPTURE_AGE_MS) {
   const capturedAt = Date.parse(result?.capturedAt || '');
@@ -48,6 +50,22 @@ export function getConnectorTimeoutMs(supplierName, options = {}, environment = 
     : environment.CONNECTOR_TIMEOUT_MS;
   const fallback = isSantaCruz ? DEFAULT_SANTACRUZ_TIMEOUT_MS : DEFAULT_CONNECTOR_TIMEOUT_MS;
   return getBoundedInteger(configuredValue, Math.min(fallback, quoteTimeoutMs), 30_000, quoteTimeoutMs);
+}
+
+export function getConnectorAbortSettleGraceMs(supplierName, options = {}, environment = process.env) {
+  const explicitGrace = Number.parseInt(options.abortSettleGraceMs, 10);
+  if (Number.isInteger(explicitGrace) && explicitGrace >= 0) {
+    return Math.min(30_000, explicitGrace);
+  }
+
+  const isSantaCruz = supplierName === 'Santa Cruz';
+  const configuredValue = isSantaCruz
+    ? environment.SANTACRUZ_ABORT_SETTLE_GRACE_MS
+    : environment.CONNECTOR_ABORT_SETTLE_GRACE_MS;
+  const fallback = isSantaCruz
+    ? DEFAULT_SANTACRUZ_ABORT_SETTLE_GRACE_MS
+    : DEFAULT_CONNECTOR_ABORT_SETTLE_GRACE_MS;
+  return getBoundedInteger(configuredValue, fallback, 0, 30_000);
 }
 
 export function isTimeoutFailure(result) {
@@ -213,6 +231,7 @@ export async function callWithEanFallback(connector, parsedQuery, options = {}) 
 
 export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
   const timeoutMs = getConnectorTimeoutMs(connector.supplierName, options);
+  const abortSettleGraceMs = getConnectorAbortSettleGraceMs(connector.supplierName, options);
   const timeoutMinutes = Math.max(1, Math.ceil(timeoutMs / 60_000));
   const supplierReason = `tempo limite de ${timeoutMinutes} minuto${timeoutMinutes === 1 ? '' : 's'} excedido`;
   const totalReason = options.totalTimeoutReason || 'tempo limite total da cotacao excedido';
@@ -227,8 +246,10 @@ export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
 
   return new Promise((resolve) => {
     let settled = false;
+    let timeoutTriggered = false;
     let timeoutId = null;
     let externalAbortHandler = null;
+    let connectorPromise = null;
 
     const finish = (results) => {
       if (settled) return;
@@ -241,28 +262,54 @@ export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
       resolve(results);
     };
 
-    const finishAsTimeout = (reason) => {
-      if (settled) return;
+    const finishAsTimeout = async (reason) => {
+      if (settled || timeoutTriggered) return;
+      timeoutTriggered = true;
       controller.abort(createAbortError());
       logger.warn(`${connector.supplierName} stopped: ${reason}.`);
+      notifyProgress(options.onProgress, {
+        phase: 'supplier_stopping',
+        supplier: connector.supplierName,
+        message: `Tempo limite atingido; encerrando ${connector.supplierName} com seguranca.`
+      });
+
+      if (connectorPromise && abortSettleGraceMs > 0) {
+        const connectorSettled = await Promise.race([
+          connectorPromise.then(() => true, () => true),
+          new Promise(resolve => setTimeout(() => resolve(false), abortSettleGraceMs))
+        ]);
+        if (!connectorSettled) {
+          logger.warn(
+            `${connector.supplierName} did not confirm cleanup within ${abortSettleGraceMs}ms; releasing the quotation safely.`
+          );
+        }
+      }
+
       finish([createLiveUnavailableResult(connector.supplierName, parsedQuery, reason, {
         failureCode: 'TIMEOUT',
         timedOut: true
       })]);
     };
 
-    externalAbortHandler = () => finishAsTimeout(totalReason);
+    externalAbortHandler = () => {
+      void finishAsTimeout(totalReason);
+    };
     if (externalSignal?.aborted) {
-      finishAsTimeout(totalReason);
+      void finishAsTimeout(totalReason);
       return;
     }
     externalSignal?.addEventListener('abort', externalAbortHandler, { once: true });
 
-    timeoutId = setTimeout(() => finishAsTimeout(supplierReason), timeoutMs);
-    callWithEanFallback(connector, parsedQuery, { ...options, signal: controller.signal })
-      .then(finish)
+    timeoutId = setTimeout(() => {
+      void finishAsTimeout(supplierReason);
+    }, timeoutMs);
+    connectorPromise = callWithEanFallback(connector, parsedQuery, { ...options, signal: controller.signal });
+    connectorPromise
+      .then(results => {
+        if (!timeoutTriggered) finish(results);
+      })
       .catch((error) => {
-        if (controller.signal.aborted || externalSignal?.aborted) return;
+        if (timeoutTriggered || controller.signal.aborted || externalSignal?.aborted) return;
         logger.error(`Unexpected connector failure for ${connector.supplierName}: ${error.message}`);
         finish([createLiveUnavailableResult(connector.supplierName, parsedQuery, 'falha interna na consulta ao vivo')]);
       });

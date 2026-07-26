@@ -50,7 +50,12 @@ export class ANBRealConnector extends SupplierConnector {
       return [createLiveUnavailableResult('ANB', parsedQuery, 'credenciais nao configuradas')];
     }
 
-    const searchTerm = parsedQuery.ean || [parsedQuery.name, parsedQuery.dosage, parsedQuery.presentation].filter(Boolean).join(' ');
+    const searchTerm = parsedQuery.ean || [
+      parsedQuery.name,
+      parsedQuery.dosage,
+      parsedQuery.presentation,
+      parsedQuery.packageSize
+    ].filter(Boolean).join(' ');
     logger.info(`Initiating autonomous portal search on ANB Farma for: "${searchTerm}"`);
 
     try {

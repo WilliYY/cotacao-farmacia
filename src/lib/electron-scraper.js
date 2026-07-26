@@ -73,6 +73,39 @@ export function inferProductPresentation(value) {
   return 'comprimido';
 }
 
+export function parseSupplierProductIdentity(value) {
+  const text = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  const dosageMatch =
+    text.match(/(\d+(?:[.,]\d+)?\s*(?:mcg|mg|g|ui)\s*\/\s*(?:\d+(?:[.,]\d+)?\s*)?ml)\b/i) ||
+    text.match(/(\d+(?:[.,]\d+)?\s*%)/i) ||
+    text.match(/((?:\d+(?:[.,]\d+)?\s*(?:mcg|mg|g|ml|ui)?\s*[+/]\s*)+\d+(?:[.,]\d+)?\s*(?:mcg|mg|g|ml|ui))\b/i) ||
+    text.match(/(\d+(?:[.,]\d+)?\s*(?:mcg|mg|g|ml|ui))\b/i);
+  const dosage = dosageMatch?.[0]?.replace(/\s+/g, '') || '';
+  const quantityMatch =
+    text.match(/\bc\/\s*(\d+)\s*(?:cpr|comp|caps|cp|cps|amp|un)\b/i) ||
+    text.match(/\b(\d+)\s*(?:comprimidos?|cprs?|comp?s?|capsulas?|caps?|cps?|ampolas?|amps?|unidades?|un)\b/i);
+  const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
+
+  let presentation = '';
+  if (/\b(?:xr|lp|retard)\b/.test(text)) presentation = 'liberacao prolongada';
+  else if (/\b(?:amp|ampola|ampolas)\b/.test(text)) presentation = 'ampola';
+  else if (/\b(?:spray|jet|aerossol|inalador)\b/.test(text)) presentation = 'spray';
+  else if (/\b(?:caps|capsula|capsulas|cps)\b/.test(text)) presentation = 'capsula';
+  else if (/\b(?:creme|pomada)\b/.test(text)) presentation = 'creme';
+  else if (/\bgotas?\b/.test(text)) presentation = 'gotas';
+  else if (/\bxarope\b/.test(text)) presentation = 'xarope';
+  else if (/\b(?:susp|suspensao)\b/.test(text)) presentation = 'suspensao';
+  else if (/\b(?:sol|solucao)\b/.test(text)) presentation = 'solucao';
+  else if (/\b(?:cpr|comprimido|comprimidos|comp|cp)\b/.test(text)) presentation = 'comprimido';
+
+  return { dosage, presentation, quantity };
+}
+
 export function parseAnbTableRow(headers, columns) {
   const normalize = value => String(value || '')
     .normalize('NFD')
@@ -101,11 +134,10 @@ export function parseAnbTableRow(headers, columns) {
     !stockText.includes('indispon') &&
     (!Number.isFinite(stockNumber) || stockNumber > 0);
   const normalizedName = normalize(name);
-  const presentation = inferProductPresentation(normalizedName);
-  const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
-  const quantityMatch = name.match(/(?:c\/?|com\s+)(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i) ||
-    name.match(/(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i);
-  const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
+  const parsedProduct = parseSupplierProductIdentity(name);
+  const presentation = parsedProduct.presentation || inferProductPresentation(normalizedName);
+  const dosage = parsedProduct.dosage || '';
+  const quantity = Number(parsedProduct.quantity) > 0 ? Number(parsedProduct.quantity) : 1;
   const ean = cols.join(' ').match(/\b\d{13}\b/)?.[0] || '';
 
   return {
@@ -160,12 +192,11 @@ export function parseDmParanaCard(cardData = {}) {
     !normalizedText.includes('sem estoque') &&
     !normalizedText.includes('indisponivel') &&
     !normalizedText.includes('avise-me');
-  const quantityMatch = name.match(/(?:c\/?|com\s+)(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i) ||
-    name.match(/(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i);
-  const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
-  const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
+  const parsedProduct = parseSupplierProductIdentity(name);
+  const quantity = Number(parsedProduct.quantity) > 0 ? Number(parsedProduct.quantity) : 1;
+  const dosage = parsedProduct.dosage || '';
   const ean = text.match(/EAN:\s*(\d{13})/i)?.[1] || '';
-  const presentation = inferProductPresentation(normalizedName);
+  const presentation = parsedProduct.presentation || inferProductPresentation(normalizedName);
 
   return {
     supplierProductName: name,
@@ -215,11 +246,11 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
   const normalizedCategory = normalize(category);
   const stExempt = ['cosmet', 'dermocosmet', 'perfum', 'higiene'].some(term => normalizedCategory.includes(term));
   const available = !quantityText.includes('avise') && !quantityText.includes('indispon');
-  const quantityMatch = name.match(/c\/\s*(\d+)/i) || name.match(/(\d+)\s*(?:cpr|comp|caps|cp|cps|un)\b/i);
-  const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
-  const dosage = name.match(/\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mcg|ui)/i)?.[0]?.replace(/\s+/g, '') || '';
+  const parsedProduct = parseSupplierProductIdentity(name);
+  const quantity = Number(parsedProduct.quantity) > 0 ? Number(parsedProduct.quantity) : 1;
+  const dosage = parsedProduct.dosage || '';
   const normalizedName = normalize(name);
-  const presentation = inferProductPresentation(normalizedName);
+  const presentation = parsedProduct.presentation || inferProductPresentation(normalizedName);
 
   return {
     supplierProductName: name,
@@ -934,6 +965,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                     const supplierId = ${Number(supplierId)};
                     const parsePositiveCurrency = ${parsePositiveCurrency.toString()};
                     const inferProductPresentation = ${inferProductPresentation.toString()};
+                    const parseSupplierProductIdentity = ${parseSupplierProductIdentity.toString()};
                     const parseAnbRow = ${parseAnbTableRow.toString()};
                    const parseProfarmaRow = ${parseProfarmaTableRow.toString()};
                    const parseDmParanaCardFn = ${parseDmParanaCard.toString()};

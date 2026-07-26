@@ -51,7 +51,12 @@ export class ProfarmaRealConnector extends SupplierConnector {
       return [createLiveUnavailableResult('Profarma', parsedQuery, 'credenciais nao configuradas')];
     }
 
-    const searchTerm = parsedQuery.ean || [parsedQuery.name, parsedQuery.dosage, parsedQuery.presentation].filter(Boolean).join(' ');
+    const searchTerm = parsedQuery.ean || [
+      parsedQuery.name,
+      parsedQuery.dosage,
+      parsedQuery.presentation,
+      parsedQuery.packageSize
+    ].filter(Boolean).join(' ');
     logger.info(`Initiating autonomous portal search on Profarma for: "${searchTerm}"`);
 
     try {

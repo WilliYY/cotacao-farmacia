@@ -806,7 +806,11 @@ export async function recordQueryCorrection(alias, canonicalName, source = 'LIVE
       canonicalName = excluded.canonicalName,
       source = excluded.source,
       confidence = excluded.confidence,
-      confirmations = QueryCorrection.confirmations + 1,
+      confirmations = CASE
+        WHEN QueryCorrection.canonicalName = excluded.canonicalName
+          THEN QueryCorrection.confirmations + 1
+        ELSE 1
+      END,
       lastConfirmedAt = CURRENT_TIMESTAMP
   `, normalizedAlias, normalizedCanonical, source, confidence);
 }

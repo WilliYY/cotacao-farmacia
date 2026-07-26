@@ -498,6 +498,7 @@ const api = window.api || (allowUiMocks ? mockApi : unavailableApi);
 const PROGRESS_STATUS_LABELS = {
   waiting: 'Aguardando',
   searching: 'Pesquisando',
+  stopping: 'Encerrando',
   completed: 'Concluída',
   empty: 'Sem resultado',
   error: 'Falha',
@@ -564,7 +565,9 @@ function getSantaCruzStatusTone(status, ready) {
 }
 
 function SupplierProgressIcon({ status }) {
-  if (status === 'searching') return <span className="supplier-progress-spinner" aria-hidden="true" />;
+  if (status === 'searching' || status === 'stopping') {
+    return <span className="supplier-progress-spinner" aria-hidden="true" />;
+  }
   if (status === 'completed') return <CheckCircle2 size={18} aria-hidden="true" />;
   if (status === 'error') return <CircleX size={18} aria-hidden="true" />;
   if (status === 'empty' || status === 'timeout') return <CircleAlert size={18} aria-hidden="true" />;
@@ -2161,6 +2164,7 @@ function App() {
 
                       const rowClasses = [
                         ['not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(row.itemStatus) ? 'result-row--problem' : '',
+                        row.auditStatus === 'BLOQUEADO' ? 'result-row--problem' : '',
                         row.recommendationStatus === 'Melhor preço com ST' ? 'result-row--best' : '',
                         row.recommendationStatus === 'Segunda opção com ST' ? 'result-row--second' : '',
                         row.reviewStatus === 'REJEITADO' ? 'result-row--rejected' : ''

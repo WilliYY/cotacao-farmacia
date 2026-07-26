@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { processQuoteQuery } from '../src/lib/recommendation.js';
+import { isFreshLiveCapture, processQuoteQuery } from '../src/lib/recommendation.js';
 import { analyzeQuoteBatch, INPUT_STATUS } from '../src/lib/search-intelligence.js';
 
 const DEFAULT_TERMS = [
@@ -11,6 +11,12 @@ const DEFAULT_TERMS = [
 ];
 
 const DEFAULT_SUPPLIERS = ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'];
+const PRICE_SOURCE_CONTRACTS = new Map([
+  ['ANB', 'Unit c/ST'],
+  ['Profarma', 'Preço Final'],
+  ['Santa Cruz', 'Preço NF'],
+  ['DM Paraná', 'Preço final: R$']
+]);
 
 function getFlag(args, name) {
   const prefix = `--${name}=`;
@@ -46,6 +52,9 @@ function sanitizeResult(result) {
     price: result.price,
     priceSourceLabel: result.priceSourceLabel,
     liveFailureReason: result.liveFailureReason,
+    failureCode: result.failureCode,
+    ignoreReason: result.ignoreReason,
+    retryable: result.retryable,
     stStatus: result.stStatus,
     availability: result.availability,
     auditStatus: result.auditStatus,
@@ -57,7 +66,16 @@ function sanitizeResult(result) {
   };
 }
 
-export function classifyDiagnosticResults(results = []) {
+function normalizeContractLabel(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+export function classifyDiagnosticResults(results = [], now = Date.now()) {
   const rows = Array.isArray(results) ? results : [];
   const validRows = rows.filter(result => result.isValidOption && Number(result.price) > 0);
   const infrastructureFailure = rows.length > 0 && rows.every(result => result.liveFailureReason);
@@ -70,6 +88,27 @@ export function classifyDiagnosticResults(results = []) {
     };
   }
   if (validRows.length > 0) {
+    const contractIssues = [];
+    for (const result of validRows) {
+      const expectedLabel = PRICE_SOURCE_CONTRACTS.get(result.source);
+      if (!expectedLabel) {
+        contractIssues.push(`${result.source || 'Fonte desconhecida'}: contrato de preco nao cadastrado`);
+        continue;
+      }
+      if (normalizeContractLabel(result.priceSourceLabel) !== normalizeContractLabel(expectedLabel)) {
+        contractIssues.push(`${result.source}: esperado "${expectedLabel}"`);
+      }
+      if (!isFreshLiveCapture(result, now)) {
+        contractIssues.push(`${result.source}: captura ausente ou antiga`);
+      }
+    }
+    if (contractIssues.length > 0) {
+      return {
+        status: 'contract_error',
+        failureReason: `Contrato do preco ao vivo invalido: ${[...new Set(contractIssues)].join('; ')}.`,
+        infrastructureFailure: false
+      };
+    }
     return { status: 'ok', failureReason: '', infrastructureFailure: false };
   }
 
@@ -162,8 +201,8 @@ export async function runLiveDiagnostic(args = []) {
         const validResults = results.filter(result => result.isValidOption && Number(result.price) > 0);
         if (outcome.infrastructureFailure) {
           blockedSuppliers.set(supplier, outcome.failureReason);
-          exitCode = 1;
         }
+        if (outcome.status !== 'ok') exitCode = 1;
         report.checks.push({
           term,
           originalTerm: plan.originalText,

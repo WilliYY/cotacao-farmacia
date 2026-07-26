@@ -14,7 +14,22 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - **DM Parana e falha de rede:** uma grade silenciosamente vazia so vira `not_found` depois de uma repeticao estavel; falha de rede detectada durante a busca interrompe antes dessa classificacao.
 - **Interface mais legivel:** a tela inicial ocupa melhor janelas grandes, reduz espacos vazios, separa exemplos, fontes e acoes em faixas funcionais e identifica as quatro distribuidoras por cores distintas.
 - **Validacao real de `clenil 250`:** ANB retornou `Unit c/ST` de R$ 37,21 (uma linha disponivel e outra bloqueada sem estoque), Profarma retornou `Preco Final` de R$ 36,73, Santa Cruz retornou `Preco NF` de R$ 37,21 e bloqueou a linha sem estoque; DM Parana confirmou ausencia sem fabricar preco.
-- **Validacao automatizada:** `npm test` 115/115, `npm run build` aprovado, `npm run lint` sem erros bloqueantes e verificacao visual em 1440x900 e 1024x768 sem sobreposicao ou rolagem horizontal.
+- **Validacao automatizada:** `npm test` 132/132, `npm run build` aprovado, `npm run lint` com 0 erros e 69 avisos nao bloqueantes restantes; a verificacao visual anterior continua coberta pelos mesmos componentes.
+
+### Robustez de execução e inteligência supervisionada
+- **Timeout com encerramento observável:** a interface exibe `Encerrando` depois do limite, aguarda por um período curto a limpeza do conector e impede uma nova cotação de controlar a Santa Cruz antes da anterior terminar.
+- **Santa Cruz serializada e preservada:** comandos GUI entram em uma fila única, o auxiliar PowerShell roda oculto, processos existentes sem janela reconhecida não são mais encerrados à força e uma linha só entra na cobertura depois da leitura de EAN, nome, disponibilidade, ST e `Preço NF`.
+- **Limpeza fail-closed:** a ausência de `searchCleared: true` deixa de ser interpretada como limpeza confirmada.
+- **Formulações distintas:** o parser e a auditoria diferenciam ampola de comprimido, concentração em `%`, liberação prolongada `XR`/`LP`/`retard`, equivalências `mg/ml`, volume da dose e tamanho real da embalagem, além de exigir os dois princípios ativos de marcas associadas como Selopress.
+- **Identidade comprovada pelo fornecedor:** ANB, Profarma, Santa Cruz e DM Paraná derivam dose, apresentação, quantidade e embalagem do nome real retornado na grade/cartão; os dados digitados não são copiados para fazer uma oferta incompatível parecer correta.
+- **EAN inválido com descrição:** um código de 13 dígitos com dígito verificador incorreto bloqueia a consulta mesmo quando a mesma linha também contém o nome do medicamento.
+- **Aprendizado com aprovação humana:** resultados ao vivo não promovem aliases automaticamente. A memória linguística só aceita correções oficiais ou uma associação confirmada pelo operador com `APROVADO`; conflito posterior volta a bloquear o alias.
+- **Atualização portátil protegida:** somente um bootstrap identificado por token atualiza, instala e compila por vez; um processo não remove o lock de outro, atualização Git força novo build e uma preparação que falhou é refeita na próxima abertura antes de registrar sucesso.
+- **Diagnóstico contratual:** `diagnose:live` falha quando a captura não é recente ou quando a fonte não usa exatamente `Unit c/ST`, `Preço Final`, `Preço NF` ou `Preço final: R$`.
+- **Teste real de indisponibilidade:** o preparo encontrou `503 Service Unavailable` no atualizador da Santa Cruz, preservou o `javaw.exe`, não inventou cotação e retornou falha verificável em 24,4 segundos com orientação para repetir quando o fornecedor voltar.
+- **Teste real de grade completa:** com a janela recuperada, `losartana 50mg` exigiu 45 segundos de leitura, cobriu 47/47 linhas e limpou o campo. O menor `Preço NF` disponível com ST foi R$ 3,02; ofertas de R$ 2,82 e R$ 2,94 foram bloqueadas por falta de estoque.
+- **Teste real dos portais web:** para `losartana 50mg`, ANB confirmou `Unit c/ST` de R$ 2,80, Profarma confirmou `Preço Final` de R$ 2,70 e DM Paraná confirmou `Preço final: R$` de R$ 2,66. As três fontes retornaram dose, apresentação, estoque e ST compatíveis.
+- **Execução dentro do navegador:** o extrator de identidade agora é autônomo e injetado junto com os parsers dos portais; a regressão `parseSearchQuery is not defined` foi reproduzida ao vivo, corrigida e coberta por teste de serialização isolada.
 
 ---
 

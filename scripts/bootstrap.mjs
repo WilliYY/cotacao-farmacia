@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -8,6 +9,11 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, '..');
 const isWindows = process.platform === 'win32';
 const updateStatusPath = path.join(projectRoot, 'logs', 'update-status.json');
+const bootstrapLockPath = path.join(
+  process.env.LOCALAPPDATA || projectRoot,
+  'WimifarmaCotacao',
+  'bootstrap.lock'
+);
 
 function loadBootstrapEnvironment() {
   const environment = { ...process.env };
@@ -66,17 +72,19 @@ function getCurrentRevision() {
 }
 
 export function createUpdateStatus(updateResult, repositoryState, environment = process.env, checkedAt = new Date().toISOString()) {
-  const status = updateResult?.updated ? 'updated' : (updateResult?.skipped || 'unknown');
+  const failed = updateResult?.failed === true;
+  const status = failed ? 'failed' : (updateResult?.updated ? 'updated' : (updateResult?.skipped || 'unknown'));
   return {
     checkedAt,
     status,
     automaticUpdateEnabled: String(environment.AUTO_UPDATE_ON_STARTUP || '').toLowerCase() !== 'false',
-    updated: updateResult?.updated === true,
+    updated: !failed && updateResult?.updated === true,
     commitCount: Number.isInteger(updateResult?.commitCount) ? updateResult.commitCount : 0,
     gitAvailable: repositoryState?.gitAvailable !== false,
     branch: repositoryState?.branch || '',
     upstream: repositoryState?.upstream || '',
-    revision: repositoryState?.revision || ''
+    revision: repositoryState?.revision || '',
+    ...(updateResult?.error ? { error: String(updateResult.error) } : {})
   };
 }
 
@@ -89,6 +97,88 @@ function writeUpdateStatus(updateResult, environment = process.env) {
   fs.mkdirSync(path.dirname(updateStatusPath), { recursive: true });
   fs.writeFileSync(updateStatusPath, JSON.stringify(status, null, 2), 'utf8');
   return status;
+}
+
+function readUpdateStatus() {
+  try {
+    return JSON.parse(fs.readFileSync(updateStatusPath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function isProcessRunning(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+export function acquireBootstrapLock(lockPath = bootstrapLockPath) {
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const invalidLockGraceMs = 30_000;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const token = randomUUID();
+      const descriptor = fs.openSync(lockPath, 'wx');
+      fs.writeFileSync(descriptor, JSON.stringify({
+        pid: process.pid,
+        token,
+        startedAt: new Date().toISOString()
+      }), 'utf8');
+      fs.fsyncSync(descriptor);
+      let released = false;
+      return {
+        acquired: true,
+        release() {
+          if (released) return;
+          released = true;
+          try { fs.closeSync(descriptor); } catch {}
+          try {
+            const currentOwner = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            if (currentOwner?.token === token) fs.unlinkSync(lockPath);
+          } catch {}
+        }
+      };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      let lockSnapshot = '';
+      let lockAgeMs = 0;
+      let ownerPid = 0;
+      let ownerToken = '';
+      try {
+        lockAgeMs = Math.max(0, Date.now() - fs.statSync(lockPath).mtimeMs);
+        lockSnapshot = fs.readFileSync(lockPath, 'utf8');
+        const lockOwner = JSON.parse(lockSnapshot);
+        ownerPid = Number.parseInt(lockOwner?.pid, 10);
+        ownerToken = String(lockOwner?.token || '');
+      } catch {}
+      if (isProcessRunning(ownerPid)) {
+        return { acquired: false, release() {} };
+      }
+      if ((!ownerPid || !ownerToken) && lockAgeMs < invalidLockGraceMs) {
+        return { acquired: false, release() {} };
+      }
+      try {
+        const currentSnapshot = fs.readFileSync(lockPath, 'utf8');
+        let currentOwner = null;
+        try { currentOwner = JSON.parse(currentSnapshot); } catch {}
+        const sameToken = ownerToken && currentOwner?.token === ownerToken;
+        const sameInvalidSnapshot = !ownerToken && currentSnapshot === lockSnapshot;
+        if (sameToken || sameInvalidSnapshot) fs.unlinkSync(lockPath);
+      } catch {}
+    }
+  }
+
+  return { acquired: false, release() {} };
+}
+
+export function shouldBuildProductionAssets(updateResult = {}, distExists = false, previousStatus = {}) {
+  return !distExists || updateResult.updated === true || previousStatus.status === 'failed';
 }
 
 export function getRepositoryState(environment = process.env) {
@@ -184,9 +274,11 @@ function updateRepository(environment = process.env) {
   return { updated: true, commitCount };
 }
 
-function installDependencies(updateResult) {
+function installDependencies(updateResult, previousStatus = {}) {
   const nodeModulesPath = path.join(projectRoot, 'node_modules');
-  const needsInstall = !fs.existsSync(nodeModulesPath) || updateResult?.updated === true;
+  const needsInstall = !fs.existsSync(nodeModulesPath) ||
+    updateResult?.updated === true ||
+    previousStatus?.status === 'failed';
 
   if (!needsInstall) {
     return;
@@ -233,15 +325,23 @@ function ensureElectronRuntime() {
   }
 }
 
+function ensureProductionBuild(updateResult, previousStatus = {}) {
+  const distHtml = path.join(projectRoot, 'dist', 'index.html');
+  if (!shouldBuildProductionAssets(updateResult, fs.existsSync(distHtml), previousStatus)) return;
+
+  console.log('[APP] Compilando e validando a interface de producao...');
+  const build = runNpm(['run', 'build'], {
+    stdio: 'inherit',
+    timeout: 5 * 60_000
+  });
+  if (!build.ok || !fs.existsSync(distHtml)) {
+    throw new Error(`npm run build falhou com codigo ${build.status ?? 'desconhecido'}.`);
+  }
+}
+
 function startApplication() {
   console.log('[APP] Iniciando Wimifarma Cotacao...');
   const distHtml = path.join(projectRoot, 'dist', 'index.html');
-
-  // Build production assets if missing
-  if (!fs.existsSync(distHtml)) {
-    console.log('[APP] Compilando interface de producao...');
-    runNpm(['run', 'build'], { stdio: 'inherit' });
-  }
 
   const electronExec = getElectronExecutablePath();
 
@@ -276,20 +376,37 @@ if (isMainModule) {
   if (process.argv.includes('--diagnose')) {
     printDiagnostics(environment);
   } else {
+    const bootstrapLock = acquireBootstrapLock();
+    if (!bootstrapLock.acquired) {
+      console.log('[APP] Outra instancia esta aberta; atualizacao e compilacao foram ignoradas com seguranca.');
+      process.exitCode = 0;
+    } else {
+      let updateResult = { updated: false, skipped: 'not-started' };
+      const previousStatus = readUpdateStatus();
     try {
-      const updateResult = updateRepository(environment);
-      const updateStatus = writeUpdateStatus(updateResult, environment);
-      console.log(`[UPDATE] Estado registrado: ${updateStatus.status} (${updateStatus.revision || 'sem revisao Git'}).`);
-      installDependencies(updateResult);
+      updateResult = updateRepository(environment);
+      installDependencies(updateResult, previousStatus);
       ensureElectronRuntime();
+      ensureProductionBuild(updateResult, previousStatus);
+      const updateStatus = writeUpdateStatus(updateResult, environment);
+      console.log(`[UPDATE] Estado validado: ${updateStatus.status} (${updateStatus.revision || 'sem revisao Git'}).`);
       if (process.argv.includes('--prepare-only')) {
         console.log('[APP] Preparacao concluida; abertura ignorada por --prepare-only.');
       } else {
         process.exitCode = startApplication();
       }
     } catch (error) {
+      writeUpdateStatus({
+        ...updateResult,
+        updated: false,
+        failed: true,
+        error: error.message
+      }, environment);
       console.error(`[ERRO] ${error.message}`);
       process.exitCode = 1;
+    } finally {
+      bootstrapLock.release();
+    }
     }
   }
 }

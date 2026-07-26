@@ -5,10 +5,12 @@ import { fileURLToPath } from 'url';
 import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
 import { logger } from '../../lib/logger.js';
+import { parseSearchQuery } from '../../lib/parser.js';
 import { createLiveUnavailableResult } from './live-result.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+let santaCruzGuiCommandTail = Promise.resolve();
 
 function getPositiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -67,7 +69,7 @@ export function normalizeSantaCruzGuiPayload(stdout) {
     windowTitle: String(parsed.windowTitle || ''),
     requiresOperator: Boolean(parsed.requiresOperator),
     canAutoPrepare: Boolean(parsed.canAutoPrepare),
-    searchCleared: parsed.searchCleared !== false,
+    searchCleared: parsed.searchCleared === true,
     results: Array.isArray(parsed.results) ? parsed.results : []
   };
 }
@@ -88,6 +90,32 @@ export function getSantaCruzStStatus(result = {}) {
   const explicitlyExempt = ['cosmet', 'derm', 'perfum', 'higiene']
     .some(term => exemptionEvidence.includes(term));
   return explicitlyExempt ? 'ST_ISENTO' : 'SEM_ST';
+}
+
+export function normalizeSantaCruzProductResult(result = {}) {
+  const supplierProductName = String(result.name || result.supplierProductName || '').trim();
+  const parsedProduct = parseSearchQuery(supplierProductName);
+  const quantity = Number(parsedProduct.quantity) > 0 ? Number(parsedProduct.quantity) : 1;
+  const finalPrice = getSantaCruzFinalPrice(result);
+
+  return {
+    ean: result.ean || '',
+    supplierProductName,
+    laboratory: result.laboratory || 'Santa Cruz',
+    dosage: parsedProduct.dosage || '',
+    presentation: parsedProduct.presentation || '',
+    packaging: result.packaging || parsedProduct.packageSize || '',
+    price: finalPrice,
+    stStatus: getSantaCruzStStatus(result),
+    stRaw: result.stRaw || '',
+    category: result.category || '',
+    availability: result.stock || result.availability || 'estoque desconhecido',
+    quantity,
+    unitPrice: finalPrice > 0 ? finalPrice / quantity : 0,
+    priceSourceLabel: 'Preço NF',
+    source: 'Santa Cruz',
+    capturedAt: result.capturedAt || new Date().toISOString()
+  };
 }
 
 export function getSantaCruzRetryTerm(searchTerm = '', productName = '') {
@@ -132,10 +160,16 @@ function triggerSantaCruzCleanup(scriptPath, credentials) {
   });
 }
 
-function runSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) {
+export function enqueueSantaCruzGuiCommand(command) {
+  const queuedCommand = santaCruzGuiCommandTail.then(command, command);
+  santaCruzGuiCommandTail = queuedCommand.catch(() => undefined);
+  return queuedCommand;
+}
+
+function executeSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) {
   const startupSeconds = getPositiveInteger(process.env.SANTACRUZ_STARTUP_WAIT_SECONDS, 180);
-  const updateSeconds = getPositiveInteger(process.env.SANTACRUZ_UPDATE_WAIT_SECONDS, 600);
-  const resultSeconds = getPositiveInteger(process.env.SANTACRUZ_RESULT_WAIT_SECONDS, 20);
+  const updateSeconds = getPositiveInteger(process.env.SANTACRUZ_UPDATE_WAIT_SECONDS, 300);
+  const resultSeconds = getPositiveInteger(process.env.SANTACRUZ_RESULT_WAIT_SECONDS, 45);
   const defaultTimeout = (startupSeconds + updateSeconds + resultSeconds + 60) * 1000;
   const timeout = getPositiveInteger(options.timeoutMs, defaultTimeout);
 
@@ -150,7 +184,7 @@ function runSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) 
       credentials?.clientCode || '',
       options.fallbackQuery || ''
     ], {
-      windowsHide: false,
+      windowsHide: true,
       timeout,
       maxBuffer: 4 * 1024 * 1024,
       env: createSantaCruzProcessEnvironment(credentials),
@@ -172,6 +206,12 @@ function runSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) 
       resolve(payload);
     });
   });
+}
+
+function runSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) {
+  return enqueueSantaCruzGuiCommand(
+    () => executeSantaCruzGuiCommand(scriptPath, command, credentials, options)
+  );
 }
 
 function getSantaCruzScriptPath() {
@@ -246,7 +286,12 @@ export class SantaCruzRealConnector extends SupplierConnector {
   }
 
   async searchProduct(parsedQuery, options = {}) {
-    const searchTerm = parsedQuery.ean || [parsedQuery.name, parsedQuery.dosage, parsedQuery.presentation]
+    const searchTerm = parsedQuery.ean || [
+      parsedQuery.name,
+      parsedQuery.dosage,
+      parsedQuery.presentation,
+      parsedQuery.packageSize
+    ]
       .filter(Boolean)
       .join(' ');
     if (!searchTerm) return [];
@@ -298,40 +343,6 @@ export class SantaCruzRealConnector extends SupplierConnector {
       return [createLiveUnavailableResult('Santa Cruz', parsedQuery, failureReason)];
     }
 
-    return rawResults.map(result => {
-      if (result.source === 'Santa Cruz' && result.supplierProductName && !result.name) {
-        return {
-          ...result,
-          price: getSantaCruzFinalPrice(result),
-          priceSourceLabel: 'Preço NF',
-          capturedAt: result.capturedAt || new Date().toISOString()
-        };
-      }
-
-      let parsedQuantity = 1;
-      const name = String(result.name || '');
-      const quantityMatch = name.match(/c\/\s*(\d+)/i) ||
-        name.match(/(\d+)\s*(?:comp|caps|cp|cps|cpr|tabletes|unidades)/i);
-      if (quantityMatch) parsedQuantity = Number.parseInt(quantityMatch[1], 10);
-
-      const finalPrice = getSantaCruzFinalPrice(result);
-      return {
-        ean: result.ean || '',
-        supplierProductName: name,
-        laboratory: result.laboratory || 'Santa Cruz',
-        dosage: parsedQuery.dosage || '',
-        presentation: parsedQuery.presentation || '',
-        price: finalPrice,
-        stStatus: getSantaCruzStStatus(result),
-        stRaw: result.stRaw || '',
-        category: result.category || '',
-        availability: result.stock || 'disponivel',
-        quantity: parsedQuantity,
-        unitPrice: finalPrice / parsedQuantity,
-        priceSourceLabel: 'Preço NF',
-        source: 'Santa Cruz',
-        capturedAt: new Date().toISOString()
-      };
-    });
+    return rawResults.map(normalizeSantaCruzProductResult);
   }
 }

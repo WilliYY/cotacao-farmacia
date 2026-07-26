@@ -1224,6 +1224,7 @@ textarea.search-textarea {
   color: #087b59;
 }
 
+.supplier-progress-row.is-stopping .supplier-progress-icon,
 .supplier-progress-row.is-empty .supplier-progress-icon,
 .supplier-progress-row.is-timeout .supplier-progress-icon {
   background: #fff4d8;
@@ -1278,6 +1279,7 @@ textarea.search-textarea {
   color: #087b59;
 }
 
+.supplier-progress-row.is-stopping .supplier-progress-copy span,
 .supplier-progress-row.is-empty .supplier-progress-copy span,
 .supplier-progress-row.is-timeout .supplier-progress-copy span {
   color: #9b6500;

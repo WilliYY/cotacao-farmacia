@@ -3,6 +3,7 @@ const MIN_SAFE_PREFIX_LENGTH = 6;
 export const ACTIVE_INGREDIENTS = [
   'acetilcisteina',
   'aciclovir',
+  'alendronato',
   'amitriptilina',
   'amlodipino',
   'amoxicilina',
@@ -16,6 +17,7 @@ export const ACTIVE_INGREDIENTS = [
   'bisoprolol',
   'candesartana',
   'captopril',
+  'carbidopa',
   'carvedilol',
   'celecoxibe',
   'cetoconazol',
@@ -36,41 +38,52 @@ export const ACTIVE_INGREDIENTS = [
   'empagliflozina',
   'enalapril',
   'enoxaparina',
+  'escopolamina',
   'escitalopram',
   'espironolactona',
+  'etinilestradiol',
   'etoricoxibe',
   'ezetimiba',
   'fexofenadina',
   'finasterida',
   'fluconazol',
   'fluoxetina',
+  'fralda geriatrica',
   'furosemida',
   'gabapentina',
   'glibenclamida',
   'gliclazida',
   'hidroclorotiazida',
   'ibuprofeno',
+  'insulina',
+  'ipratropio',
   'irbesartana',
+  'levodopa',
+  'levonorgestrel',
   'levotiroxina',
   'linagliptina',
   'loratadina',
   'losartana',
   'metformina',
+  'medroxiprogesterona',
   'metoprolol',
   'montelucaste',
   'nebivolol',
   'nimesulida',
+  'noretisterona',
   'olanzapina',
   'olmesartana',
   'omeprazol',
   'paracetamol',
   'prednisona',
   'pregabalina',
+  'propranolol',
   'quetiapina',
   'risperidona',
   'rivaroxabana',
   'rosuvastatina',
   'sacubitril',
+  'salbutamol',
   'semaglutida',
   'sertralina',
   'sildenafila',
@@ -78,6 +91,7 @@ export const ACTIVE_INGREDIENTS = [
   'sitagliptina',
   'tadalafila',
   'tamsulosina',
+  'tiotropio',
   'valsartana',
   'venlafaxina',
   'vildagliptina',
@@ -93,7 +107,6 @@ const EXACT_INGREDIENT_ALIASES = {
   hidroclorot: 'hidroclorotiazida',
   dip: 'dipirona',
   dipi: 'dipirona',
-  para: 'paracetamol',
   paracet: 'paracetamol',
   ibu: 'ibuprofeno',
   ibupro: 'ibuprofeno',
@@ -122,6 +135,7 @@ const PHRASE_ALIASES = [
 
 const ORAL_LIQUID_PRESENTATIONS = ['xarope', 'suspensao'];
 const UNSAFE_SOLUTION_ROUTES = ['oftalm', 'ocular', 'injet', 'intraven', 'intramuscular', 'nasal', 'otologic'];
+const EXTENDED_RELEASE_PRESENTATIONS = ['xr', 'liberacao prolongada', 'liberacao controlada', 'retard'];
 
 export function normalizePharmaceuticalText(value) {
   return String(value || '')
@@ -175,12 +189,12 @@ function hasExplicitCombination(value) {
 }
 
 export function isCombinationRequest(value) {
-  return hasExplicitCombination(value) || extractActiveIngredients(value).length > 1;
+  return hasExplicitCombination(value) || getIngredientsWithReference(value).length > 1;
 }
 
 export function combinationMatches(queryText, resultText) {
-  const queryIngredients = extractActiveIngredients(queryText);
-  const resultIngredients = extractActiveIngredients(resultText);
+  const queryIngredients = getIngredientsWithReference(queryText);
+  const resultIngredients = getIngredientsWithReference(resultText);
   const queryIsCombination = isCombinationRequest(queryText);
   const resultIsCombination = hasExplicitCombination(resultText) || resultIngredients.length > 1;
 
@@ -200,20 +214,37 @@ export function combinationMatches(queryText, resultText) {
   return !queryIsCombination || resultIsCombination;
 }
 
+function getIngredientsWithReference(value) {
+  const directIngredients = extractActiveIngredients(value);
+  const referenceIngredient = resolveReferenceBrandName(value);
+  const referenceIngredients = referenceIngredient
+    ? extractActiveIngredients(referenceIngredient)
+    : [];
+  return [...new Set([
+    ...directIngredients,
+    ...(referenceIngredients.length > 0
+      ? referenceIngredients
+      : (referenceIngredient ? [referenceIngredient] : []))
+  ])];
+}
+
 function containsAny(value, keywords) {
   return keywords.some(keyword => value.includes(keyword));
 }
 
 export function presentationsMatch(queryPresentation, resultPresentation, context = {}) {
-  if (!queryPresentation) return true;
-  if (!resultPresentation) return false;
-
   const query = normalizePharmaceuticalText(queryPresentation);
   const result = normalizePharmaceuticalText(resultPresentation);
-  if (query.includes(result) || result.includes(query)) return true;
-
   const queryContext = normalizePharmaceuticalText(`${queryPresentation} ${context.queryText || ''}`);
   const resultContext = normalizePharmaceuticalText(`${resultPresentation} ${context.resultText || ''}`);
+  const queryIsExtendedRelease = containsAny(queryContext, EXTENDED_RELEASE_PRESENTATIONS);
+  const resultIsExtendedRelease = containsAny(resultContext, EXTENDED_RELEASE_PRESENTATIONS);
+  if (queryIsExtendedRelease !== resultIsExtendedRelease) return false;
+  if (queryIsExtendedRelease && resultIsExtendedRelease) return true;
+  if (!queryPresentation) return true;
+  if (!resultPresentation) return false;
+  if (query.includes(result) || result.includes(query)) return true;
+
   const queryIsOralLiquid = containsAny(queryContext, ORAL_LIQUID_PRESENTATIONS) ||
     queryContext.includes('solucao oral');
   const resultIsOralLiquid = containsAny(resultContext, ORAL_LIQUID_PRESENTATIONS) ||
@@ -287,7 +318,7 @@ export const REFERENCE_BRAND_NAMES = new Map([
   ['aradois', 'losartana'],
   ['cozaar', 'losartana'],
   ['selozok', 'metoprolol'],
-  ['selopress', 'metoprolol'],
+  ['selopress', 'metoprolol + hidroclorotiazida'],
   ['pura t4', 'levotiroxina'],
   ['synthroid', 'levotiroxina'],
   ['levoid', 'levotiroxina'],
@@ -314,6 +345,7 @@ export const REFERENCE_BRAND_NAMES = new Map([
   ['cataflam', 'diclofenaco'],
   ['voltaren', 'diclofenaco'],
   ['buscopan', 'escopolamina'],
+  ['aerolin', 'salbutamol'],
   ['clenil', 'beclometasona'],
   ['clenil hfa', 'beclometasona']
 ]);

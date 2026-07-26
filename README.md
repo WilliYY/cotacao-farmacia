@@ -26,6 +26,10 @@ Cada computador descobre sua própria instalação da Santa Cruz; não copie o a
 
 Na Santa Cruz, o sistema tenta primeiro nome + dose. Se a grade confirmar zero resultados, ele limpa o campo e tenta uma vez pelo princípio ativo com `Enter`; a dose original continua obrigatória ao filtrar as linhas. Exemplo: `losartana 50mg` pode ser pesquisada como `losartana`, mas somente itens de 50mg concorrem ao menor `Preço NF`.
 
+As ações da Santa Cruz são executadas em fila: uma nova pesquisa só começa depois que a anterior encerra e confirma a tentativa de limpeza. Timeout ou cancelamento interrompe o auxiliar de automação, preserva o aplicativo da distribuidora e mostra a etapa **Encerrando** enquanto a limpeza limitada termina.
+
+Os únicos contratos de preço aceitos são: ANB `Unit c/ST`, Profarma `Preço Final`, Santa Cruz `Preço NF` e DM Paraná `Preço final: R$`. Captura antiga, cabeçalho diferente, preço zero, falta de estoque ou falha técnica são bloqueados; o histórico nunca substitui uma consulta ao vivo.
+
 Use estes diagnósticos não destrutivos no computador novo:
 ```bash
 npm run diagnose:santacruz:discover
@@ -51,6 +55,8 @@ Na abertura, `scripts/bootstrap.mjs`:
 - aplica atualizações Git somente quando a pasta está limpa e a branch rastreia um remoto ou corresponde à branch padrão de `origin`, sempre com `fast-forward`;
 - preserva a versão local quando existem alterações rastreadas, não há referência remota segura ou o remoto está indisponível;
 - executa `npm install` para reconciliar `package-lock.json` e dependências antes de abrir o Electron.
+- mantém um bloqueio por computador para impedir duas atualizações ou compilações simultâneas;
+- recompila quando o Git atualiza o código e repete a preparação completa na abertura seguinte quando a tentativa anterior falha;
 - registra o resultado em `logs/update-status.json`; o aplicativo avisa quando a atualização automática está bloqueada, quando abriu offline ou quando uma versão foi instalada.
 - verifica novas versões a cada 15 minutos enquanto permanece aberto. A aplicação segura ocorre na próxima abertura, antes de qualquer cotação.
 
@@ -71,6 +77,8 @@ O relatório sanitizado fica em `logs/live-diagnostic-latest.json`. Use `--suppl
 O diagnóstico inicializa o banco local antes de consultar as distribuidoras. Uma grade vazia só significa produto não encontrado quando o portal confirma isso explicitamente; `Failed to fetch`, `CLIENT_FETCH_ERROR`, queda de internet ou timeout são registrados como falha técnica e nunca viram preço zero ou cotação válida.
 
 Na Profarma, uma busca vazia com dose em `mg` é repetida uma única vez sem o sufixo, mantendo a dose original como filtro obrigatório. Cancelamento e timeout interrompem novos itens, preservam resultados concluídos e sempre gravam um estado terminal no histórico.
+
+O diagnóstico ao vivo retorna erro quando qualquer fonte fica sem resultado confirmado, sem opção válida, com captura antiga ou com rótulo de preço diferente do contrato. Correções linguísticas observadas durante uma busca não são aprendidas automaticamente: um apelido ou abreviação só entra na memória após o operador marcar o resultado como `APROVADO` na revisão manual. Alias oficiais e correções ortográficas únicas continuam disponíveis sem depender do histórico.
 
 ### 3. Gerar o Build Desktop (Instalador para Windows)
 Para gerar o executável instalável (.exe) para distribuição interna no Windows:
@@ -162,6 +170,7 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - A tela inicial usa faixas funcionais e cores distintas para ANB, Profarma, Santa Cruz e DM Parana, mantendo exemplos, fontes e acoes legiveis em janelas grandes e compactas.
 - A prévia explica cada correção ou herança de contexto antes da cotação. Linhas incompletas permanecem vermelhas e visíveis para ajuste.
 - Cada resultado exibe a origem exata do valor utilizado: ANB `Unit c/ST`, Santa Cruz `Preço NF`, Profarma `Preço Final` e DM Paraná `Preço final: R$`.
+- Dose, apresentação, quantidade e embalagem são reconstruídas a partir da linha ou cartão realmente retornado pelo fornecedor; o sistema não reutiliza esses campos da consulta para aprovar uma oferta.
 - O resultado consolidado separa cobertura, opções válidas, itens não encontrados, falhas/tempo limite e revisão necessária. A economia só aparece quando existe outra oferta realmente comparável em ST, apresentação e quantidade.
 - A indicação de compra mostra uma vencedora por medicamento, com preço final, custo por unidade, distribuidora, embalagem, EAN e estoque; a segunda opção permanece logo abaixo para conferência. O comparativo de embalagens sólidas fica recolhido por padrão.
 - Gradientes funcionais e cores distintas separam decisão segura, informação, revisão e bloqueio sem depender apenas da cor: todos os estados também têm texto e ícone.

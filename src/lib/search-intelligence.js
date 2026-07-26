@@ -1,7 +1,9 @@
 import { levenshteinDistance, parseSearchQuery } from './parser.js';
 import {
   ACTIVE_INGREDIENTS,
-  normalizePharmaceuticalText
+  extractActiveIngredients,
+  normalizePharmaceuticalText,
+  resolveReferenceBrandName
 } from './pharmaceutical-context.js';
 
 export const INPUT_STATUS = Object.freeze({
@@ -12,8 +14,14 @@ export const INPUT_STATUS = Object.freeze({
 
 const PRESENTATION_WORDS = new Set([
   'cap', 'caps', 'capsula', 'capsulas', 'comp', 'comprimido', 'comprimidos', 'cp', 'cpr', 'cps',
-  'creme', 'frasco', 'gel', 'gota', 'gotas', 'gts', 'pom', 'pomada', 'sol', 'solucao', 'spray',
-  'susp', 'suspensao', 'un', 'und', 'unidade', 'unidades', 'xarope', 'xrp'
+  'amp', 'ampola', 'ampolas', 'creme', 'frasco', 'gel', 'gota', 'gotas', 'gts', 'pom', 'pomada',
+  'sol', 'solucao', 'spray', 'susp', 'suspensao', 'un', 'und', 'unidade', 'unidades',
+  'xarope', 'xrp', 'xr', 'lp', 'retard'
+]);
+const IMMEDIATELY_TRUSTED_CORRECTION_SOURCES = new Set([
+  'MANUAL_REVIEW',
+  'OFFICIAL_ALIAS',
+  'OFFICIAL_TYPO'
 ]);
 
 // Known strengths are used only to disambiguate compact multi-dose input. They never validate a quote price.
@@ -46,12 +54,29 @@ function extractRawName(value) {
     .trim();
 }
 
+export function deriveApprovedCorrection(rawText, supplierProductName, fallbackCanonicalName = '') {
+  const alias = extractRawName(rawText);
+  const referenceIngredient = resolveReferenceBrandName(supplierProductName);
+  const resultIngredients = extractActiveIngredients(referenceIngredient || supplierProductName);
+  const fallbackIngredients = resultIngredients.length === 0
+    ? extractActiveIngredients(fallbackCanonicalName)
+    : [];
+  const canonicalIngredients = resultIngredients.length > 0 ? resultIngredients : fallbackIngredients;
+  if (!alias || canonicalIngredients.length === 0) return null;
+
+  const canonicalName = [...new Set(canonicalIngredients)].sort().join(' + ');
+  if (!canonicalName || canonicalName === alias) return null;
+  return { alias, canonicalName };
+}
+
 function normalizeLearnedAliases(learnedAliases = []) {
   const aliases = new Map();
   for (const row of learnedAliases) {
     const alias = normalizePharmaceuticalText(row?.alias || row?.aliasText || '');
     const canonicalName = normalizePharmaceuticalText(row?.canonicalName || '');
-    const trusted = Number(row?.confidence ?? 0) >= 0.9 || Number(row?.confirmations || 0) >= 2;
+    const source = String(row?.source || '').trim().toUpperCase();
+    const trusted = IMMEDIATELY_TRUSTED_CORRECTION_SOURCES.has(source) &&
+      Number(row?.confidence ?? 0) >= 0.9;
     if (alias && canonicalName && trusted) aliases.set(alias, canonicalName);
   }
   return aliases;

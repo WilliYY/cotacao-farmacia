@@ -50,7 +50,7 @@ $StatusOnly = $SearchQuery -eq "--status-only"
 $PrepareOnly = $SearchQuery -eq "--prepare"
 $CleanupOnly = $SearchQuery -eq "--cleanup"
 
-$StartupWaitSeconds = 240
+$StartupWaitSeconds = 180
 if ($env:SANTACRUZ_STARTUP_WAIT_SECONDS) {
     $parsedWait = 0
     if ([int]::TryParse($env:SANTACRUZ_STARTUP_WAIT_SECONDS, [ref]$parsedWait) -and $parsedWait -gt 0) {
@@ -58,7 +58,7 @@ if ($env:SANTACRUZ_STARTUP_WAIT_SECONDS) {
     }
 }
 
-$ResultWaitSeconds = 20
+$ResultWaitSeconds = 45
 if ($env:SANTACRUZ_RESULT_WAIT_SECONDS) {
     $parsedResultWait = 0
     if ([int]::TryParse($env:SANTACRUZ_RESULT_WAIT_SECONDS, [ref]$parsedResultWait) -and $parsedResultWait -gt 0) {
@@ -66,7 +66,7 @@ if ($env:SANTACRUZ_RESULT_WAIT_SECONDS) {
     }
 }
 
-$UpdateWaitSeconds = 600
+$UpdateWaitSeconds = 300
 if ($env:SANTACRUZ_UPDATE_WAIT_SECONDS) {
     $parsedUpdateWait = 0
     if ([int]::TryParse($env:SANTACRUZ_UPDATE_WAIT_SECONDS, [ref]$parsedUpdateWait) -and $parsedUpdateWait -gt 0) {
@@ -1547,7 +1547,8 @@ function Read-SantaCruzRows {
         $Columns = $null,
         [int]$StartRow = 0,
         [int]$RowLimit = 500,
-        [DateTime]$Deadline = [DateTime]::MaxValue
+        [DateTime]$Deadline = [DateTime]::MaxValue,
+        [hashtable]$ObservedRows = $null
     )
     if (-not $Table) { return @() }
     if (-not $Columns) { $Columns = Get-SantaCruzColumnMap $Table }
@@ -1563,15 +1564,31 @@ function Read-SantaCruzRows {
         }
         for ($row = $firstRow; $row -lt $lastRow; $row++) {
             if ([DateTime]::UtcNow -ge $Deadline) { break }
+            try {
+                [void]$grid.GetItem($row, $Columns.Ean)
+            } catch {
+                continue
+            }
             $ean = [string](Get-GridCellText $grid $row $Columns.Ean)
             $name = [string](Get-GridCellText $grid $row $Columns.Name)
             if ($ean -notmatch '^\d{13}$' -or -not $name) { continue }
 
-            $priceNf = Parse-DoubleSafe (Get-GridCellText $grid $row $Columns.PriceNf)
-            if ($priceNf -le 0) { continue }
-
+            $priceNfRaw = [string](Get-GridCellText $grid $row $Columns.PriceNf)
             $pixelAvailability = [string](Get-SantaCruzGridAvailability $Table $grid $row $Columns.Availability)
             $availabilityEvidence = [string](Get-GridCellStatus $grid $row $Columns.Availability)
+            $stRaw = [string](Get-GridCellText $grid $row $Columns.St)
+            if (
+                -not $priceNfRaw -or
+                (-not $pixelAvailability -and -not $availabilityEvidence) -or
+                -not $stRaw
+            ) {
+                continue
+            }
+            if ($null -ne $ObservedRows) { $ObservedRows[$row] = $true }
+
+            $priceNf = Parse-DoubleSafe $priceNfRaw
+            if ($priceNf -le 0) { continue }
+
             $normalizedAvailability = ConvertTo-NormalizedText $availabilityEvidence
             $stock = if ($pixelAvailability) {
                 $pixelAvailability
@@ -1587,7 +1604,6 @@ function Read-SantaCruzRows {
             $listType = if ($Columns.ListType -ge 0) { [string](Get-GridCellText $grid $row $Columns.ListType) } else { "" }
             $qBox = if ($Columns.StockQuantity -ge 0) { [string](Get-GridCellText $grid $row $Columns.StockQuantity) } else { "" }
             $fPrice = if ($Columns.FactoryPrice -ge 0) { Parse-DoubleSafe (Get-GridCellText $grid $row $Columns.FactoryPrice) } else { 0 }
-            $stRaw = [string](Get-GridCellText $grid $row $Columns.St)
             $stVal = Parse-DoubleSafe $stRaw
 
             $item = [PSCustomObject]@{
@@ -1634,7 +1650,7 @@ function Read-AllSantaCruzRowsWithScroll {
     $collectRows = {
         param([int]$PageStart, [int]$PageCount)
         $readAny = $false
-        foreach ($row in @(Read-SantaCruzRows $Table $Columns $PageStart $PageCount $Deadline)) {
+        foreach ($row in @(Read-SantaCruzRows $Table $Columns $PageStart $PageCount $Deadline $observedRows)) {
             $readAny = $true
             $key = "$($row.ean)|$($row.priceNf)|$($row.name)"
             if (-not $deduplicated.Contains($key)) {
@@ -1670,9 +1686,7 @@ function Read-AllSantaCruzRowsWithScroll {
         }
         foreach ($rowIndex in @($pageRows.Keys | Sort-Object)) {
             if ([DateTime]::UtcNow -ge $Deadline) { break }
-            if (& $collectRows $rowIndex 1) {
-                $observedRows[$rowIndex] = $true
-            }
+            [void](& $collectRows $rowIndex 1)
         }
     }
 
@@ -1733,9 +1747,7 @@ function Read-AllSantaCruzRowsWithScroll {
         } else {
             for ($rowIndex = 0; $rowIndex -lt $totalRows; $rowIndex++) {
                 if ([DateTime]::UtcNow -ge $Deadline) { break }
-                if (& $collectRows $rowIndex 1) {
-                    $observedRows[$rowIndex] = $true
-                }
+                [void](& $collectRows $rowIndex 1)
             }
             $scanComplete = [DateTime]::UtcNow -lt $Deadline -and $observedRows.Count -ge $totalRows
             if (-not $scanComplete) {
@@ -1857,9 +1869,9 @@ if ($StatusOnly) {
     if ($statusProcess -and -not $statusWindow) {
         $statusIssue = Get-RecentSantaCruzStartupIssue $(if ($installation) { $installation.InstallRoot } else { "" })
         $statusReason = if ($statusIssue) {
-            "$statusIssue; o processo ficou sem janela. Tente Reiniciar e preparar ou aguarde o fornecedor"
+            "$statusIssue; o processo ficou sem janela. Aguarde o fornecedor e tente preparar novamente"
         } else {
-            "Santa Cruz esta em execucao, mas sem janela acessivel; use Reiniciar e preparar"
+            "Santa Cruz esta em execucao, mas sem janela acessivel; tente preparar novamente"
         }
         $installRoot = if ($installation) { $installation.InstallRoot } else { "" }
         $launchPath = if ($installation) { $installation.LaunchPath } else { "" }
@@ -1940,17 +1952,7 @@ if ($window -and -not $existingProcess) {
 $launchAttempted = $false
 
 if ($PrepareOnly -and $existingProcess -and -not $window) {
-    Write-SantaCruzTrace "prepare restart stale process id=$($existingProcess.Id) path=$($existingProcess.Path)"
-    try {
-        Stop-Process -Id $existingProcess.Id -Force -ErrorAction Stop
-        $stopDeadline = [DateTime]::UtcNow.AddSeconds(8)
-        while ([DateTime]::UtcNow -lt $stopDeadline -and (Get-Process -Id $existingProcess.Id -ErrorAction SilentlyContinue)) {
-            Start-Sleep -Milliseconds 250
-        }
-        $existingProcess = $null
-    } catch {
-        Complete-SantaCruzResult "restart-failed" "Nao foi possivel reiniciar o processo Santa Cruz sem janela" $(if ($installation) { $installation.InstallRoot }) $(if ($installation) { $installation.LaunchPath }) $(if ($installation) { $installation.Source })
-    }
+    Write-SantaCruzTrace "prepare found process without a recognized window; preserving process id=$($existingProcess.Id) while waiting for recovery"
 }
 
 # CRITICAL: NEVER launch a second validated Santa Cruz process.
@@ -2058,8 +2060,34 @@ while ([DateTime]::UtcNow -lt $deadline) {
         if ($headlessProcess) {
             $lastState = "running-without-window"
             $headlessSeconds = ([DateTime]::UtcNow - $headlessSeenAt).TotalSeconds
-            if ($headlessSeconds -ge $HeadlessGraceSeconds) {
-                Complete-SantaCruzResult "running-without-window" "Processo Santa Cruz ativo sem janela de pesquisa" @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+            $startupIssue = Get-RecentSantaCruzStartupIssue $installation.InstallRoot
+            $headlessLimit = if ($startupIssue) { [Math]::Min($HeadlessGraceSeconds, 15) } else { $HeadlessGraceSeconds }
+            if ($headlessSeconds -ge $headlessLimit) {
+                $headlessReason = if ($startupIssue) {
+                    "$startupIssue; o processo continua sem janela. Aguarde o fornecedor e tente preparar novamente"
+                } else {
+                    "Processo Santa Cruz ativo sem janela de pesquisa; tente preparar novamente"
+                }
+                Complete-SantaCruzResult "running-without-window" $headlessReason @() `
+                    $installation.InstallRoot $installation.LaunchPath $installation.Source @{
+                        ready = $false
+                        processRunning = $true
+                        windowDetected = $false
+                        requiresOperator = $false
+                        canAutoPrepare = $true
+                    }
+            }
+        } elseif ($launchAttempted -and $lastState -eq "running-without-window") {
+            $startupIssue = Get-RecentSantaCruzStartupIssue $installation.InstallRoot
+            if ($startupIssue) {
+                Complete-SantaCruzResult "launch-failed" "$startupIssue; o processo encerrou antes de abrir a janela de pesquisa" @() `
+                    $installation.InstallRoot $installation.LaunchPath $installation.Source @{
+                        ready = $false
+                        processRunning = $false
+                        windowDetected = $false
+                        requiresOperator = $false
+                        canAutoPrepare = $true
+                    }
             }
         }
     }
@@ -2067,7 +2095,11 @@ while ([DateTime]::UtcNow -lt $deadline) {
 }
 
 if (-not $readyWindow -or -not $searchControl) {
-    $status = if ($lastState -eq "updating") {
+    $finalProcess = Find-SantaCruzProcess
+    $finalWindow = Find-SantaCruzWindow
+    $status = if ($lastState -eq "running-without-window" -and -not $finalProcess) {
+        "launch-failed"
+    } elseif ($lastState -eq "updating") {
         "updating"
     } elseif ($lastState -eq "not-responding") {
         "not-responding"
@@ -2076,7 +2108,11 @@ if (-not $readyWindow -or -not $searchControl) {
     } else {
         "search-control-not-found"
     }
-    $reason = if ($lastState -eq "updating") {
+    $reason = if ($status -eq "launch-failed") {
+        $startupIssue = Get-RecentSantaCruzStartupIssue $installation.InstallRoot
+        if ($startupIssue) { "$startupIssue; a Santa Cruz nao abriu" }
+        else { "O processo da Santa Cruz encerrou antes de abrir a janela de pesquisa" }
+    } elseif ($lastState -eq "updating") {
         "Aplicativo Santa Cruz permanece em atualizacao"
     } elseif ($lastState -eq "not-responding") {
         "Santa Cruz permaneceu sem responder; a cotacao foi interrompida sem fechar o aplicativo"
@@ -2087,7 +2123,13 @@ if (-not $readyWindow -or -not $searchControl) {
     } else {
         "Campo de pesquisa da Santa Cruz nao encontrado"
     }
-    Complete-SantaCruzResult $status $reason @() $installation.InstallRoot $installation.LaunchPath $installation.Source
+    Complete-SantaCruzResult $status $reason @() $installation.InstallRoot $installation.LaunchPath $installation.Source @{
+        ready = $false
+        processRunning = [bool]$finalProcess
+        windowDetected = [bool]$finalWindow
+        requiresOperator = $status -notin @("launch-failed", "updating")
+        canAutoPrepare = $status -in @("launch-failed", "updating")
+    }
 }
 
 if ($PrepareOnly) {
