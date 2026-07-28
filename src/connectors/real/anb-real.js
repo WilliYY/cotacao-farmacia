@@ -21,13 +21,10 @@ export function isRetryableAnbError(error) {
 export function applyAnbEanEvidence(results, searchTerm) {
   const exactEan = String(searchTerm || '').trim();
   if (!/^\d{13}$/.test(exactEan)) return results;
-  if (results.length !== 1) return results;
-
-  return results.map(result => result.ean ? result : {
+  return results.map(result => ({
     ...result,
-    ean: exactEan,
-    eanEvidence: 'EXACT_SEARCH'
-  });
+    eanEvidence: String(result.ean || '') === exactEan ? 'PORTAL_ROW' : undefined
+  }));
 }
 
 export class ANBRealConnector extends SupplierConnector {
@@ -72,7 +69,7 @@ export class ANBRealConnector extends SupplierConnector {
       const evidencedResults = applyAnbEanEvidence(results, searchTerm);
       if (parsedQuery.ean && !evidencedResults.some(result => String(result.ean || '') === String(parsedQuery.ean))) {
         logger.warn(`ANB did not return evidence for EAN ${parsedQuery.ean}; allowing name fallback.`);
-        return [];
+        return parsedQuery.name ? [] : evidencedResults;
       }
 
       return evidencedResults.map(res => ({

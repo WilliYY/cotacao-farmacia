@@ -1,6 +1,7 @@
 import { fuzzyMatch } from './parser.js';
 import {
   combinationMatches,
+  ingredientDosagePairsMatch,
   normalizePharmaceuticalText,
   presentationsMatch
 } from './pharmaceutical-context.js';
@@ -142,7 +143,7 @@ export function auditQuoteResult(parsed, result) {
 
   const supplierProductName = result.supplierProductName || result.name || '';
   const price = Number(result.price || 0);
-  const availability = normalizeText(result.availability || 'disponivel');
+  const availability = normalizeText(result.availability || '');
   const stStatus = result.stStatus || '';
   const exactEanMatch = Boolean(
     parsed.ean &&
@@ -155,11 +156,19 @@ export function auditQuoteResult(parsed, result) {
     warnings.push('Fonte da captura nao informada');
   }
 
+  if (result.liveFailureReason || result.failureCode) {
+    blocks.push(`Falha tecnica do fornecedor: ${result.liveFailureReason || result.failureCode}`);
+  }
+
   if (!Number.isFinite(price) || price <= 0) {
     blocks.push('Preco invalido ou zerado');
   }
 
-  if (availability && !availability.startsWith('dispon')) {
+  if (result.liveFailureReason || result.failureCode) {
+    // A falha tecnica ja explica por que estoque e preco nao foram confirmados.
+  } else if (!availability) {
+    blocks.push('Disponibilidade nao confirmada pelo fornecedor');
+  } else if (!availability.startsWith('dispon')) {
     blocks.push('Produto sem estoque no fornecedor');
   }
 
@@ -187,6 +196,17 @@ export function auditQuoteResult(parsed, result) {
     blocks.push(parsed.isCombination
       ? 'Associacao encontrada nao confere com os principios ativos pesquisados'
       : 'Produto combinado nao confere com a busca de principio ativo unico');
+  }
+
+  const resultPairText = /\d+(?:[.,]\d+)?\s*(?:mcg|mg|g|ui)\b/i.test(supplierProductName)
+    ? supplierProductName
+    : `${supplierProductName} ${result.dosage || ''}`;
+  if (
+    !eanIsOnlyIdentity &&
+    parsed.isCombination &&
+    !ingredientDosagePairsMatch(parsed.originalTerms || parsed.name || '', resultPairText)
+  ) {
+    blocks.push('Dose associada ao principio ativo nao confere');
   }
 
   if (!dosageMatches(parsed.dosage, result.dosage, supplierProductName)) {

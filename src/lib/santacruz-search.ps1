@@ -41,10 +41,10 @@ $ProgressPreference = "SilentlyContinue"
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 $SearchQuery = if ($args.Count -gt 0) { [string]$args[0] } else { "" }
-$SantaUser = if ($args.Count -gt 1) { [string]$args[1] } else { "" }
-$SantaPassword = if ($args.Count -gt 2) { [string]$args[2] } else { "" }
-$SantaClientCode = if ($args.Count -gt 3) { [string]$args[3] } else { "" }
-$FallbackSearchQuery = if ($args.Count -gt 4) { [string]$args[4] } else { "" }
+$SantaUser = if ($args.Count -gt 1) { [string]$args[1] } else { [string]$env:SANTACRUZ_USERNAME }
+$SantaPassword = if ($args.Count -gt 2) { [string]$args[2] } else { [string]$env:SANTACRUZ_PASSWORD }
+$SantaClientCode = if ($args.Count -gt 3) { [string]$args[3] } else { [string]$env:SANTACRUZ_CLIENT_CODE }
+$FallbackSearchQuery = if ($args.Count -gt 4) { [string]$args[4] } else { [string]$env:SANTACRUZ_FALLBACK_QUERY }
 $DiscoveryOnly = $SearchQuery -eq "--discover-only" -or $env:SANTACRUZ_DISCOVERY_ONLY -eq "true"
 $StatusOnly = $SearchQuery -eq "--status-only"
 $PrepareOnly = $SearchQuery -eq "--prepare"
@@ -90,6 +90,8 @@ $cacheDirectory = Join-Path $localAppDataRoot "WimifarmaCotacao"
 $discoveryCachePath = Join-Path $cacheDirectory "santacruz-install.json"
 $tracePath = [string]$env:SANTACRUZ_TRACE_PATH
 $originalForegroundWindow = [SantaCruzMouse]::GetForegroundWindow()
+$script:SantaCruzAutomationMutex = $null
+$script:SantaCruzAutomationMutexOwned = $false
 
 function Write-SantaCruzTrace {
     param([string]$Message)
@@ -97,6 +99,38 @@ function Write-SantaCruzTrace {
     try {
         "$(Get-Date -Format 'HH:mm:ss.fff') $Message" | Add-Content -LiteralPath $tracePath -Encoding UTF8
     } catch {}
+}
+
+function Exit-SantaCruzAutomationMutex {
+    if (-not $script:SantaCruzAutomationMutex) { return }
+    if ($script:SantaCruzAutomationMutexOwned) {
+        try { $script:SantaCruzAutomationMutex.ReleaseMutex() } catch {}
+    }
+    try { $script:SantaCruzAutomationMutex.Dispose() } catch {}
+    $script:SantaCruzAutomationMutex = $null
+    $script:SantaCruzAutomationMutexOwned = $false
+}
+
+function Enter-SantaCruzAutomationMutex {
+    try {
+        $mutex = New-Object System.Threading.Mutex($false, "Local\WimifarmaCotacaoSantaCruz")
+        $acquired = $false
+        try {
+            $acquired = $mutex.WaitOne(0)
+        } catch [System.Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            $mutex.Dispose()
+            return $false
+        }
+        $script:SantaCruzAutomationMutex = $mutex
+        $script:SantaCruzAutomationMutexOwned = $true
+        return $true
+    } catch {
+        Write-SantaCruzTrace "automation mutex failed: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 function Complete-SantaCruzResult {
@@ -124,6 +158,7 @@ function Complete-SantaCruzResult {
     if ($env:SANTACRUZ_RESTORE_FOCUS -ne "false" -and $originalForegroundWindow -ne [System.IntPtr]::Zero) {
         try { [SantaCruzMouse]::SetForegroundWindow($originalForegroundWindow) | Out-Null } catch {}
     }
+    Exit-SantaCruzAutomationMutex
     Write-Output ($payload | ConvertTo-Json -Depth 8 -Compress)
     exit 0
 }
@@ -162,8 +197,12 @@ function Resolve-LaunchCandidate {
     )
 
     if (-not $CandidatePath) { return $null }
-    $candidate = [Environment]::ExpandEnvironmentVariables($CandidatePath.Trim().Trim('"'))
-    $candidate = $candidate -replace ',\d+$', ''
+    $candidatePathValue = [Environment]::ExpandEnvironmentVariables($CandidatePath.Trim())
+    if ($candidatePathValue -match '^\s*"([^"]+)"') {
+        $candidate = $Matches[1]
+    } else {
+        $candidate = ($candidatePathValue -replace ',\d+$', '').Trim().Trim('"')
+    }
 
     if (Test-Path -LiteralPath $candidate -PathType Container) {
         foreach ($launcherName in @("digitador-sd.exe", "Pe - SantaCruz.exe", "pedido-eletronico.exe")) {
@@ -358,11 +397,18 @@ function Find-SantaCruzWindow {
             try {
                 $title = [string]$candidateWindow.Current.Name
                 if (-not $title) { continue }
-                if ($title -match '(?i)santa\s*-?\s*cruz|pedido\s*eletr[oô]nico|digitador\s*-?\s*sd|vitrine\s*de\s*ofertas' -or $title -eq "Pedidos") {
+                $candidateProcessId = [int]$candidateWindow.Current.ProcessId
+                $candidateProcessPath = Get-ProcessPath $candidateProcessId
+                $candidateProcessName = try { (Get-Process -Id $candidateProcessId -ErrorAction Stop).ProcessName } catch { "" }
+                $genericTitleIsValidated = $title -eq "Pedidos" -and (
+                    $candidateProcessName -match '(?i)digitador|santa.?cruz|pe.?santacruz' -or
+                    $candidateProcessPath -match '(?i)pe\s*-\s*santacruz|digitador-sd|santacruz'
+                )
+                if ($title -match '(?i)santa\s*-?\s*cruz|pedido\s*eletr[oô]nico|digitador\s*-?\s*sd|vitrine\s*de\s*ofertas' -or $genericTitleIsValidated) {
                     $bounds = $candidateWindow.Current.BoundingRectangle
                     if ($bounds.Width -le 0 -or $bounds.Height -le 0) { continue }
                     $score = [double]($bounds.Width * $bounds.Height)
-                    if ($title -eq "Pedidos") { $score += 10000000 }
+                    if ($genericTitleIsValidated) { $score += 10000000 }
                     if ($title -match '(?i)^Pedido Eletr.nico SantaCruz') { $score += 1000000 }
                     if ($title -match '(?i)vitrine') { $score += 500000 }
                     $candidates += [PSCustomObject]@{ Window = $candidateWindow; Score = $score; Title = $title }
@@ -1791,6 +1837,9 @@ function Read-AllSantaCruzRowsWithScroll {
 }
 
 Write-SantaCruzTrace "start query=$SearchQuery"
+if (-not $DiscoveryOnly -and -not $StatusOnly -and -not (Enter-SantaCruzAutomationMutex)) {
+    Complete-SantaCruzResult "busy" "Outra cotacao ja esta controlando a Santa Cruz; aguarde a conclusao"
+}
 if ($CleanupOnly) {
     $cleanupWindow = Find-SantaCruzWindow
     if (-not $cleanupWindow -or -not (Test-SantaCruzWindowResponsive $cleanupWindow)) {

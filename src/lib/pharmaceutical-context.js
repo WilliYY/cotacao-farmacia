@@ -1,6 +1,7 @@
 const MIN_SAFE_PREFIX_LENGTH = 6;
 
 export const ACTIVE_INGREDIENTS = [
+  'absorvente higienico',
   'acetilcisteina',
   'aciclovir',
   'alendronato',
@@ -8,13 +9,16 @@ export const ACTIVE_INGREDIENTS = [
   'amlodipino',
   'amoxicilina',
   'ambroxol',
+  'anlodipino',
   'apixabana',
   'atenolol',
   'atorvastatina',
   'azitromicina',
+  'benserazida',
   'bilastina',
   'beclometasona',
   'bisoprolol',
+  'budesonida',
   'candesartana',
   'captopril',
   'carbidopa',
@@ -41,6 +45,7 @@ export const ACTIVE_INGREDIENTS = [
   'escopolamina',
   'escitalopram',
   'espironolactona',
+  'estradiol',
   'etinilestradiol',
   'etoricoxibe',
   'ezetimiba',
@@ -92,6 +97,7 @@ export const ACTIVE_INGREDIENTS = [
   'tadalafila',
   'tamsulosina',
   'tiotropio',
+  'timolol',
   'valsartana',
   'venlafaxina',
   'vildagliptina',
@@ -129,13 +135,14 @@ const EXACT_INGREDIENT_ALIASES = {
 };
 
 const PHRASE_ALIASES = [
+  [/\bamlodipino\b/g, 'anlodipino'],
   [/\b(?:soro|solucao) fisiologic[oa]\b/g, 'cloreto de sodio'],
   [/\bsolucao de cloreto de sodio\b/g, 'cloreto de sodio']
 ];
 
 const ORAL_LIQUID_PRESENTATIONS = ['xarope', 'suspensao'];
 const UNSAFE_SOLUTION_ROUTES = ['oftalm', 'ocular', 'injet', 'intraven', 'intramuscular', 'nasal', 'otologic'];
-const EXTENDED_RELEASE_PRESENTATIONS = ['xr', 'liberacao prolongada', 'liberacao controlada', 'retard'];
+const EXTENDED_RELEASE_PRESENTATIONS = ['xr', 'acao prolongada', 'liberacao prolongada', 'liberacao controlada', 'retard'];
 
 export function normalizePharmaceuticalText(value) {
   return String(value || '')
@@ -261,56 +268,93 @@ export function presentationsMatch(queryPresentation, resultPresentation, contex
   return false;
 }
 
-export const FARMACIA_POPULAR_PROGRAM = Object.freeze([
-  {
-    category: 'Hipertensão',
-    coverage: 'Gratuito',
-    ingredients: ['atenolol', 'captopril', 'enalapril', 'hidroclorotiazida', 'losartana', 'espironolactona', 'propranolol', 'furosemida'],
-    notes: 'Cobertura 100% Gratuita - Programa Farmácia Popular do Brasil'
-  },
-  {
-    category: 'Diabetes',
-    coverage: 'Gratuito',
-    ingredients: ['glibenclamida', 'metformina', 'dapagliflozina', 'insulina'],
-    notes: 'Cobertura 100% Gratuita - Programa Farmácia Popular do Brasil'
-  },
-  {
-    category: 'Asma',
-    coverage: 'Gratuito',
-    ingredients: ['beclometasona', 'salbutamol', 'ipratropio'],
-    notes: 'Cobertura 100% Gratuita - Programa Farmácia Popular do Brasil'
-  },
-  {
-    category: 'Osteoporose',
-    coverage: 'Co-pagamento',
-    ingredients: ['alendronato'],
-    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
-  },
-  {
-    category: 'Dislipidemia',
-    coverage: 'Co-pagamento',
-    ingredients: ['sinvastatina'],
-    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
-  },
-  {
-    category: 'Parkinson',
-    coverage: 'Co-pagamento',
-    ingredients: ['levodopa', 'carbidopa'],
-    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
-  },
-  {
-    category: 'Contracepção',
-    coverage: 'Co-pagamento',
-    ingredients: ['medroxiprogesterona', 'etinilestradiol', 'levonorgestrel', 'noretisterona'],
-    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
-  },
-  {
-    category: 'Incontinência',
-    coverage: 'Co-pagamento',
-    ingredients: ['fralda geriatrica'],
-    notes: 'Copagamento Subsidiado - Programa Farmácia Popular do Brasil'
-  }
+const FARMACIA_POPULAR_METADATA = Object.freeze({
+  coverage: 'Gratuito',
+  scope: 'Nacional',
+  updatedAt: '2026-07-14',
+  sourceUrl: 'https://www.gov.br/saude/pt-br/composicao/sectics/farmacia-popular/arquivos/elenco-de-medicamentos-e-insumos-pfpb.pdf/view'
+});
+
+function farmaciaPopularItem(category, searchText, ingredients, options = {}) {
+  return Object.freeze({
+    category,
+    searchText,
+    ingredients: Object.freeze(ingredients),
+    itemType: options.itemType || 'medicamento',
+    release: options.release || null,
+    requiredTerms: Object.freeze(options.requiredTerms || []),
+    excludedTerms: Object.freeze(options.excludedTerms || []),
+    ...FARMACIA_POPULAR_METADATA
+  });
+}
+
+export const FARMACIA_POPULAR_CATALOG = Object.freeze([
+  farmaciaPopularItem('Asma', 'ipratropio 0.02mg', ['ipratropio']),
+  farmaciaPopularItem('Asma', 'ipratropio 0.25mg', ['ipratropio']),
+  farmaciaPopularItem('Asma', 'beclometasona 200mcg', ['beclometasona']),
+  farmaciaPopularItem('Asma', 'beclometasona 250mcg', ['beclometasona']),
+  farmaciaPopularItem('Asma', 'beclometasona 50mcg', ['beclometasona'], { excludedTerms: ['dose'] }),
+  farmaciaPopularItem('Asma', 'salbutamol 100mcg', ['salbutamol']),
+  farmaciaPopularItem('Asma', 'salbutamol 5mg', ['salbutamol']),
+  farmaciaPopularItem('Diabetes', 'metformina 500mg', ['metformina'], { release: 'immediate' }),
+  farmaciaPopularItem('Diabetes', 'metformina 500mg acao prolongada', ['metformina'], { release: 'extended' }),
+  farmaciaPopularItem('Diabetes', 'metformina 850mg', ['metformina'], { release: 'immediate' }),
+  farmaciaPopularItem('Diabetes', 'glibenclamida 5mg', ['glibenclamida']),
+  farmaciaPopularItem('Diabetes', 'insulina humana regular 100ui/ml', ['insulina'], {
+    requiredTerms: ['regular'],
+    excludedTerms: ['asparte', 'degludeca', 'detemir', 'glargina', 'lispro']
+  }),
+  farmaciaPopularItem('Diabetes', 'insulina humana 100ui/ml', ['insulina'], {
+    excludedTerms: ['asparte', 'degludeca', 'detemir', 'glargina', 'lispro', 'regular']
+  }),
+  farmaciaPopularItem('Hipertens\u00e3o', 'atenolol 25mg', ['atenolol']),
+  farmaciaPopularItem('Hipertens\u00e3o', 'anlodipino 5mg', ['anlodipino']),
+  farmaciaPopularItem('Hipertens\u00e3o', 'captopril 25mg', ['captopril']),
+  farmaciaPopularItem('Hipertens\u00e3o', 'propranolol 40mg', ['propranolol']),
+  farmaciaPopularItem('Hipertens\u00e3o', 'hidroclorotiazida 25mg', ['hidroclorotiazida']),
+  farmaciaPopularItem('Hipertens\u00e3o', 'losartana 50mg', ['losartana']),
+  farmaciaPopularItem('Hipertens\u00e3o', 'enalapril 10mg', ['enalapril']),
+  farmaciaPopularItem('Hipertens\u00e3o', 'espironolactona 25mg', ['espironolactona']),
+  farmaciaPopularItem('Hipertens\u00e3o', 'furosemida 40mg', ['furosemida']),
+  farmaciaPopularItem('Hipertens\u00e3o', 'metoprolol 25mg', ['metoprolol']),
+  farmaciaPopularItem('Anticoncep\u00e7\u00e3o', 'medroxiprogesterona 150mg', ['medroxiprogesterona']),
+  farmaciaPopularItem('Anticoncep\u00e7\u00e3o', 'etinilestradiol 0.03mg + levonorgestrel 0.15mg', ['etinilestradiol', 'levonorgestrel']),
+  farmaciaPopularItem('Anticoncep\u00e7\u00e3o', 'noretisterona 0.35mg', ['noretisterona']),
+  farmaciaPopularItem('Anticoncep\u00e7\u00e3o', 'estradiol 5mg + noretisterona 50mg', ['estradiol', 'noretisterona']),
+  farmaciaPopularItem('Osteoporose', 'alendronato 70mg', ['alendronato']),
+  farmaciaPopularItem('Dislipidemia', 'sinvastatina 10mg', ['sinvastatina']),
+  farmaciaPopularItem('Dislipidemia', 'sinvastatina 20mg', ['sinvastatina']),
+  farmaciaPopularItem('Dislipidemia', 'sinvastatina 40mg', ['sinvastatina']),
+  farmaciaPopularItem('Parkinson', 'carbidopa 25mg + levodopa 250mg', ['carbidopa', 'levodopa']),
+  farmaciaPopularItem('Parkinson', 'benserazida 25mg + levodopa 100mg', ['benserazida', 'levodopa']),
+  farmaciaPopularItem('Glaucoma', 'timolol 2.5mg', ['timolol']),
+  farmaciaPopularItem('Glaucoma', 'timolol 5mg', ['timolol']),
+  farmaciaPopularItem('Rinite', 'budesonida 32mcg', ['budesonida']),
+  farmaciaPopularItem('Rinite', 'budesonida 50mcg', ['budesonida']),
+  farmaciaPopularItem('Rinite', 'beclometasona 50mcg/dose', ['beclometasona'], { requiredTerms: ['dose'] }),
+  farmaciaPopularItem('Diabetes e doen\u00e7a cardiovascular', 'dapagliflozina 10mg', ['dapagliflozina']),
+  farmaciaPopularItem('Dignidade menstrual', 'absorvente higienico', ['absorvente higienico'], { itemType: 'insumo' }),
+  farmaciaPopularItem('Incontin\u00eancia urin\u00e1ria', 'fralda geriatrica', ['fralda geriatrica'], { itemType: 'insumo' })
 ]);
+
+const farmaciaPopularByCategory = new Map();
+for (const item of FARMACIA_POPULAR_CATALOG) {
+  if (!farmaciaPopularByCategory.has(item.category)) {
+    farmaciaPopularByCategory.set(item.category, new Set());
+  }
+  for (const ingredient of item.ingredients) {
+    farmaciaPopularByCategory.get(item.category).add(ingredient);
+  }
+}
+
+export const FARMACIA_POPULAR_PROGRAM = Object.freeze(
+  [...farmaciaPopularByCategory.entries()].map(([category, ingredients]) => Object.freeze({
+    category,
+    coverage: FARMACIA_POPULAR_METADATA.coverage,
+    ingredients: Object.freeze([...ingredients]),
+    notes: `Cobertura 100% gratuita - Programa Farm\u00e1cia Popular do Brasil (${FARMACIA_POPULAR_METADATA.updatedAt})`
+  }))
+);
 
 export const REFERENCE_BRAND_NAMES = new Map([
   ['glifage', 'metformina'],
@@ -350,20 +394,130 @@ export const REFERENCE_BRAND_NAMES = new Map([
   ['clenil hfa', 'beclometasona']
 ]);
 
+function extractComparableDoses(value) {
+  const normalized = normalizePharmaceuticalText(value);
+  return [...normalized.matchAll(/\b\d+(?:\.\d+)?\s*(?:mg|mcg|ui)(?:\s*\/\s*(?:ml|dose))?/g)]
+    .map(match => match[0].replace(/\s+/g, '').replace(/\/(?:ml|dose)$/, ''))
+    .sort();
+}
+
+function normalizeComparableDose(value, unit) {
+  const number = Number.parseFloat(String(value || '').replace(',', '.'));
+  if (!Number.isFinite(number)) return '';
+  if (unit === 'g') return `mass:${number * 1000}`;
+  if (unit === 'mg') return `mass:${number}`;
+  if (unit === 'mcg') return `mass:${number / 1000}`;
+  return `${unit}:${number}`;
+}
+
+function extractOrderedComparableDoses(value) {
+  const normalized = normalizePharmaceuticalText(value).replace(/,/g, '.');
+  const doses = [];
+  const occupiedRanges = [];
+  const compactPattern = /(\d+(?:\.\d+)?)\s*[+/]\s*(\d+(?:\.\d+)?)\s*(mcg|mg|g|ui)\b/g;
+
+  for (const match of normalized.matchAll(compactPattern)) {
+    occupiedRanges.push([match.index, match.index + match[0].length]);
+    doses.push({ index: match.index, value: normalizeComparableDose(match[1], match[3]) });
+    doses.push({ index: match.index + 0.5, value: normalizeComparableDose(match[2], match[3]) });
+  }
+
+  for (const match of normalized.matchAll(/(\d+(?:\.\d+)?)\s*(mcg|mg|g|ui)\b/g)) {
+    const index = match.index;
+    if (occupiedRanges.some(([start, end]) => index >= start && index < end)) continue;
+    doses.push({ index, value: normalizeComparableDose(match[1], match[2]) });
+  }
+
+  return doses
+    .filter(dose => dose.value)
+    .sort((left, right) => left.index - right.index)
+    .map(dose => dose.value);
+}
+
+function extractIngredientDosePairs(value) {
+  const normalized = expandMedicationAliases(value).replace(/,/g, '.');
+  const ingredients = getIngredientsWithReference(normalized)
+    .map(ingredient => ({ ingredient, index: normalized.indexOf(ingredient) }))
+    .filter(entry => entry.index >= 0)
+    .sort((left, right) => left.index - right.index);
+  const doses = extractOrderedComparableDoses(normalized);
+  if (ingredients.length < 2 || ingredients.length !== doses.length) return null;
+  return new Map(ingredients.map((entry, index) => [entry.ingredient, doses[index]]));
+}
+
+export function ingredientDosagePairsMatch(queryText, resultText) {
+  const queryPairs = extractIngredientDosePairs(queryText);
+  const resultPairs = extractIngredientDosePairs(resultText);
+  if (!queryPairs) return true;
+  if (!resultPairs) return false;
+  if (queryPairs.size !== resultPairs.size) return false;
+  return [...queryPairs].every(([ingredient, dose]) => resultPairs.get(ingredient) === dose);
+}
+
+function hasExtendedReleasePresentation(value) {
+  const normalized = normalizePharmaceuticalText(value);
+  return containsAny(normalized, EXTENDED_RELEASE_PRESENTATIONS);
+}
+
+function isFarmaciaPopularCatalogMatch(item, medicationName, ingredients) {
+  if (!item.ingredients.every(ingredient => ingredients.includes(ingredient))) return false;
+  if (ingredients.length !== item.ingredients.length) return false;
+  const normalized = normalizePharmaceuticalText(medicationName);
+  if (item.requiredTerms.some(term => !normalized.includes(term))) return false;
+  if (item.excludedTerms.some(term => normalized.includes(term))) return false;
+
+  if (item.itemType === 'insumo') {
+    return normalized.includes(item.ingredients[0]);
+  }
+
+  if (item.ingredients.length > 1 &&
+      !ingredientDosagePairsMatch(item.searchText, medicationName)) {
+    return false;
+  }
+
+  const requestedDoses = extractComparableDoses(medicationName);
+  const officialDoses = extractComparableDoses(item.searchText);
+  if (requestedDoses.length !== officialDoses.length ||
+      requestedDoses.some((dose, index) => dose !== officialDoses[index])) {
+    return false;
+  }
+
+  const isExtendedRelease = hasExtendedReleasePresentation(medicationName);
+  if (item.release === 'extended') return isExtendedRelease;
+  if (item.release === 'immediate') return !isExtendedRelease;
+  return true;
+}
+
 export function getFarmaciaPopularInfo(medicationName) {
   if (!medicationName) return null;
-  const normalized = normalizePharmaceuticalText(medicationName);
-  for (const prog of FARMACIA_POPULAR_PROGRAM) {
-    if (prog.ingredients.some(ing => normalized.includes(ing))) {
-      return {
-        isFarmaciaPopular: true,
-        category: prog.category,
-        coverage: prog.coverage,
-        notes: prog.notes
-      };
-    }
+  const ingredients = getIngredientsWithReference(medicationName);
+  const matches = FARMACIA_POPULAR_CATALOG.filter(item =>
+    isFarmaciaPopularCatalogMatch(item, medicationName, ingredients)
+  );
+
+  if (matches.length > 0) {
+    const item = matches[0];
+    return {
+      isFarmaciaPopular: true,
+      category: item.category,
+      coverage: item.coverage,
+      notes: `Elenco nacional atualizado em ${item.updatedAt}`,
+      officialPresentation: item.searchText,
+      itemType: item.itemType,
+      scope: item.scope,
+      updatedAt: item.updatedAt,
+      sourceUrl: item.sourceUrl
+    };
   }
-  return { isFarmaciaPopular: false };
+
+  const relatedItems = FARMACIA_POPULAR_CATALOG.filter(item =>
+    item.ingredients.some(ingredient => ingredients.includes(ingredient))
+  );
+  return {
+    isFarmaciaPopular: false,
+    requiresExactPresentation: relatedItems.length > 0,
+    eligiblePresentations: relatedItems.map(item => item.searchText)
+  };
 }
 
 export function resolveReferenceBrandName(brandName) {

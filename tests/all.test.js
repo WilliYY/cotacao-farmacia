@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import XLSX from 'xlsx';
 
@@ -19,12 +20,14 @@ import {
   getSantaCruzRetryTerm,
   getSantaCruzStStatus,
   normalizeSantaCruzGuiPayload,
-  normalizeSantaCruzProductResult
+  normalizeSantaCruzProductResult,
+  resolveSantaCruzScriptPath
 } from '../src/connectors/real/santacruz-real.js';
 import { getProfarmaRetryTerm, normalizeProfarmaUrl } from '../src/connectors/real/profarma-real.js';
 import { normalizeDmParanaUrl } from '../src/connectors/real/dm-parana-real.js';
 import {
   ACTIVE_INGREDIENTS,
+  FARMACIA_POPULAR_CATALOG,
   FARMACIA_POPULAR_PROGRAM,
   REFERENCE_BRAND_NAMES,
   extractActiveIngredients,
@@ -44,7 +47,7 @@ import {
   parseSupplierProductIdentity
 } from '../src/lib/electron-scraper.js';
 import { applyAnbEanEvidence, isRetryableAnbError, normalizeAnbUrl } from '../src/connectors/real/anb-real.js';
-import { resolveConnectorMode } from '../src/connectors/connector-registry.js';
+import { getActiveConnectors, resolveConnectorMode } from '../src/connectors/connector-registry.js';
 import {
   initDatabase,
   closeDatabase,
@@ -67,7 +70,7 @@ import {
   isElectronRuntimeReady,
   shouldBuildProductionAssets
 } from '../scripts/bootstrap.mjs';
-import { classifyDiagnosticResults } from '../scripts/live-diagnostic.mjs';
+import { classifyDiagnosticResults, getDiagnosticTerms } from '../scripts/live-diagnostic.mjs';
 import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from '../src/lib/quote-progress.js';
 import { createQuoteRunCoordinator } from '../src/lib/quote-run-coordinator.js';
 import { buildQuoteSummary } from '../src/lib/quote-summary.js';
@@ -405,8 +408,12 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     const liveDiagnosticBranch = mainSource.indexOf('if (isLiveDiagnostic) {', diagnosticDatabaseInit + 1);
     assert.match(mainSource, /process\.argv\.includes\('--prepare-santacruz'\)/);
     assert.ok(diagnosticDatabaseInit > 0 && liveDiagnosticBranch > diagnosticDatabaseInit);
-    assert.match(mainSource, /await initDatabase\(diagnosticUserDataPath\)/);
+    assert.match(mainSource, /DATABASE_STARTUP_TIMEOUT_MS/);
+    assert.match(mainSource, /await initDatabaseWithTimeout\(diagnosticUserDataPath\)/);
+    assert.match(mainSource, /await initDatabaseWithTimeout\(userDataPath\)/);
     assert.match(mainSource, /await prepareSantaCruz\(\)/);
+    assert.match(mainSource, /\.catch\(async \(error\) =>/);
+    assert.match(mainSource, /app\.exit\(1\)/);
     assert.strictEqual(packageJson.scripts['diagnose:santacruz'], 'electron . --prepare-santacruz');
   });
 
@@ -523,11 +530,14 @@ test('Parser Utility - EAN, Quantities and Presentations', async (t) => {
   await t.test('recognizes ampoules, extended release and percentage concentrations', () => {
     const ampoule = parseSearchQuery('dipirona ampola 500mg');
     const extendedRelease = parseSearchQuery('glifage xr 500mg 30 comp');
+    const officialExtendedRelease = parseSearchQuery('7891721201806 metformina 500mg acao prolongada');
     const concentration = parseSearchQuery('cetoconazol 2% creme 20g');
 
     assert.strictEqual(ampoule.name, 'dipirona');
     assert.strictEqual(ampoule.presentation, 'ampola');
     assert.strictEqual(extendedRelease.presentation, 'liberacao prolongada');
+    assert.strictEqual(officialExtendedRelease.name, 'metformina');
+    assert.strictEqual(officialExtendedRelease.presentation, 'liberacao prolongada');
     assert.strictEqual(concentration.dosage, '2%');
     assert.strictEqual(concentration.name, 'cetoconazol');
     assert.strictEqual(concentration.packageSize, '20g');
@@ -558,6 +568,15 @@ test('Parser Utility - EAN, Quantities and Presentations', async (t) => {
     assert.strictEqual(res.name, 'cloreto de sodio');
     assert.strictEqual(res.dosage, '0.9%');
     assert.deepStrictEqual(res.activeIngredients, ['cloreto de sodio']);
+  });
+
+  await t.test('preserves official hygiene supply identities', () => {
+    const absorbent = parseSearchQuery('absorvente higienico');
+    const diaper = parseSearchQuery('fralda geriatrica G 8 unidades');
+    assert.strictEqual(absorbent.name, 'absorvente higienico');
+    assert.deepStrictEqual(absorbent.activeIngredients, ['absorvente higienico']);
+    assert.strictEqual(diaper.name, 'fralda geriatrica');
+    assert.deepStrictEqual(diaper.activeIngredients, ['fralda geriatrica']);
   });
 });
 
@@ -629,6 +648,12 @@ test('Search Intelligence - contextual batches and corrections', async (t) => {
     const [plan] = analyzeQuoteBatch(['met 850']);
     assert.strictEqual(plan.status, INPUT_STATUS.NEEDS_INFO);
     assert.match(plan.correctionMessage, /metformina.*metoprolol/);
+  });
+
+  await t.test('does not inherit a prefix when the strength conflicts with the previous medicine', () => {
+    const plans = analyzeQuoteBatch(['metformina 500', 'met 25']);
+    assert.strictEqual(plans[1].status, INPUT_STATUS.NEEDS_INFO);
+    assert.match(plans[1].correctionMessage, /metformina.*metoprolol/);
   });
 });
 
@@ -825,6 +850,9 @@ test('Santa Cruz Portable Automation', async (t) => {
   await t.test('keeps Santa Cruz automation portable across Windows users, drives and DPI scales', () => {
     const script = fs.readFileSync(new URL('../src/lib/santacruz-search.ps1', import.meta.url), 'utf8');
     const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    const builderConfig = JSON.parse(fs.readFileSync(new URL('../electron-builder.json', import.meta.url), 'utf8'));
+    const appSource = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
+    const scraperSource = fs.readFileSync(new URL('../src/lib/electron-scraper.js', import.meta.url), 'utf8');
 
     assert.match(script, /Add-Type -AssemblyName UIAutomationClient/);
     assert.match(script, /GetFolderPath\("LocalApplicationData"\)/);
@@ -859,8 +887,22 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.doesNotMatch(script, /\$anyRunningProcess = Get-Process/);
     assert.doesNotMatch(script, /\$knownProcessNames = @\([^)]*pedido-eletronico/);
     assert.doesNotMatch(script, /\$santaCruzPattern = .*pedido\[\\s_/);
+    assert.match(script, /\$candidatePathValue -match '\^\\s\*"\(\[\^"\]\+\)"/);
+    assert.match(script, /\$genericTitleIsValidated/);
+    assert.doesNotMatch(script, /\$title -eq "Pedidos"\) \{ \$score \+= 10000000/);
     assert.ok(packageJson.scripts['diagnose:santacruz:discover']);
     assert.ok(packageJson.scripts['diagnose:santacruz:status']);
+    assert.ok(
+      builderConfig.files.includes('scripts/live-diagnostic.mjs'),
+      'O diagnostico executado pelo pacote precisa ser incluido no app.asar.'
+    );
+    assert.deepStrictEqual(builderConfig.extraResources, [{
+      from: 'src/lib/santacruz-search.ps1',
+      to: 'santacruz-search.ps1'
+    }]);
+    assert.match(appSource, /santaCruzStatusRequestRef/);
+    assert.match(appSource, /setInterval\(\(\) => loadSantaCruzStatus\(false\), 30_000\)/);
+    assert.doesNotMatch(scraperSource, /resolve\(results\);\s*setTimeout\(cleanup,\s*2000\)/);
   });
 
   await t.test('allows the ready Santa Cruz window to be reused before requiring saved credentials', () => {
@@ -881,6 +923,11 @@ test('Santa Cruz Portable Automation', async (t) => {
     const scriptSource = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'lib', 'santacruz-search.ps1'), 'utf8');
     assert.match(scriptSource, /\$StatusOnly = \$SearchQuery -eq "--status-only"/);
     assert.match(scriptSource, /\$PrepareOnly = \$SearchQuery -eq "--prepare"/);
+    assert.match(scriptSource, /Local\\WimifarmaCotacaoSantaCruz/);
+    assert.match(scriptSource, /System\.Threading\.Mutex/);
+    assert.match(scriptSource, /\.WaitOne\(0\)/);
+    assert.match(scriptSource, /\.ReleaseMutex\(\)/);
+    assert.match(scriptSource, /-not \$DiscoveryOnly -and -not \$StatusOnly/);
     assert.match(scriptSource, /Santa Cruz pronta; a cotacao reutilizara a tela de pesquisa ja aberta/);
     assert.match(scriptSource, /tente preparar novamente/);
     assert.match(scriptSource, /\$PrepareOnly -and \$existingProcess -and -not \$window/);
@@ -892,12 +939,83 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.ok(readyGridCheck > 0 && homeNavigation > readyGridCheck, 'A grade aberta deve ser reutilizada antes de navegar por Home/Novo Pedido.');
   });
 
+  await t.test('blocks a second PowerShell process from controlling the Santa Cruz window', async () => {
+    if (process.platform !== 'win32') return;
+
+    const scriptPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'lib', 'santacruz-search.ps1');
+    const mutexHolder = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      "$mutex = New-Object System.Threading.Mutex($false, 'Local\\WimifarmaCotacaoSantaCruz'); " +
+        '$null = $mutex.WaitOne(); [Console]::Out.WriteLine("LOCKED"); [Console]::Out.Flush(); Start-Sleep -Seconds 20'
+    ], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Mutex holder did not start')), 5000);
+        mutexHolder.once('error', reject);
+        mutexHolder.stdout.once('data', chunk => {
+          clearTimeout(timer);
+          assert.match(String(chunk), /LOCKED/);
+          resolve();
+        });
+      });
+
+      const output = await new Promise((resolve, reject) => {
+        execFile('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          scriptPath,
+          '--cleanup'
+        ], {
+          timeout: 15000,
+          windowsHide: true
+        }, (error, stdout, stderr) => {
+          if (error) {
+            reject(new Error(`Santa Cruz mutex probe failed: ${error.message}; ${stderr}`));
+            return;
+          }
+          resolve(stdout);
+        });
+      });
+
+      const payloadLine = String(output).trim().split(/\r?\n/).findLast(line => line.trim().startsWith('{'));
+      assert.ok(payloadLine, 'O processo bloqueado deve retornar um resultado JSON estruturado.');
+      const payload = JSON.parse(payloadLine);
+      assert.strictEqual(payload.status, 'busy');
+      assert.match(payload.reason, /Outra cotacao ja esta controlando a Santa Cruz/);
+    } finally {
+      mutexHolder.kill();
+    }
+  });
+
   await t.test('Uses a configured local path before portable discovery', () => {
     const configuredPath = 'C:\\Program Files (x86)\\Pe - SantaCruz\\digitador-sd.exe';
-    const environment = createSantaCruzProcessEnvironment({ url: configuredPath }, { TEST_FLAG: 'ok' });
+    const environment = createSantaCruzProcessEnvironment({
+      url: configuredPath,
+      username: 'login-teste',
+      password: 'senha-teste',
+      clientCode: 'cliente-teste'
+    }, { TEST_FLAG: 'ok' }, 'termo alternativo');
     assert.strictEqual(environment.TEST_FLAG, 'ok');
     assert.strictEqual(environment.SANTACRUZ_APP_PATH, configuredPath);
+    assert.strictEqual(environment.SANTACRUZ_USERNAME, 'login-teste');
+    assert.strictEqual(environment.SANTACRUZ_PASSWORD, 'senha-teste');
+    assert.strictEqual(environment.SANTACRUZ_CLIENT_CODE, 'cliente-teste');
+    assert.strictEqual(environment.SANTACRUZ_FALLBACK_QUERY, 'termo alternativo');
     assert.strictEqual(createSantaCruzProcessEnvironment({ url: 'https://example.com' }, {}).SANTACRUZ_APP_PATH, undefined);
+
+    const temporaryResources = fs.mkdtempSync(path.join(os.tmpdir(), 'cotacao-santa-resource-'));
+    const packagedScript = path.join(temporaryResources, 'santacruz-search.ps1');
+    fs.writeFileSync(packagedScript, '# packaged test', 'utf8');
+    assert.strictEqual(resolveSantaCruzScriptPath({ resourcesPath: temporaryResources }), packagedScript);
   });
 
   await t.test('Keeps Profarma credentials on the approved sales portal only', () => {
@@ -940,6 +1058,11 @@ test('Profarma Novo Pedido Parser', async (t) => {
   });
 
   await t.test('Uses Preco Final and requires ST for medicines', () => {
+    const scraperSource = fs.readFileSync(new URL('../src/lib/electron-scraper.js', import.meta.url), 'utf8');
+    assert.match(scraperSource, /querySelectorAll\('input, button'\)/);
+    assert.match(scraperSource, /aria-disabled/);
+    assert.match(scraperSource, /adicionar|incrementar|aumentar|quantidade/);
+
     const withSt = parseProfarmaTableRow([
       'Pex', '7896181915638', 'LOSARTANA POT 50MG 30CPR BIOS', '0', '2,70',
       '76.6%', '8,11', '8,51%', '0,96', '11,18', '50', 'BIOSINTETICA GENERIC', 'Generico', 'Nao'
@@ -976,6 +1099,12 @@ test('Profarma Novo Pedido Parser', async (t) => {
       '20,00', '12', 'LAB TESTE', 'Cosmeticos', 'Nao'
     ], false);
     assert.strictEqual(unavailable.availability, 'sem estoque');
+
+    const noQuantityControl = parseProfarmaTableRow([
+      'Pex', '7890000000003', 'CREME FACIAL 30G', '0', '12,50', '10%', '15,00', '-', '-',
+      '20,00', '12', 'LAB TESTE', 'Cosmeticos', 'Nao'
+    ], false);
+    assert.strictEqual(noQuantityControl.availability, 'sem estoque');
   });
 });
 
@@ -994,8 +1123,60 @@ test('Farmacia Popular & Reference Brand Intelligence', async (t) => {
     assert.strictEqual(sinvastatina.isFarmaciaPopular, true);
     assert.strictEqual(sinvastatina.category, 'Dislipidemia');
 
+    const metforminaXr = getFarmaciaPopularInfo('GLIFAGE XR METFORMINA 500MG 30 COMP');
+    assert.strictEqual(metforminaXr.isFarmaciaPopular, true);
+    assert.strictEqual(metforminaXr.officialPresentation, 'metformina 500mg acao prolongada');
+
+    const timolol = getFarmaciaPopularInfo('MALEATO DE TIMOLOL 5MG SOLUCAO OFTALMICA');
+    assert.strictEqual(timolol.isFarmaciaPopular, true);
+    assert.strictEqual(timolol.category, 'Glaucoma');
+
+    const losartanaWrongDose = getFarmaciaPopularInfo('LOSARTANA POTASSICA 100MG 30 COMP');
+    assert.strictEqual(losartanaWrongDose.isFarmaciaPopular, false);
+    assert.strictEqual(losartanaWrongDose.requiresExactPresentation, true);
+
+    const metforminaWrongRelease = getFarmaciaPopularInfo('METFORMINA XR 850MG 30 COMP');
+    assert.strictEqual(metforminaWrongRelease.isFarmaciaPopular, false);
+    assert.strictEqual(metforminaWrongRelease.requiresExactPresentation, true);
+
+    assert.strictEqual(
+      getFarmaciaPopularInfo('INSULINA GLARGINA 100UI/ML').isFarmaciaPopular,
+      false
+    );
+    assert.strictEqual(
+      getFarmaciaPopularInfo('INSULINA LISPRO 100UI/ML').isFarmaciaPopular,
+      false
+    );
+    assert.strictEqual(
+      getFarmaciaPopularInfo('CARBIDOPA 250MG + LEVODOPA 25MG').isFarmaciaPopular,
+      false
+    );
+
     const nonProgram = getFarmaciaPopularInfo('SHAMPOO 200ML');
     assert.strictEqual(nonProgram.isFarmaciaPopular, false);
+  });
+
+  await t.test('tracks the complete national catalog updated on 2026-07-14', () => {
+    assert.strictEqual(FARMACIA_POPULAR_CATALOG.length, 41);
+    assert.ok(FARMACIA_POPULAR_CATALOG.every(item => item.coverage === 'Gratuito'));
+    assert.ok(FARMACIA_POPULAR_CATALOG.every(item => item.scope === 'Nacional'));
+    assert.ok(FARMACIA_POPULAR_CATALOG.every(item => item.updatedAt === '2026-07-14'));
+    assert.ok(FARMACIA_POPULAR_CATALOG.some(item => item.searchText === 'anlodipino 5mg'));
+    assert.ok(FARMACIA_POPULAR_CATALOG.some(item => item.searchText === 'budesonida 32mcg'));
+    assert.ok(FARMACIA_POPULAR_CATALOG.some(item => item.searchText === 'absorvente higienico'));
+
+    for (const item of FARMACIA_POPULAR_CATALOG) {
+      const info = getFarmaciaPopularInfo(item.searchText);
+      assert.strictEqual(info.isFarmaciaPopular, true, item.searchText);
+      assert.strictEqual(info.officialPresentation, item.searchText, item.searchText);
+    }
+
+    const medicationPlans = analyzeQuoteBatch(
+      FARMACIA_POPULAR_CATALOG
+        .filter(item => item.itemType === 'medicamento')
+        .map(item => item.searchText)
+    );
+    assert.ok(medicationPlans.every(plan => plan.status === INPUT_STATUS.READY));
   });
 
   await t.test('Resolves reference brand names to active ingredients', () => {
@@ -1109,12 +1290,18 @@ test('ANB product grid contract', async (t) => {
     assert.strictEqual(isRetryableAnbError(new Error('Supplier commercial condition selector did not open.')), false);
   });
 
-  await t.test('records exact EAN search evidence without overwriting a returned barcode', () => {
-    const exactSearch = applyAnbEanEvidence([
+  await t.test('requires explicit portal EAN evidence without inventing a returned barcode', () => {
+    const missingBarcode = applyAnbEanEvidence([
       { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: null }
     ], '7891721201806');
+    assert.strictEqual(missingBarcode[0].ean, null);
+    assert.strictEqual(missingBarcode[0].eanEvidence, undefined);
+
+    const exactSearch = applyAnbEanEvidence([
+      { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: '7891721201806' }
+    ], '7891721201806');
     assert.strictEqual(exactSearch[0].ean, '7891721201806');
-    assert.strictEqual(exactSearch[0].eanEvidence, 'EXACT_SEARCH');
+    assert.strictEqual(exactSearch[0].eanEvidence, 'PORTAL_ROW');
 
     const conflicting = applyAnbEanEvidence([
       { supplierProductName: 'OUTRO PRODUTO', ean: '7890000000000' }
@@ -1234,6 +1421,10 @@ test('Live Quote Source Safety', async (t) => {
     assert.strictEqual(resolveConnectorMode({}), 'disabled');
     assert.strictEqual(resolveConnectorMode({ ENABLE_REAL_CONNECTORS: 'true' }), 'real');
     assert.strictEqual(resolveConnectorMode({ ENABLE_MOCK_CONNECTORS: 'true' }), 'mock');
+    assert.throws(
+      () => getActiveConnectors(['Distribuidora inexistente']),
+      /Distribuidora nao cadastrada/
+    );
   });
 
   await t.test('Accepts only recent live capture timestamps', () => {
@@ -1270,6 +1461,10 @@ test('Live Quote Source Safety', async (t) => {
       }
     }, parsed, { retries: 1, delayMs: 0 });
     assert.strictEqual(configurationCalls, 1);
+
+    for (const message of ['ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'HTTP 429', 'HTTP 503']) {
+      assert.strictEqual(isRetryablePortalError(new Error(message)), true, message);
+    }
   });
 
   await t.test('Stops a stuck supplier and returns a structured timeout result', async () => {
@@ -1297,6 +1492,30 @@ test('Live Quote Source Safety', async (t) => {
     assert.strictEqual(results[0].failureCode, 'TIMEOUT');
     assert.match(results[0].liveFailureReason, /tempo limite/i);
     assert.strictEqual(isTimeoutFailure(results[0]), true);
+  });
+
+  await t.test('preserves user cancellation instead of reporting a timeout', async () => {
+    const parsed = parseSearchQuery('losartana 50mg');
+    const controller = new AbortController();
+    const connector = {
+      supplierName: 'ANB',
+      searchProduct: async (query, options = {}) => new Promise(resolve => {
+        options.signal.addEventListener('abort', () => resolve([]), { once: true });
+      })
+    };
+
+    const pendingResults = callConnectorWithTimeout(connector, parsed, {
+      retries: 0,
+      timeoutMs: 10_000,
+      signal: controller.signal
+    });
+    controller.abort('USER_CANCELLED');
+    const results = await pendingResults;
+
+    assert.strictEqual(results[0].failureCode, 'USER_CANCELLED');
+    assert.strictEqual(results[0].timedOut, false);
+    assert.strictEqual(isTimeoutFailure(results[0]), false);
+    assert.match(results[0].liveFailureReason, /cancelada pelo usuario/i);
   });
 
   await t.test('waits for bounded connector cleanup before releasing the next quotation step', async () => {
@@ -1394,6 +1613,11 @@ test('Live Quote Source Safety', async (t) => {
 });
 
 test('Live diagnostic distinguishes route failure from rejected commercial options', () => {
+  const officialTerms = getDiagnosticTerms(['--farmacia-popular']);
+  assert.strictEqual(officialTerms.length, 41);
+  assert.ok(officialTerms.includes('losartana 50mg'));
+  assert.ok(officialTerms.includes('fralda geriatrica'));
+
   const noSt = classifyDiagnosticResults([
     {
       source: 'Profarma',
@@ -1552,6 +1776,25 @@ test('Quote Auditor - Result Integrity Checks', async (t) => {
     assert.ok(audit.summary.includes('Preco invalido'));
   });
 
+  await t.test('blocks a result whose stock availability was not confirmed', () => {
+    const audit = auditQuoteResult(parsed, { ...baseResult, availability: '' });
+    assert.strictEqual(audit.status, AUDIT_STATUS.BLOCKED);
+    assert.match(audit.summary, /Disponibilidade nao confirmada/);
+  });
+
+  await t.test('keeps a technical supplier failure distinct from out of stock', () => {
+    const audit = auditQuoteResult(parsed, {
+      ...baseResult,
+      price: 0,
+      availability: 'fornecedor indisponivel',
+      liveFailureReason: 'tempo limite de 5 minutos excedido',
+      failureCode: 'TIMEOUT'
+    });
+    assert.strictEqual(audit.status, AUDIT_STATUS.BLOCKED);
+    assert.match(audit.summary, /Falha tecnica do fornecedor/);
+    assert.doesNotMatch(audit.summary, /Produto sem estoque/);
+  });
+
   await t.test('Blocks EAN mismatches on barcode searches', () => {
     const audit = auditQuoteResult(parsed, { ...baseResult, ean: '7896004719023' });
     assert.strictEqual(audit.status, AUDIT_STATUS.BLOCKED);
@@ -1603,6 +1846,26 @@ test('Quote Auditor - Result Integrity Checks', async (t) => {
       ean: '7890000000001'
     });
     assert.notStrictEqual(matchingAssociation.status, AUDIT_STATUS.BLOCKED, matchingAssociation.summary);
+
+    const swappedAssociation = auditQuoteResult(association, {
+      ...baseResult,
+      supplierProductName: 'OLMESARTANA 12,5MG + HIDROCLOROTIAZIDA 20MG 30 COMPRIMIDOS',
+      dosage: '12,5mg',
+      presentation: 'comprimido',
+      ean: '7890000000002'
+    });
+    assert.strictEqual(swappedAssociation.status, AUDIT_STATUS.BLOCKED);
+    assert.match(swappedAssociation.summary, /Dose associada ao principio ativo/);
+
+    const incompleteAssociation = auditQuoteResult(association, {
+      ...baseResult,
+      supplierProductName: 'OLMESARTANA + HIDROCLOROTIAZIDA 12,5MG 30 COMPRIMIDOS',
+      dosage: '12,5mg',
+      presentation: 'comprimido',
+      ean: '7890000000003'
+    });
+    assert.strictEqual(incompleteAssociation.status, AUDIT_STATUS.BLOCKED);
+    assert.match(incompleteAssociation.summary, /Dose associada ao principio ativo/);
   });
 
   await t.test('blocks percentage, ampoule and extended-release mismatches', () => {
@@ -1643,6 +1906,18 @@ test('Quote Auditor - Result Integrity Checks', async (t) => {
     assert.strictEqual(immediateRelease.status, AUDIT_STATUS.BLOCKED);
     assert.match(immediateRelease.summary, /Apresentacao encontrada nao confere/);
     assert.notStrictEqual(matchingExtendedRelease.status, AUDIT_STATUS.BLOCKED, matchingExtendedRelease.summary);
+
+    const officialExtendedRelease = auditQuoteResult(
+      parseSearchQuery('7891721201806 metformina 500mg acao prolongada'),
+      {
+        ...baseResult,
+        supplierProductName: 'GLIFAGE XR 500MG 30 COMPRIMIDOS',
+        dosage: '500mg',
+        presentation: 'liberacao prolongada',
+        ean: '7891721201806'
+      }
+    );
+    assert.notStrictEqual(officialExtendedRelease.status, AUDIT_STATUS.BLOCKED, officialExtendedRelease.summary);
 
     const immediateReleaseQuery = parseSearchQuery('glifage 500mg 30 comp');
     const unexpectedExtendedRelease = auditQuoteResult(immediateReleaseQuery, {
@@ -1886,7 +2161,12 @@ test('Database Flow - Manual Review Recalculation', async () => {
       source: 'Profarma',
       ean: '7896004719016',
       packaging: '10 comprimidos',
-      quantity: 10
+      quantity: 10,
+      unitPrice: 0.31,
+      farmaciaPopular: true,
+      farmaciaPopularCategory: 'Analgesia',
+      farmaciaPopularCoverage: 'Gratuito',
+      farmaciaPopularNotes: 'Classificacao oficial de teste'
     });
 
     await saveQuoteResult({
@@ -1914,7 +2194,13 @@ test('Database Flow - Manual Review Recalculation', async () => {
     const before = await getQuoteDetails(quoteId);
     const semStResult = before.items[0].results.find(r => r.stStatus === 'SEM_ST');
     const failedResult = before.items[0].results.find(r => r.source === 'Santa Cruz');
+    const popularResult = before.items[0].results.find(r => r.source === 'Profarma');
     assert.ok(semStResult);
+    assert.strictEqual(popularResult.unitPrice, 0.32);
+    assert.strictEqual(popularResult.farmaciaPopular, 1);
+    assert.strictEqual(popularResult.farmaciaPopularCategory, 'Analgesia');
+    assert.strictEqual(popularResult.farmaciaPopularCoverage, 'Gratuito');
+    assert.strictEqual(popularResult.farmaciaPopularNotes, 'Classificacao oficial de teste');
     assert.strictEqual(failedResult.priceSourceLabel, 'Preço NF');
     assert.strictEqual(failedResult.liveFailureReason, 'tempo limite excedido');
     assert.strictEqual(failedResult.failureCode, 'TIMEOUT');

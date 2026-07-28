@@ -52,5 +52,10 @@ export function getActiveConnectors(supplierNames) {
   if (!supplierNames || supplierNames.length === 0) {
     return selectedRegistry;
   }
+  const registeredNames = new Set(selectedRegistry.map(connector => connector.supplierName));
+  const unknownNames = [...new Set(supplierNames.filter(name => !registeredNames.has(name)))];
+  if (unknownNames.length > 0) {
+    throw new Error(`Distribuidora nao cadastrada: ${unknownNames.join(', ')}`);
+  }
   return selectedRegistry.filter(conn => supplierNames.includes(conn.supplierName));
 }

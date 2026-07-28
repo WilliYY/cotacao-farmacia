@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -17,10 +18,21 @@ function getPositiveInteger(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function createSantaCruzProcessEnvironment(credentials = {}, baseEnvironment = process.env) {
+export function createSantaCruzProcessEnvironment(
+  credentials = {},
+  baseEnvironment = process.env,
+  fallbackQuery = ''
+) {
+  const environment = { ...baseEnvironment };
   const configuredPath = String(credentials?.url || '').trim();
-  if (!configuredPath || /^https?:\/\//i.test(configuredPath)) return { ...baseEnvironment };
-  return { ...baseEnvironment, SANTACRUZ_APP_PATH: configuredPath };
+  if (configuredPath && !/^https?:\/\//i.test(configuredPath)) {
+    environment.SANTACRUZ_APP_PATH = configuredPath;
+  }
+  if (credentials?.username) environment.SANTACRUZ_USERNAME = String(credentials.username);
+  if (credentials?.password) environment.SANTACRUZ_PASSWORD = String(credentials.password);
+  if (credentials?.clientCode) environment.SANTACRUZ_CLIENT_CODE = String(credentials.clientCode);
+  if (fallbackQuery) environment.SANTACRUZ_FALLBACK_QUERY = String(fallbackQuery);
+  return environment;
 }
 
 export function normalizeSantaCruzGuiPayload(stdout) {
@@ -139,10 +151,7 @@ function triggerSantaCruzCleanup(scriptPath, credentials) {
       '-NoProfile',
       '-ExecutionPolicy', 'Bypass',
       '-File', scriptPath,
-      '--cleanup',
-      credentials?.username || '',
-      credentials?.password || '',
-      credentials?.clientCode || ''
+      '--cleanup'
     ], {
       windowsHide: true,
       timeout: 15000,
@@ -178,16 +187,12 @@ function executeSantaCruzGuiCommand(scriptPath, command, credentials, options = 
       '-NoProfile',
       '-ExecutionPolicy', 'Bypass',
       '-File', scriptPath,
-      command,
-      credentials?.username || '',
-      credentials?.password || '',
-      credentials?.clientCode || '',
-      options.fallbackQuery || ''
+      command
     ], {
       windowsHide: true,
       timeout,
       maxBuffer: 4 * 1024 * 1024,
-      env: createSantaCruzProcessEnvironment(credentials),
+      env: createSantaCruzProcessEnvironment(credentials, process.env, options.fallbackQuery),
       signal: options.signal
     }, async (error, stdout, stderr) => {
       const payload = normalizeSantaCruzGuiPayload(stdout);
@@ -214,14 +219,18 @@ function runSantaCruzGuiCommand(scriptPath, command, credentials, options = {}) 
   );
 }
 
-function getSantaCruzScriptPath() {
+export function resolveSantaCruzScriptPath(runtime = process) {
+  const packagedPath = runtime.resourcesPath
+    ? path.join(runtime.resourcesPath, 'santacruz-search.ps1')
+    : '';
+  if (packagedPath && existsSync(packagedPath)) return packagedPath;
   return path.join(__dirname, '..', '..', 'lib', 'santacruz-search.ps1');
 }
 
 export async function getSantaCruzStatus() {
   const credentials = await getSupplierCredentials(3);
   const payload = await runSantaCruzGuiCommand(
-    getSantaCruzScriptPath(),
+    resolveSantaCruzScriptPath(),
     '--status-only',
     credentials || {},
     { timeoutMs: 30_000 }
@@ -246,7 +255,7 @@ export async function prepareSantaCruz(options = {}) {
     };
   }
   const payload = await runSantaCruzGuiCommand(
-    getSantaCruzScriptPath(),
+    resolveSantaCruzScriptPath(),
     '--prepare',
     credentials,
     options
@@ -312,7 +321,7 @@ export class SantaCruzRealConnector extends SupplierConnector {
       }
       logger.info('Santa Cruz is already open and authenticated; reusing the ready window without stored credentials.');
     }
-    const scriptPath = getSantaCruzScriptPath();
+    const scriptPath = resolveSantaCruzScriptPath();
     logger.info(`Searching Santa Cruz for: "${searchTerm}"...`);
     logger.info('Locating the Santa Cruz installation and starting autonomous GUI search...');
 

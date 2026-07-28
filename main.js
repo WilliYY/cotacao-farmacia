@@ -55,6 +55,29 @@ function getUpdateCheckIntervalMs() {
   return Math.min(24 * 60 * 60_000, Math.max(5 * 60_000, configured));
 }
 
+function getDatabaseStartupTimeoutMs() {
+  const configured = Number.parseInt(process.env.DATABASE_STARTUP_TIMEOUT_MS || '120000', 10);
+  if (!Number.isInteger(configured)) return 120_000;
+  return Math.min(10 * 60_000, Math.max(15_000, configured));
+}
+
+async function initDatabaseWithTimeout(userDataPath) {
+  const timeoutMs = getDatabaseStartupTimeoutMs();
+  let timeoutId;
+  try {
+    await Promise.race([
+      initDatabase(userDataPath),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`Tempo limite de ${Math.ceil(timeoutMs / 1000)} segundos ao iniciar o banco local.`));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 function runGit(args) {
   return new Promise((resolve, reject) => {
     execFile('git', args, {
@@ -192,7 +215,7 @@ app.whenReady().then(async () => {
   if (isLiveDiagnostic || isSantaCruzPrepareDiagnostic) {
     const diagnosticUserDataPath = app.getPath('userData');
     console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
-    await initDatabase(diagnosticUserDataPath);
+    await initDatabaseWithTimeout(diagnosticUserDataPath);
   }
 
   if (isLiveDiagnostic) {
@@ -226,7 +249,7 @@ app.whenReady().then(async () => {
 
   const userDataPath = app.getPath('userData');
   console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
-  await initDatabase(userDataPath);
+  await initDatabaseWithTimeout(userDataPath);
 
   updateCheckIntervalId = setInterval(checkGitUpdates, getUpdateCheckIntervalMs());
 
@@ -235,6 +258,21 @@ app.whenReady().then(async () => {
       createWindow();
     }
   });
+}).catch(async (error) => {
+  const message = error?.message || String(error);
+  logger.error(`Application startup failed: ${message}`);
+  if (!isDiagnosticMode) {
+    dialog.showErrorBox(
+      'Falha ao iniciar a cotacao',
+      `O sistema nao conseguiu concluir a inicializacao.\n\n${message}`
+    );
+  }
+  try {
+    await closeDatabase();
+  } catch (closeError) {
+    logger.warn(`Error closing database after startup failure: ${closeError.message}`);
+  }
+  app.exit(1);
 });
 
 app.on('window-all-closed', () => {

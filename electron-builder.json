@@ -8,9 +8,15 @@
     "dist/**/*",
     "main.js",
     "preload.js",
+    "scripts/live-diagnostic.mjs",
     "src/**/*",
-    "package.json",
-    "node_modules/**/*"
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "src/lib/santacruz-search.ps1",
+      "to": "santacruz-search.ps1"
+    }
   ],
   "win": {
     "target": ["portable", "zip"]

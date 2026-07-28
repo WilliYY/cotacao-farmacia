@@ -722,6 +722,7 @@ function App() {
   const [editQuantity, setEditQuantity] = useState(1);
   const reviewModalRef = useRef(null);
   const previousFocusRef = useRef(null);
+  const santaCruzStatusRequestRef = useRef(null);
 
   useEffect(() => {
     loadHistory();
@@ -815,7 +816,7 @@ function App() {
   useEffect(() => {
     if (!santaCruzSelected || activeQuote || isSettingsOpen || loading || isPreparingSantaCruz) return undefined;
     loadSantaCruzStatus(false);
-    const statusTimer = setInterval(() => loadSantaCruzStatus(false), 5_000);
+    const statusTimer = setInterval(() => loadSantaCruzStatus(false), 30_000);
     const handleFocus = () => loadSantaCruzStatus(false);
     window.addEventListener('focus', handleFocus);
     return () => {
@@ -892,8 +893,18 @@ function App() {
   const loadSantaCruzStatus = async (showActivity = true) => {
     if (!api.getSantaCruzStatus) return;
     if (showActivity) setIsCheckingSantaCruz(true);
+    if (santaCruzStatusRequestRef.current) {
+      try {
+        return await santaCruzStatusRequestRef.current;
+      } finally {
+        if (showActivity) setIsCheckingSantaCruz(false);
+      }
+    }
+
+    const statusRequest = api.getSantaCruzStatus();
+    santaCruzStatusRequestRef.current = statusRequest;
     try {
-      const status = await api.getSantaCruzStatus();
+      const status = await statusRequest;
       setSantaCruzStatus(status || {
         status: 'status-failed',
         reason: 'A Santa Cruz não informou o estado atual.',
@@ -911,6 +922,9 @@ function App() {
         canAutoPrepare: false
       });
     } finally {
+      if (santaCruzStatusRequestRef.current === statusRequest) {
+        santaCruzStatusRequestRef.current = null;
+      }
       if (showActivity) setIsCheckingSantaCruz(false);
     }
   };

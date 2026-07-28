@@ -18,7 +18,8 @@ const POSTGRES_CAMEL_CASE_KEYS = [
   'ignoreReason', 'recommendationStatus', 'reviewStatus', 'capturedAt', 'unitPrice',
   'auditStatus', 'auditSummary', 'priceSourceLabel', 'liveFailureReason', 'failureCode',
   'timedOut', 'searchFallback', 'searchCount', 'lastSearchedAt', 'canonicalName',
-  'lastConfirmedAt', 'clientCode', 'updatedAt', 'supplierName'
+  'lastConfirmedAt', 'clientCode', 'updatedAt', 'supplierName', 'farmaciaPopular',
+  'farmaciaPopularCategory', 'farmaciaPopularCoverage', 'farmaciaPopularNotes'
 ].reduce((keys, name) => keys.set(name.toLowerCase(), name), new Map());
 
 export function normalizePostgresRow(row) {
@@ -231,6 +232,10 @@ export async function initDatabase(userDataPath) {
         failureCode TEXT,
         timedOut INTEGER DEFAULT 0,
         searchFallback TEXT,
+        farmaciaPopular INTEGER DEFAULT 0,
+        farmaciaPopularCategory TEXT,
+        farmaciaPopularCoverage TEXT,
+        farmaciaPopularNotes TEXT,
         FOREIGN KEY(quoteItemId) REFERENCES QuoteItem(id) ON DELETE CASCADE,
         FOREIGN KEY(supplierId) REFERENCES Supplier(id)
       );
@@ -341,6 +346,10 @@ export async function initDatabase(userDataPath) {
         failureCode TEXT,
         timedOut INTEGER DEFAULT 0,
         searchFallback TEXT,
+        farmaciaPopular INTEGER DEFAULT 0,
+        farmaciaPopularCategory TEXT,
+        farmaciaPopularCoverage TEXT,
+        farmaciaPopularNotes TEXT,
         FOREIGN KEY(quoteItemId) REFERENCES QuoteItem(id) ON DELETE CASCADE,
         FOREIGN KEY(supplierId) REFERENCES Supplier(id)
       );
@@ -505,7 +514,11 @@ export async function initDatabase(userDataPath) {
       ['liveFailureReason', 'TEXT'],
       ['failureCode', 'TEXT'],
       ['timedOut', 'INTEGER DEFAULT 0'],
-      ['searchFallback', 'TEXT']
+      ['searchFallback', 'TEXT'],
+      ['farmaciaPopular', 'INTEGER DEFAULT 0'],
+      ['farmaciaPopularCategory', 'TEXT'],
+      ['farmaciaPopularCoverage', 'TEXT'],
+      ['farmaciaPopularNotes', 'TEXT']
     ];
     let existingEvidenceColumns;
     if (isPostgres) {
@@ -720,15 +733,16 @@ export async function updateQuoteItemStatus(quoteItemId, status) {
 
 export async function saveQuoteResult(result) {
   const qty = result.quantity || 1;
-  const unitPrice = result.price ? (result.price / qty) : 0;
+  const unitPrice = result.price ? (Number(result.price) / Number(qty)) : 0;
 
   await dbInstance.run(
     `INSERT INTO QuoteResult (
       quoteItemId, supplierId, supplierProductName, laboratory, dosage, presentation,
       price, hasST, stStatus, availability, isValidOption, ignoreReason, recommendationStatus, 
       reviewStatus, notes, confidence, capturedAt, source, ean, packaging, quantity, unitPrice,
-      auditStatus, auditSummary, priceSourceLabel, liveFailureReason, failureCode, timedOut, searchFallback
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      auditStatus, auditSummary, priceSourceLabel, liveFailureReason, failureCode, timedOut, searchFallback,
+      farmaciaPopular, farmaciaPopularCategory, farmaciaPopularCoverage, farmaciaPopularNotes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     result.quoteItemId,
     result.supplierId,
     result.supplierProductName,
@@ -757,7 +771,11 @@ export async function saveQuoteResult(result) {
     result.liveFailureReason || null,
     result.failureCode || null,
     result.timedOut ? 1 : 0,
-    result.searchFallback || null
+    result.searchFallback || null,
+    result.farmaciaPopular ? 1 : 0,
+    result.farmaciaPopularCategory || null,
+    result.farmaciaPopularCoverage || null,
+    result.farmaciaPopularNotes || null
   );
 }
 

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { isFreshLiveCapture, processQuoteQuery } from '../src/lib/recommendation.js';
+import { FARMACIA_POPULAR_CATALOG } from '../src/lib/pharmaceutical-context.js';
 import { analyzeQuoteBatch, INPUT_STATUS } from '../src/lib/search-intelligence.js';
 
 const DEFAULT_TERMS = [
@@ -24,8 +25,11 @@ function getFlag(args, name) {
   return argument ? argument.slice(prefix.length).trim() : '';
 }
 
-function getTerms(args) {
+export function getDiagnosticTerms(args) {
   const positional = args.filter(value => !value.startsWith('--'));
+  if (args.includes('--farmacia-popular')) {
+    return FARMACIA_POPULAR_CATALOG.map(item => item.searchText);
+  }
   return positional.length > 0 ? positional : DEFAULT_TERMS;
 }
 
@@ -143,7 +147,7 @@ function writeReport(args, report) {
 export async function runLiveDiagnostic(args = []) {
   let exitCode = 0;
   const blockedSuppliers = new Map();
-  const inputTerms = getTerms(args);
+  const inputTerms = getDiagnosticTerms(args);
   const searchPlans = analyzeQuoteBatch(inputTerms);
   const report = {
     startedAt: new Date().toISOString(),

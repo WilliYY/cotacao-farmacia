@@ -26,7 +26,7 @@ Cada computador descobre sua própria instalação da Santa Cruz; não copie o a
 
 Na Santa Cruz, o sistema tenta primeiro nome + dose. Se a grade confirmar zero resultados, ele limpa o campo e tenta uma vez pelo princípio ativo com `Enter`; a dose original continua obrigatória ao filtrar as linhas. Exemplo: `losartana 50mg` pode ser pesquisada como `losartana`, mas somente itens de 50mg concorrem ao menor `Preço NF`.
 
-As ações da Santa Cruz são executadas em fila: uma nova pesquisa só começa depois que a anterior encerra e confirma a tentativa de limpeza. Timeout ou cancelamento interrompe o auxiliar de automação, preserva o aplicativo da distribuidora e mostra a etapa **Encerrando** enquanto a limpeza limitada termina.
+As ações da Santa Cruz são executadas em fila e protegidas por uma trava global do Windows: nem outra cotação nem um diagnóstico iniciado em outro processo pode controlar a mesma janela ao mesmo tempo. Uma nova pesquisa só começa depois que a anterior encerra e confirma a tentativa de limpeza. Timeout ou cancelamento interrompe o auxiliar de automação, preserva o aplicativo da distribuidora e mostra a etapa **Encerrando** enquanto a limpeza limitada termina.
 
 Os únicos contratos de preço aceitos são: ANB `Unit c/ST`, Profarma `Preço Final`, Santa Cruz `Preço NF` e DM Paraná `Preço final: R$`. Captura antiga, cabeçalho diferente, preço zero, falta de estoque ou falha técnica são bloqueados; o histórico nunca substitui uma consulta ao vivo.
 
@@ -80,13 +80,23 @@ Na Profarma, uma busca vazia com dose em `mg` é repetida uma única vez sem o s
 
 O diagnóstico ao vivo retorna erro quando qualquer fonte fica sem resultado confirmado, sem opção válida, com captura antiga ou com rótulo de preço diferente do contrato. Correções linguísticas observadas durante uma busca não são aprendidas automaticamente: um apelido ou abreviação só entra na memória após o operador marcar o resultado como `APROVADO` na revisão manual. Alias oficiais e correções ortográficas únicas continuam disponíveis sem depender do histórico.
 
+Para recotar o elenco oficial completo do Farmácia Popular:
+```bash
+npm run diagnose:farmacia-popular
+```
+O comando percorre as 41 apresentações e grava `logs/farmacia-popular-live-latest.json`. Esse relatório é datado, não é versionado e nunca alimenta uma cotação futura. A fonte oficial e os resultados da auditoria ficam em `docs/FARMACIA_POPULAR_AUDIT_2026-07-28.md`.
+
 ### 3. Gerar o Build Desktop (Instalador para Windows)
 Para gerar o executável instalável (.exe) para distribuição interna no Windows:
 ```bash
 npm run build
 npm run package
 ```
-O instalador gerado será salvo no diretório `dist-electron/`.
+O executável portátil, o ZIP e a pasta descompactada são salvos em `C:\dist-wimifarma`. O pacote inclui `resources\santacruz-search.ps1` e o diagnóstico em `app.asar\scripts\live-diagnostic.mjs`; a validação de distribuição deve confirmar que o hash do recurso Santa Cruz é igual ao arquivo-fonte e executar um smoke test do diagnóstico antes de copiar o pacote para outro computador.
+
+Para computadores que precisam receber atualizações automaticamente, prefira o clone Git iniciado por `wimi cotacao.bat`. O executável portátil isolado não possui `.git` nem uma origem de releases assinada e, portanto, não consegue atualizar o próprio binário com a mesma garantia do bootstrap.
+
+Computadores com Smart App Control ou política corporativa de integridade podem bloquear um `.exe` novo sem assinatura Authenticode confiável. Não desative essa proteção como solução. Para distribuição independente do clone Git, assine os artefatos com um certificado de assinatura de código confiável; até isso existir, `wimi cotacao.bat` é a rota portátil suportada.
 
 ---
 

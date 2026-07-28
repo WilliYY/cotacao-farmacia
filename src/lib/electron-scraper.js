@@ -245,7 +245,9 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
   const category = cols[12] || '';
   const normalizedCategory = normalize(category);
   const stExempt = ['cosmet', 'dermocosmet', 'perfum', 'higiene'].some(term => normalizedCategory.includes(term));
-  const available = !quantityText.includes('avise') && !quantityText.includes('indispon');
+  const available = hasQuantityInput &&
+    !quantityText.includes('avise') &&
+    !quantityText.includes('indispon');
   const parsedProduct = parseSupplierProductIdentity(name);
   const quantity = Number(parsedProduct.quantity) > 0 ? Number(parsedProduct.quantity) : 1;
   const dosage = parsedProduct.dosage || '';
@@ -1066,7 +1068,19 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
                       if (supplierId === 2) {
                         const quantityCell = row.querySelectorAll('td, mat-cell')[3];
-                        const parsedRow = parseProfarmaRow(cols, !!quantityCell?.querySelector('input'));
+                        const quantityControls = Array.from(quantityCell?.querySelectorAll('input, button') || []);
+                        const hasQuantityControl = quantityControls.some(control => {
+                          const disabled = !!control.disabled || control.getAttribute('aria-disabled') === 'true';
+                          if (disabled) return false;
+                          if (control.tagName === 'INPUT') return true;
+                          const label = [
+                            control.innerText,
+                            control.getAttribute('aria-label'),
+                            control.getAttribute('title')
+                          ].filter(Boolean).join(' ').trim().toLowerCase();
+                          return label === '+' || /adicionar|incrementar|aumentar|quantidade/.test(label);
+                        });
+                        const parsedRow = parseProfarmaRow(cols, hasQuantityControl);
                         if (!parsedRow || !parsedRow.ean || visitedEans.has(parsedRow.ean)) continue;
                         visitedEans.add(parsedRow.ean);
                         results.push({
@@ -1247,8 +1261,8 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 if (results.length > 0) {
                   logger.info(`Scraping completed successfully. Found ${results.length} items.`);
                   const finish = () => {
+                    cleanup();
                     resolve(results);
-                    setTimeout(cleanup, 2000);
                   };
                   if (process.env.DEBUG_SCRAPER_COLUMNS === 'true') {
                     saveDebugArtifactsBounded(`success_supplier_${supplierId}`).finally(finish);
@@ -1258,8 +1272,8 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 } else {
                   logger.warn('No items found or parsing returned empty list.');
                   saveDebugArtifactsBounded(`empty_results_supplier_${supplierId}`).finally(() => {
+                    cleanup();
                     resolve([]);
-                    setTimeout(cleanup, 2000);
                   });
                 }
               }

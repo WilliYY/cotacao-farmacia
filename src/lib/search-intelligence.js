@@ -45,13 +45,21 @@ const COMMON_STRENGTHS_MG = new Map([
 function extractRawName(value) {
   return normalizePharmaceuticalText(value)
     .replace(/\b\d{13}\b/g, ' ')
-    .replace(/\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|ui|%)\b/g, ' ')
+    .replace(/\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|ui|%)(?:\s*\/\s*(?:(?:\d+(?:\.\d+)?)\s*)?(?:ml|dose))?\b/g, ' ')
     .replace(/\b\d+(?:\.\d+)?\b/g, ' ')
     .split(/\s+/)
     .filter(Boolean)
     .filter(token => !PRESENTATION_WORDS.has(token))
     .join(' ')
     .trim();
+}
+
+function canInheritBatchContext(rawText, medicationName) {
+  const allowedStrengths = COMMON_STRENGTHS_MG.get(medicationName);
+  if (!allowedStrengths) return true;
+  const dosage = parseSearchQuery(rawText).dosage;
+  const strength = String(dosage || '').match(/^(\d+(?:\.\d+)?)mg$/)?.[1];
+  return !strength || allowedStrengths.has(strength);
 }
 
 export function deriveApprovedCorrection(rawText, supplierProductName, fallbackCanonicalName = '') {
@@ -108,11 +116,19 @@ function resolveName(rawText, previousMedication, learnedAliases) {
     return { rawName, canonicalName: learned, correctionType: 'LEARNED_ALIAS' };
   }
 
-  if (rawName.length >= 3 && rawName.length < 6 && previousMedication?.startsWith(rawName)) {
+  if (
+    rawName.length >= 3 &&
+    rawName.length < 6 &&
+    previousMedication?.startsWith(rawName) &&
+    canInheritBatchContext(rawText, previousMedication)
+  ) {
     return { rawName, canonicalName: previousMedication, correctionType: 'BATCH_CONTEXT' };
   }
 
-  if (parsed.activeIngredients.length === 1 && rawName !== parsed.activeIngredients[0]) {
+  if (
+    parsed.activeIngredients.length === 1 &&
+    !` ${rawName} `.includes(` ${parsed.activeIngredients[0]} `)
+  ) {
     return { rawName, canonicalName: parsed.activeIngredients[0], correctionType: 'OFFICIAL_ALIAS' };
   }
 
@@ -165,7 +181,9 @@ function buildPlan(originalText, searchText, resolution, extra = {}) {
   parsed.originalTerms = searchText;
   parsed.originalInput = originalText;
 
-  const corrected = Boolean(resolution.correctionType || extra.expandedFrom);
+  const textChanged = normalizePharmaceuticalText(originalText) !==
+    normalizePharmaceuticalText(searchText);
+  const corrected = Boolean(extra.expandedFrom || (resolution.correctionType && textChanged));
   const correctionMessage = extra.expandedFrom
     ? `Linha expandida em ${extra.expandedCount} dosagens; esta pesquisa usa ${parsed.dosage}.`
     : corrected
@@ -177,7 +195,9 @@ function buildPlan(originalText, searchText, resolution, extra = {}) {
     searchText,
     parsed,
     status: corrected ? INPUT_STATUS.CORRECTED : INPUT_STATUS.READY,
-    correctionType: extra.expandedFrom ? 'MULTI_STRENGTH' : (resolution.correctionType || ''),
+    correctionType: extra.expandedFrom
+      ? 'MULTI_STRENGTH'
+      : (corrected ? resolution.correctionType : ''),
     correctionMessage,
     alias: resolution.rawName || '',
     canonicalName: resolution.canonicalName || parsed.name,

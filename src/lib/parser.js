@@ -55,51 +55,6 @@ const SYNONYMS = {
   abs: 'absorvente',
   fralda: 'fralda',
   fraldas: 'fralda',
-  comp: 'comprimido',
-  cpr: 'comprimido',
-  cp: 'comprimido',
-  cps: 'comprimido',
-  comprimido: 'comprimido',
-  comprimidos: 'comprimido',
-  
-  caps: 'capsula',
-  cap: 'capsula',
-  capsula: 'capsula',
-  capsulas: 'capsula',
-  
-  gotas: 'gotas',
-  gts: 'gotas',
-  gota: 'gotas',
-  
-  susp: 'suspensao',
-  suspensao: 'suspensao',
-  
-  xarope: 'xarope',
-  xrp: 'xarope',
-
-  creme: 'creme',
-  pomada: 'pomada',
-  pom: 'pomada',
-  gel: 'gel',
-  liquido: 'liquido',
-  liq: 'liquido',
-  solucao: 'solucao',
-  sol: 'solucao',
-  spray: 'spray',
-  jet: 'spray',
-  aerossol: 'spray',
-  inalador: 'spray',
-  adesivo: 'adesivo',
-  shampoo: 'shampoo',
-  shamp: 'shampoo',
-  condicionador: 'condicionador',
-  cond: 'condicionador',
-  desodorante: 'desodorante',
-  desod: 'desodorante',
-  absorvente: 'absorvente',
-  abs: 'absorvente',
-  fralda: 'fralda',
-  fraldas: 'fralda',
   amp: 'ampola',
   ampola: 'ampola',
   ampolas: 'ampola',
@@ -247,6 +202,10 @@ export function parseSearchQuery(rawText) {
   if (releaseFormWord) {
     presentation = SYNONYMS[releaseFormWord];
   }
+  const hasExtendedReleasePhrase = /\b(?:acao|liberacao)\s+(?:prolongada|controlada)\b/i.test(cleaned);
+  if (hasExtendedReleasePhrase) {
+    presentation = 'liberacao prolongada';
+  }
 
   // 5. Extract name (filtering out matching tokens)
   const words = cleaned.split(/\s+/);
@@ -278,7 +237,11 @@ export function parseSearchQuery(rawText) {
     const isPackageSizeWord = packageSize &&
       normalizedWord.replace(/\s+/g, '').replace(',', '.') === packageSize;
     
-    const isPresentationWord = SYNONYMS[cleanWord] !== undefined || (presentation && cleanWord.endsWith(presentation));
+    const isReleasePhraseWord = hasExtendedReleasePhrase &&
+      ['acao', 'liberacao', 'prolongada', 'controlada'].includes(cleanWord);
+    const isPresentationWord = isReleasePhraseWord ||
+      SYNONYMS[cleanWord] !== undefined ||
+      (presentation && cleanWord.endsWith(presentation));
 
     if (!isPresentationWord && !isDosageWord && !isPackageSizeWord && !isEan && !isQtyWord &&
         cleanWord !== 'mg' && cleanWord !== 'mcg' && cleanWord !== 'ml' && cleanWord !== 'g' && cleanWord !== 'ui' &&
@@ -290,6 +253,12 @@ export function parseSearchQuery(rawText) {
   let name = canonicalizeMedicationName(nameWords.join(' ').trim());
   if (!name && words.length > 0 && !matchedEan) {
     name = canonicalizeMedicationName(words[0]);
+  }
+  const normalizedCleaned = canonicalizeMedicationName(cleaned);
+  if (normalizedCleaned.includes('absorvente') && normalizedCleaned.includes('higienico')) {
+    name = 'absorvente higienico';
+  } else if (normalizedCleaned.includes('fralda') && normalizedCleaned.includes('geriatrica')) {
+    name = 'fralda geriatrica';
   }
 
   // Calculate confidence and refinement suggestions

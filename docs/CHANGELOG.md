@@ -2,6 +2,24 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.7.6] - 2026-07-28
+
+### Farmácia Popular, identidade e portabilidade
+- **Elenco oficial completo:** catálogo nacional atualizado em 14/07/2026 com 41 apresentações exatas, comando `npm run diagnose:farmacia-popular` e auditoria operacional documentada.
+- **EAN ANB fail-closed:** o código pesquisado não é mais copiado para uma linha sem barcode. Sem evidência explícita, a oferta permanece bloqueada ou segue para fallback nominal quando existe descrição.
+- **Estoque Profarma fail-closed:** linhas sem `input` ou botão semântico de incremento habilitado deixam de ser tratadas como disponíveis.
+- **Associações por princípio e dose:** doses explícitas ficam vinculadas ao ingrediente correspondente; associações com concentrações trocadas ou evidência incompleta são bloqueadas.
+- **Contexto de lote:** `met 850` pode herdar metformina, mas `met 25` volta como abreviação ambígua em vez de assumir o medicamento anterior.
+- **Insumos e insulinas:** absorvente higiênico e fralda geriátrica preservam identidade no parser; análogos como glargina e lispro não são classificados como insulina humana do programa.
+- **Histórico completo:** classificação Farmácia Popular persiste em SQLite/PostgreSQL; `unitPrice` é sempre recalculado de `price / quantity` para impedir ordenação por valor divergente enviado pelo conector.
+- **Falha técnica distinta:** timeout, rede e atualizador indisponível não aparecem como sem estoque ou produto inexistente.
+- **Portabilidade Santa Cruz:** o auxiliar PowerShell é empacotado como recurso, descobre a instalação local e recebe credenciais por ambiente, sem expô-las na linha de comando.
+- **Trava global Santa Cruz:** busca, preparo e limpeza usam mutex nomeado do Windows; duas instâncias ou um diagnóstico concorrente recebem `busy` em vez de controlar a mesma janela.
+- **Pacote validado estruturalmente:** a pasta Windows descompactada foi gerada com `app.asar`, executável e `resources/santacruz-search.ps1`; o SHA-256 do recurso empacotado confere com a fonte atual e o `app.asar` passou nos modos diagnóstico e gráfico.
+- **Inicialização portátil verificável:** `scripts/live-diagnostic.mjs` agora integra o `app.asar`; o banco tem limite padrão de 2 minutos e falhas de inicialização são registradas, fecham recursos e encerram o Electron em vez de manter um processo indefinido.
+- **Assinatura necessária para `.exe` avulso:** o Smart App Control desta máquina bloqueou o hash novo sem Authenticode nos eventos `3033`/`3077`; a implantação suportada entre computadores continua pelo clone Git com `wimi cotacao.bat` até existir certificado confiável.
+- **Validação real:** ANB, Profarma e DM Paraná cotaram `losartana 50mg` pelos campos oficiais; a Santa Cruz respondeu `503 Service Unavailable` no atualizador e foi bloqueada sem reutilizar preço.
+
 ---
 
 ## [1.7.5] - 2026-07-25

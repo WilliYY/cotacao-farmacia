@@ -262,15 +262,19 @@ export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
       resolve(results);
     };
 
-    const finishAsTimeout = async (reason) => {
+    const finishAsInterruption = async (reason, interruption = {}) => {
       if (settled || timeoutTriggered) return;
       timeoutTriggered = true;
       controller.abort(createAbortError());
+      const failureCode = interruption.failureCode || 'TIMEOUT';
+      const timedOut = interruption.timedOut !== false;
       logger.warn(`${connector.supplierName} stopped: ${reason}.`);
       notifyProgress(options.onProgress, {
         phase: 'supplier_stopping',
         supplier: connector.supplierName,
-        message: `Tempo limite atingido; encerrando ${connector.supplierName} com seguranca.`
+        message: timedOut
+          ? `Tempo limite atingido; encerrando ${connector.supplierName} com seguranca.`
+          : `Cotacao cancelada; encerrando ${connector.supplierName} com seguranca.`
       });
 
       if (connectorPromise && abortSettleGraceMs > 0) {
@@ -286,22 +290,28 @@ export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
       }
 
       finish([createLiveUnavailableResult(connector.supplierName, parsedQuery, reason, {
-        failureCode: 'TIMEOUT',
-        timedOut: true
+        failureCode,
+        timedOut
       })]);
     };
 
     externalAbortHandler = () => {
-      void finishAsTimeout(totalReason);
+      const cancelledByUser = externalSignal?.reason === 'USER_CANCELLED';
+      void finishAsInterruption(
+        cancelledByUser ? 'cotacao cancelada pelo usuario' : totalReason,
+        cancelledByUser
+          ? { failureCode: 'USER_CANCELLED', timedOut: false }
+          : { failureCode: 'TIMEOUT', timedOut: true }
+      );
     };
     if (externalSignal?.aborted) {
-      void finishAsTimeout(totalReason);
+      externalAbortHandler();
       return;
     }
     externalSignal?.addEventListener('abort', externalAbortHandler, { once: true });
 
     timeoutId = setTimeout(() => {
-      void finishAsTimeout(supplierReason);
+      void finishAsInterruption(supplierReason);
     }, timeoutMs);
     connectorPromise = callWithEanFallback(connector, parsedQuery, { ...options, signal: controller.signal });
     connectorPromise
@@ -490,7 +500,15 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       next.notes = next.notes || `Auditoria: ${audit.summary}`;
     }
 
-    if (audit.status === AUDIT_STATUS.BLOCKED) {
+    if (res.liveFailureReason || res.failureCode) {
+      next = {
+        ...next,
+        isValidOption: false,
+        ignoreReason: res.liveFailureReason || res.failureCode,
+        recommendationStatus: res.timedOut ? 'Tempo limite do fornecedor' : 'Fornecedor indisponivel',
+        reviewStatus: 'PRECISA_REVISAR'
+      };
+    } else if (audit.status === AUDIT_STATUS.BLOCKED) {
       let recStatus = 'Precisa revisar cotação';
       if (audit.primaryReason.includes('estoque')) recStatus = 'Sem estoque';
       else if (audit.primaryReason.includes('sem ST')) recStatus = 'Ignorado — sem ST';
@@ -501,6 +519,7 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
         audit.primaryReason.includes('Produto encontrado') ||
         audit.primaryReason.includes('Produto combinado') ||
         audit.primaryReason.includes('Associacao') ||
+        audit.primaryReason.includes('Dose associada') ||
         audit.primaryReason.includes('EAN')
       ) {
         recStatus = 'Produto parecido — revisar';
@@ -555,6 +574,11 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
   const validOptions = processedResults
     .filter(r => r.isValidOption)
     .sort((a, b) => {
+      const auditPriorityA = a.auditStatus === AUDIT_STATUS.OK ? 0 : 1;
+      const auditPriorityB = b.auditStatus === AUDIT_STATUS.OK ? 0 : 1;
+      if (auditPriorityA !== auditPriorityB) {
+        return auditPriorityA - auditPriorityB;
+      }
       const priorityA = getSTPriority(a.stStatus);
       const priorityB = getSTPriority(b.stStatus);
       if (priorityA !== priorityB) {
