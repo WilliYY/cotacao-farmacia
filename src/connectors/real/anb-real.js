@@ -2,7 +2,11 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
 import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
-import { createLiveUnavailableResult, isRetryablePortalError } from './live-result.js';
+import {
+  createClassifiedLiveUnavailableResult,
+  createLiveUnavailableResult,
+  isRetryablePortalError
+} from './live-result.js';
 
 const ANB_ORIGIN = 'https://pedido.anbfarma.com.br';
 
@@ -80,7 +84,7 @@ export class ANBRealConnector extends SupplierConnector {
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
       logger.error(`ANB Portal search failed: ${error.message}`);
-      return [createLiveUnavailableResult('ANB', parsedQuery, 'consulta ao portal falhou', {
+      return [createClassifiedLiveUnavailableResult('ANB', parsedQuery, error, {
         retryable: isRetryableAnbError(error)
       })];
     }

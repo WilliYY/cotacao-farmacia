@@ -2,6 +2,21 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.7.8] - 2026-07-28
+
+### Recuperação automática das distribuidoras
+- **Circuito half-open:** três falhas transitórias consecutivas não removem mais a distribuidora do restante da cotação. A fonte aguarda uma pausa curta, recebe uma tentativa única no item seguinte e volta automaticamente após uma captura ao vivo válida.
+- **Bloqueio seletivo:** rede, DNS, timeout, HTTP `429/502/503/504` e oscilação da Santa Cruz são recuperáveis; login, credenciais, CAPTCHA, aplicativo ausente e layout incompatível continuam bloqueados até intervenção.
+- **Santa Cruz preservada:** `not-responding`, falha de digitação/envio, grade antiga e timeout de varredura podem se recuperar sem fechar o aplicativo. Dúvida de estoque bloqueia somente o item; ausência de `Preço NF` ou da grade exige revisão da rota.
+- **Diagnóstico alinhado:** `diagnose:live` usa o mesmo estado de incidentes da aplicação e deixa de abandonar uma distribuidora por uma única queda.
+- **Visibilidade:** o painel exibe `Recuperando` durante a reentrada e confirma quando a fonte voltou a fornecer preços atuais.
+- **Portabilidade:** limiar e pausa são configuráveis por `SUPPLIER_FAILURE_THRESHOLD` e `SUPPLIER_RECOVERY_COOLDOWN_MS`, com limites defensivos iguais em todos os computadores.
+- **Preço ao vivo:** recuperação nunca consulta histórico ou cache; falhas continuam com preço zero e fora do ranking.
+- **Validação automatizada:** transição para half-open, classificação de falhas, reentrada, recuperação dentro de `processQuoteQuery` e estados visuais possuem cobertura dedicada.
+- **Validação real:** a cotação `#17` consultou ANB, Profarma, Santa Cruz e DM Paraná para losartana 50 mg, hidroclorotiazida 25 mg e metformina 500 mg; terminou com 25 ofertas válidas, nenhuma falha e nenhuma revisão. A Santa Cruz permaneceu aberta, retornou `Preço NF` e deixou a busca vazia.
+
+---
+
 ## [1.7.7] - 2026-07-28
 
 ### Prontidão visível e concorrência da Santa Cruz

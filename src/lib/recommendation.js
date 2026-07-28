@@ -4,8 +4,16 @@ import { presentationsMatch, getFarmaciaPopularInfo } from './pharmaceutical-con
 import { isValidST, getSTPriority } from './st-rules.js';
 import { AUDIT_STATUS, applyPriceOutlierAudit, auditQuoteResult, getDosageNumber } from './quote-auditor.js';
 import { getActiveConnectors, getConnectorMode } from '../connectors/connector-registry.js';
-import { createLiveUnavailableResult } from '../connectors/real/live-result.js';
+import {
+  createClassifiedLiveUnavailableResult,
+  createLiveUnavailableResult
+} from '../connectors/real/live-result.js';
 import { logger } from './logger.js';
+import {
+  getSupplierIncidentReason,
+  getSupplierRecoveryDelayMs,
+  isSupplierPermanentlyBlocked
+} from './resilience.js';
 
 dotenv.config();
 
@@ -197,7 +205,7 @@ export async function callWithRetry(connector, parsedQuery, options = {}) {
   }
   logger.error(`All ${retries + 1} attempts failed for connector ${connector.supplierName}: ${lastErr.message}`);
   if (getConnectorMode() === 'real') {
-    return [createLiveUnavailableResult(connector.supplierName, parsedQuery, 'falha interna na consulta ao vivo')];
+    return [createClassifiedLiveUnavailableResult(connector.supplierName, parsedQuery, lastErr)];
   }
   return [];
 };
@@ -291,7 +299,9 @@ export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
 
       finish([createLiveUnavailableResult(connector.supplierName, parsedQuery, reason, {
         failureCode,
-        timedOut
+        timedOut,
+        retryable: timedOut,
+        blocksQuote: false
       })]);
     };
 
@@ -326,6 +336,49 @@ export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
   });
 }
 
+export async function callConnectorWithRecovery(connector, parsedQuery, incident, options = {}) {
+  const recoveryActive = incident?.active === true &&
+    incident?.mode === 'half-open' &&
+    !isSupplierPermanentlyBlocked(incident);
+
+  if (!recoveryActive) {
+    return callConnectorWithTimeout(connector, parsedQuery, options);
+  }
+
+  const delayMs = getSupplierRecoveryDelayMs(incident);
+  notifyProgress(options.onProgress, {
+    phase: 'supplier_recovering',
+    supplier: connector.supplierName,
+    message: delayMs > 0
+      ? `${connector.supplierName} oscilou; aguardando ${Math.ceil(delayMs / 1000)}s para testar a conexao novamente.`
+      : `${connector.supplierName} oscilou; testando a conexao novamente.`
+  });
+
+  try {
+    await waitForRetry(delayMs, options.signal);
+  } catch {
+    const cancelledByUser = options.signal?.reason === 'USER_CANCELLED';
+    return [createLiveUnavailableResult(
+      connector.supplierName,
+      parsedQuery,
+      cancelledByUser
+        ? 'cotacao cancelada pelo usuario'
+        : (options.totalTimeoutReason || 'tempo limite total da cotacao excedido'),
+      {
+        failureCode: cancelledByUser ? 'USER_CANCELLED' : 'TIMEOUT',
+        timedOut: !cancelledByUser,
+        retryable: !cancelledByUser,
+        blocksQuote: false
+      }
+    )];
+  }
+
+  return callConnectorWithTimeout(connector, parsedQuery, {
+    ...options,
+    retries: 0
+  });
+}
+
 export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'], options = {}) {
   logger.info(`Processing search query: "${rawText}" with suppliers: ${activeSuppliers.join(', ')}`);
   
@@ -341,33 +394,54 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
     };
   }
 
-  const blockedSupplierReasons = options.blockedSupplierReasons || {};
-  const suppliersToCall = activeSuppliers.filter(supplier => !blockedSupplierReasons[supplier]);
-  const activeConnectors = suppliersToCall.length > 0 ? getActiveConnectors(suppliersToCall) : [];
+  const supplierIncidents = options.supplierIncidents || options.blockedSupplierReasons || {};
+  const suppliersToCall = activeSuppliers.filter(
+    supplier => !isSupplierPermanentlyBlocked(supplierIncidents[supplier])
+  );
+  const configuredConnectors = Array.isArray(options.connectors)
+    ? options.connectors
+    : getActiveConnectors(suppliersToCall);
+  const activeConnectors = configuredConnectors.filter(
+    connector => connector && suppliersToCall.includes(connector.supplierName)
+  );
   const connectorMode = getConnectorMode();
   const searchPromises = [];
 
   for (const connector of activeConnectors) {
     if (connector) {
       logger.debug(`Calling connector for ${connector.supplierName}...`);
-      searchPromises.push(callConnectorWithTimeout(connector, parsed, {
-        signal: options.signal,
-        timeoutMs: options.connectorTimeoutMs?.[connector.supplierName],
-        totalTimeoutReason: options.totalTimeoutReason,
-        onProgress: options.onProgress
-      }));
+      searchPromises.push(callConnectorWithRecovery(
+        connector,
+        parsed,
+        supplierIncidents[connector.supplierName],
+        {
+          signal: options.signal,
+          timeoutMs: options.connectorTimeoutMs?.[connector.supplierName],
+          totalTimeoutReason: options.totalTimeoutReason,
+          onProgress: options.onProgress
+        }
+      ));
     }
   }
 
   const blockedResults = activeSuppliers
-    .filter(supplier => blockedSupplierReasons[supplier])
+    .filter(supplier => isSupplierPermanentlyBlocked(supplierIncidents[supplier]))
     .map(supplier => {
+      const incident = supplierIncidents[supplier];
+      const reason = getSupplierIncidentReason(incident);
       notifyProgress(options.onProgress, {
         phase: 'supplier_blocked',
         supplier,
-        message: `Consulta ignorada nesta cotação: ${blockedSupplierReasons[supplier]}.`
+        message: `Consulta ignorada nesta cotação: ${reason}.`
       });
-      return createLiveUnavailableResult(supplier, parsed, blockedSupplierReasons[supplier]);
+      return {
+        ...createLiveUnavailableResult(supplier, parsed, reason, {
+          failureCode: incident?.failureCode,
+          operatorAction: incident?.operatorAction,
+          blocksQuote: true
+        }),
+        supplierIncidentSkipped: true
+      };
     });
   const allResultsLists = await Promise.all(searchPromises);
   const rawResults = [...allResultsLists.flat(), ...blockedResults];

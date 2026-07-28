@@ -499,6 +499,7 @@ const api = window.api || (allowUiMocks ? mockApi : unavailableApi);
 const PROGRESS_STATUS_LABELS = {
   waiting: 'Aguardando',
   searching: 'Pesquisando',
+  recovering: 'Recuperando',
   stopping: 'Encerrando',
   completed: 'Concluída',
   empty: 'Sem resultado',
@@ -540,7 +541,7 @@ function getSupplierTone(source) {
 }
 
 function SupplierProgressIcon({ status }) {
-  if (status === 'searching' || status === 'stopping') {
+  if (status === 'searching' || status === 'recovering' || status === 'stopping') {
     return <span className="supplier-progress-spinner" aria-hidden="true" />;
   }
   if (status === 'completed') return <CheckCircle2 size={18} aria-hidden="true" />;

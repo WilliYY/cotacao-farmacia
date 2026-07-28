@@ -4,6 +4,13 @@ import path from 'node:path';
 import { isFreshLiveCapture, processQuoteQuery } from '../src/lib/recommendation.js';
 import { FARMACIA_POPULAR_CATALOG } from '../src/lib/pharmaceutical-context.js';
 import { analyzeQuoteBatch, INPUT_STATUS } from '../src/lib/search-intelligence.js';
+import {
+  getSupplierFailureThreshold,
+  getSupplierRecoveryCooldownMs,
+  getSupplierIncidentReason,
+  isSupplierPermanentlyBlocked,
+  recordSupplierFailure
+} from '../src/lib/resilience.js';
 
 const DEFAULT_TERMS = [
   'losartana 50mg',
@@ -146,7 +153,9 @@ function writeReport(args, report) {
 
 export async function runLiveDiagnostic(args = []) {
   let exitCode = 0;
-  const blockedSuppliers = new Map();
+  const supplierIncidents = {};
+  const supplierFailureThreshold = getSupplierFailureThreshold();
+  const supplierRecoveryCooldownMs = getSupplierRecoveryCooldownMs();
   const inputTerms = getDiagnosticTerms(args);
   const searchPlans = analyzeQuoteBatch(inputTerms);
   const report = {
@@ -179,9 +188,10 @@ export async function runLiveDiagnostic(args = []) {
         });
         continue;
       }
-      const previousFailure = blockedSuppliers.get(supplier);
-      if (previousFailure) {
-        console.log(`[DIAGNOSTICO] ${supplier}: ignorando "${term}" devido a falha anterior: ${previousFailure}`);
+      const previousIncident = supplierIncidents[supplier];
+      if (isSupplierPermanentlyBlocked(previousIncident)) {
+        const previousFailure = getSupplierIncidentReason(previousIncident);
+        console.log(`[DIAGNOSTICO] ${supplier}: ignorando "${term}" por exigir intervencao: ${previousFailure}`);
         report.checks.push({
           term,
           supplier,
@@ -199,12 +209,25 @@ export async function runLiveDiagnostic(args = []) {
       console.log(`[DIAGNOSTICO] ${supplier}: pesquisando "${term}"...`);
 
       try {
-        const quote = await processQuoteQuery(term, [supplier], { parsedQuery: plan.parsed });
+        const quote = await processQuoteQuery(term, [supplier], {
+          parsedQuery: plan.parsed,
+          supplierIncidents
+        });
         const outcome = classifyDiagnosticResults(quote.results);
         const results = quote.results.map(sanitizeResult);
         const validResults = results.filter(result => result.isValidOption && Number(result.price) > 0);
-        if (outcome.infrastructureFailure) {
-          blockedSuppliers.set(supplier, outcome.failureReason);
+        const failureResult = quote.results.find(result => result.liveFailureReason);
+        if (failureResult && !failureResult.supplierIncidentSkipped) {
+          supplierIncidents[supplier] = recordSupplierFailure(
+            previousIncident,
+            failureResult,
+            {
+              failureThreshold: supplierFailureThreshold,
+              cooldownMs: supplierRecoveryCooldownMs
+            }
+          );
+        } else if (!failureResult) {
+          delete supplierIncidents[supplier];
         }
         if (outcome.status !== 'ok') exitCode = 1;
         report.checks.push({

@@ -7,6 +7,7 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
 import { logger } from '../../lib/logger.js';
 import { parseSearchQuery } from '../../lib/parser.js';
+import { FAILURE_CODES } from '../../lib/resilience.js';
 import { createLiveUnavailableResult } from './live-result.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -284,6 +285,43 @@ function describeGuiFailure(payload) {
   return reasons[payload.status] || 'automacao indisponivel';
 }
 
+export function getSantaCruzFailureOptions(payload = {}) {
+  const transientStatuses = new Set([
+    'automation-failed',
+    'launch-failed',
+    'not-responding',
+    'scan-timeout',
+    'search-input-failed',
+    'search-submit-failed',
+    'stale-results',
+    'updating'
+  ]);
+  if (transientStatuses.has(payload.status)) {
+    return {
+      failureCode: payload.status === 'updating'
+        ? FAILURE_CODES.SERVICE_UNAVAILABLE
+        : FAILURE_CODES.CONNECTION_FAILURE,
+      retryable: true,
+      blocksQuote: false
+    };
+  }
+
+  if (payload.status === 'stock-unresolved') {
+    return { retryable: false, blocksQuote: false };
+  }
+
+  const manualFailureCodes = {
+    'login-required': FAILURE_CODES.AUTH_REQUIRED,
+    'not-installed': FAILURE_CODES.APP_NOT_INSTALLED,
+    'running-without-window': FAILURE_CODES.APP_NOT_READY,
+    'search-control-not-found': FAILURE_CODES.PORTAL_LAYOUT_CHANGED,
+    'table-not-found': FAILURE_CODES.PORTAL_LAYOUT_CHANGED,
+    'price-column-not-found': FAILURE_CODES.PORTAL_LAYOUT_CHANGED
+  };
+  const failureCode = manualFailureCodes[payload.status] || FAILURE_CODES.INTERNAL_ERROR;
+  return { failureCode, retryable: false, blocksQuote: true };
+}
+
 export class SantaCruzRealConnector extends SupplierConnector {
   constructor() {
     super('Santa Cruz');
@@ -316,7 +354,14 @@ export class SantaCruzRealConnector extends SupplierConnector {
         return [createLiveUnavailableResult(
           'Santa Cruz',
           parsedQuery,
-          failureReason
+          failureReason,
+          currentStatus.status === 'not-responding'
+            ? getSantaCruzFailureOptions(currentStatus)
+            : {
+                failureCode: FAILURE_CODES.CREDENTIALS_MISSING,
+                retryable: false,
+                blocksQuote: true
+              }
         )];
       }
       logger.info('Santa Cruz is already open and authenticated; reusing the ready window without stored credentials.');
@@ -349,7 +394,12 @@ export class SantaCruzRealConnector extends SupplierConnector {
     } else {
       const failureReason = describeGuiFailure(guiPayload);
       logger.warn(`Santa Cruz live search was not completed: ${failureReason}.`);
-      return [createLiveUnavailableResult('Santa Cruz', parsedQuery, failureReason)];
+      return [createLiveUnavailableResult(
+        'Santa Cruz',
+        parsedQuery,
+        failureReason,
+        getSantaCruzFailureOptions(guiPayload)
+      )];
     }
 
     return rawResults.map(normalizeSantaCruzProductResult);

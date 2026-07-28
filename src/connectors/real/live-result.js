@@ -1,3 +1,5 @@
+import { classifyPortalFailure } from '../../lib/resilience.js';
+
 export function createLiveUnavailableResult(supplierName, parsedQuery, reason, options = {}) {
   return {
     ean: '',
@@ -14,9 +16,31 @@ export function createLiveUnavailableResult(supplierName, parsedQuery, reason, o
     capturedAt: new Date().toISOString(),
     liveFailureReason: reason,
     retryable: options.retryable === true,
+    blocksQuote: typeof options.blocksQuote === 'boolean' ? options.blocksQuote : null,
     failureCode: options.failureCode || null,
+    operatorAction: options.operatorAction || null,
     timedOut: options.timedOut === true
   };
+}
+
+export function createClassifiedLiveUnavailableResult(
+  supplierName,
+  parsedQuery,
+  error,
+  overrides = {}
+) {
+  const failure = classifyPortalFailure(error, overrides);
+  return createLiveUnavailableResult(
+    supplierName,
+    parsedQuery,
+    failure.userMessage,
+    {
+      failureCode: failure.failureCode,
+      operatorAction: failure.operatorAction,
+      retryable: failure.retryable,
+      blocksQuote: failure.blocksQuote
+    }
+  );
 }
 
 export function isRetryablePortalError(error) {

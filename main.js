@@ -33,6 +33,12 @@ import { generateExcelBuffer } from './src/lib/exporter.js';
 import { logger } from './src/lib/logger.js';
 import { createQuoteRunCoordinator } from './src/lib/quote-run-coordinator.js';
 import { getSantaCruzStatus, prepareSantaCruz } from './src/connectors/real/santacruz-real.js';
+import {
+  getSupplierFailureThreshold,
+  getSupplierRecoveryCooldownMs,
+  isSupplierPermanentlyBlocked,
+  recordSupplierFailure
+} from './src/lib/resilience.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -320,9 +326,9 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
     const searchPlans = analyzeQuoteBatch(rawTextList, { learnedAliases });
     logger.info(`Starting new Quote process for ${rawTextList.length} input lines and ${searchPlans.length} planned searches`);
     quoteId = await createQuote('processing');
-    const blockedSupplierReasons = {};
-    const consecutiveSupplierFailures = {};
-    const MAX_CONSECUTIVE_FAILURES = 3;
+    const supplierIncidents = {};
+    const supplierFailureThreshold = getSupplierFailureThreshold();
+    const supplierRecoveryCooldownMs = getSupplierRecoveryCooldownMs();
     const supplierList = Array.isArray(activeSuppliers) ? activeSuppliers : ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'];
     
     const quoteTimeoutMs = getQuoteTimeoutMs();
@@ -376,8 +382,8 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
           continue;
         }
 
-        const quote = await processQuoteQuery(plan.searchText, activeSuppliers, {
-          blockedSupplierReasons,
+        const quote = await processQuoteQuery(plan.searchText, supplierList, {
+          supplierIncidents,
           parsedQuery: plan.parsed,
           signal: quoteController.signal,
           totalTimeoutReason: `tempo limite total de ${quoteTimeoutMinutes} minutos excedido`,
@@ -393,25 +399,52 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
           if (supplierResults.length === 0) continue;
 
           const failureResult = supplierResults.find(r => Boolean(r.liveFailureReason));
+          if (failureResult?.supplierIncidentSkipped) continue;
+
+          const previousIncident = supplierIncidents[supplier];
           if (failureResult) {
             const failReason = failureResult.liveFailureReason || 'Falha de conexão com a distribuidora';
-            consecutiveSupplierFailures[supplier] = (consecutiveSupplierFailures[supplier] || 0) + 1;
-            const currentFailCount = consecutiveSupplierFailures[supplier];
+            const incident = recordSupplierFailure(previousIncident, failureResult, {
+              failureThreshold: supplierFailureThreshold,
+              cooldownMs: supplierRecoveryCooldownMs
+            });
+            supplierIncidents[supplier] = incident;
 
-            if (currentFailCount >= MAX_CONSECUTIVE_FAILURES) {
-              blockedSupplierReasons[supplier] = `Falhou consecutivamente em ${MAX_CONSECUTIVE_FAILURES} itens (${failReason})`;
-              logger.warn(`Supplier ${supplier} blocked after ${MAX_CONSECUTIVE_FAILURES} consecutive failures: ${failReason}`);
+            if (isSupplierPermanentlyBlocked(incident)) {
+              logger.warn(`Supplier ${supplier} requires operator action: ${failReason}`);
               sendQuoteProgress(event, {
                 phase: 'supplier_blocked',
                 ...progressContext,
                 supplier,
-                message: `${supplier} desativado nesta cotação por apresentar falha consecutiva em ${MAX_CONSECUTIVE_FAILURES} itens.`
+                message: `${supplier} precisa de intervenção: ${incident.operatorAction}`
+              });
+            } else if (incident.active) {
+              logger.warn(
+                `Supplier ${supplier} entered half-open recovery after ${incident.failureCount} failures: ${failReason}`
+              );
+              sendQuoteProgress(event, {
+                phase: 'supplier_error',
+                ...progressContext,
+                supplier,
+                message: `${supplier} oscilou ${incident.failureCount} vezes; será testada novamente no próximo item.`
               });
             } else {
-              logger.info(`Supplier ${supplier} failed on item #${planIndex + 1} (${currentFailCount}/${MAX_CONSECUTIVE_FAILURES}); will retry on next item.`);
+              logger.info(
+                `Supplier ${supplier} failed on item #${planIndex + 1} ` +
+                `(${incident.failureCount}/${supplierFailureThreshold}); will retry on the next item.`
+              );
             }
           } else {
-            consecutiveSupplierFailures[supplier] = 0;
+            if (previousIncident?.active && previousIncident.mode === 'half-open') {
+              logger.info(`Supplier ${supplier} recovered inside quote #${quoteId}.`);
+              sendQuoteProgress(event, {
+                phase: 'supplier_recovered',
+                ...progressContext,
+                supplier,
+                message: `${supplier} voltou a responder; preços atuais confirmados.`
+              });
+            }
+            delete supplierIncidents[supplier];
           }
         }
 

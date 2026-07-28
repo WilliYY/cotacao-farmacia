@@ -109,6 +109,14 @@ const FAILURE_POLICIES = Object.freeze({
   }
 });
 
+export const DEFAULT_SUPPLIER_FAILURE_THRESHOLD = 3;
+export const DEFAULT_SUPPLIER_RECOVERY_COOLDOWN_MS = 3_000;
+
+function getBoundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
+}
+
 function normalizeFailureText(value) {
   const message = value?.message || value?.reason || value || '';
   const code = value?.code || value?.failureCode || '';
@@ -125,6 +133,10 @@ export function getFailurePolicy(code = FAILURE_CODES.INTERNAL_ERROR) {
 export function classifyPortalFailure(value, overrides = {}) {
   const text = normalizeFailureText(value);
   let code = overrides.failureCode || value?.failureCode || '';
+
+  if (code === 'TIMEOUT') {
+    code = FAILURE_CODES.SUPPLIER_TIMEOUT;
+  }
 
   if (!code) {
     if (/user_cancelled|cancelad[ao] pelo usuario|operation cancelled/.test(text)) {
@@ -173,9 +185,15 @@ export function classifyPortalFailure(value, overrides = {}) {
 }
 
 export function createSupplierIncident(result, now = Date.now(), cooldownMs = 20_000) {
+  const retryableFailureWithoutCode = result?.retryable === true && !result?.failureCode;
   const failure = classifyPortalFailure(result?.liveFailureReason || result, {
-    failureCode: result?.failureCode,
-    retryable: result?.retryable
+    failureCode: retryableFailureWithoutCode
+      ? FAILURE_CODES.CONNECTION_FAILURE
+      : result?.failureCode,
+    retryable: result?.timedOut === true ? true : result?.retryable,
+    blocksQuote: result?.retryable === true || result?.timedOut === true
+      ? false
+      : result?.blocksQuote
   });
   return {
     reason: result?.liveFailureReason || failure.userMessage,
@@ -188,11 +206,68 @@ export function createSupplierIncident(result, now = Date.now(), cooldownMs = 20
   };
 }
 
-export function shouldSkipSupplier(incident, now = Date.now()) {
+export function getSupplierFailureThreshold(environment = process.env) {
+  return getBoundedInteger(
+    environment.SUPPLIER_FAILURE_THRESHOLD,
+    DEFAULT_SUPPLIER_FAILURE_THRESHOLD,
+    1,
+    10
+  );
+}
+
+export function getSupplierRecoveryCooldownMs(environment = process.env) {
+  return getBoundedInteger(
+    environment.SUPPLIER_RECOVERY_COOLDOWN_MS,
+    DEFAULT_SUPPLIER_RECOVERY_COOLDOWN_MS,
+    0,
+    30_000
+  );
+}
+
+export function recordSupplierFailure(previousIncident, result, options = {}) {
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const failureThreshold = getBoundedInteger(
+    options.failureThreshold,
+    getSupplierFailureThreshold(),
+    1,
+    10
+  );
+  const cooldownMs = getBoundedInteger(
+    options.cooldownMs,
+    getSupplierRecoveryCooldownMs(),
+    0,
+    30_000
+  );
+  const failureCount = Math.max(0, Number(previousIncident?.failureCount) || 0) + 1;
+  const incident = createSupplierIncident(result, now, cooldownMs);
+  const permanentlyBlocked = incident.blocksQuote === true;
+  const recoveryActive = incident.retryable === true && failureCount >= failureThreshold;
+
+  return {
+    ...incident,
+    failureCount,
+    failureThreshold,
+    active: permanentlyBlocked || recoveryActive,
+    mode: permanentlyBlocked ? 'open' : (recoveryActive ? 'half-open' : 'closed'),
+    retryAt: recoveryActive ? now + cooldownMs : null
+  };
+}
+
+export function isSupplierPermanentlyBlocked(incident) {
   if (!incident) return false;
   if (typeof incident === 'string') return true;
-  if (incident.blocksQuote || incident.retryable === false) return true;
-  return Number(incident.retryAt || 0) > now;
+  return incident.blocksQuote === true;
+}
+
+export function getSupplierRecoveryDelayMs(incident, now = Date.now()) {
+  if (!incident || incident.mode !== 'half-open' || incident.active !== true) return 0;
+  return Math.max(0, Number(incident.retryAt || 0) - now);
+}
+
+export function shouldSkipSupplier(incident, now = Date.now()) {
+  if (!incident) return false;
+  if (isSupplierPermanentlyBlocked(incident)) return true;
+  return incident.active === true && Number(incident.retryAt || 0) > now;
 }
 
 export function getSupplierIncidentReason(incident) {

@@ -10,13 +10,25 @@ import XLSX from 'xlsx';
 import { parseSearchQuery, levenshteinDistance, fuzzyMatch } from '../src/lib/parser.js';
 import { analyzeQuoteBatch, deriveApprovedCorrection, INPUT_STATUS } from '../src/lib/search-intelligence.js';
 import { isValidST, getVisualStatusLabel, getSTPriority } from '../src/lib/st-rules.js';
-import { callConnectorWithTimeout, callWithEanFallback, callWithRetry, getConnectorTimeoutMs, getQuoteTimeoutMs, isFreshLiveCapture, isTimeoutFailure, matchesSupplierProduct, processQuoteQuery, shouldRetryLiveResults } from '../src/lib/recommendation.js';
-import { createLiveUnavailableResult, isRetryablePortalError } from '../src/connectors/real/live-result.js';
+import { callConnectorWithRecovery, callConnectorWithTimeout, callWithEanFallback, callWithRetry, getConnectorTimeoutMs, getQuoteTimeoutMs, isFreshLiveCapture, isTimeoutFailure, matchesSupplierProduct, processQuoteQuery, shouldRetryLiveResults } from '../src/lib/recommendation.js';
+import {
+  createClassifiedLiveUnavailableResult,
+  createLiveUnavailableResult,
+  isRetryablePortalError
+} from '../src/connectors/real/live-result.js';
+import {
+  FAILURE_CODES,
+  createSupplierIncident,
+  getSupplierRecoveryDelayMs,
+  isSupplierPermanentlyBlocked,
+  recordSupplierFailure
+} from '../src/lib/resilience.js';
 import { AUDIT_STATUS, auditQuoteResult } from '../src/lib/quote-auditor.js';
 import {
   createSantaCruzProcessEnvironment,
   enqueueSantaCruzGuiCommand,
   getSantaCruzFinalPrice,
+  getSantaCruzFailureOptions,
   getSantaCruzRetryTerm,
   getSantaCruzStStatus,
   normalizeSantaCruzGuiPayload,
@@ -186,6 +198,13 @@ test('Quote progress - exposes real item and supplier states', async (t) => {
     });
     assert.strictEqual(progress.suppliers.Profarma.status, 'stopping');
     assert.strictEqual(getQuoteProgressPercent(progress), 25);
+
+    progress = reduceQuoteProgress(progress, {
+      phase: 'supplier_recovering',
+      supplier: 'Profarma',
+      message: 'Aguardando para testar novamente.'
+    });
+    assert.strictEqual(progress.suppliers.Profarma.status, 'recovering');
 
     progress = reduceQuoteProgress(progress, {
       phase: 'supplier_timeout',
@@ -1681,6 +1700,173 @@ test('Live Quote Source Safety', async (t) => {
     const results = await callWithEanFallback(connector, parsed, { retries: 0 });
     assert.strictEqual(callCount, 1);
     assert.strictEqual(results[0].liveFailureReason, 'sem internet');
+  });
+});
+
+test('Supplier resilience - reopens transient failures without reviving manual failures', async (t) => {
+  await t.test('classifies a generic retryable connector failure as transient', () => {
+    const incident = createSupplierIncident({
+      liveFailureReason: 'consulta ao portal falhou',
+      retryable: true
+    }, 1_000, 3_000);
+
+    assert.strictEqual(incident.failureCode, FAILURE_CODES.CONNECTION_FAILURE);
+    assert.strictEqual(incident.retryable, true);
+    assert.strictEqual(incident.blocksQuote, false);
+    assert.strictEqual(incident.retryAt, 4_000);
+  });
+
+  await t.test('keeps the original portal failure class in a sanitized unavailable row', () => {
+    const parsed = parseSearchQuery('losartana 50mg');
+    const transient = createClassifiedLiveUnavailableResult(
+      'ANB',
+      parsed,
+      new Error('HTTP 503 Service Unavailable'),
+      { retryable: true }
+    );
+    const layout = createClassifiedLiveUnavailableResult(
+      'Profarma',
+      parsed,
+      new Error('campo de pesquisa nao encontrado'),
+      { retryable: false }
+    );
+
+    assert.strictEqual(transient.failureCode, FAILURE_CODES.SERVICE_UNAVAILABLE);
+    assert.strictEqual(transient.blocksQuote, false);
+    assert.strictEqual(layout.failureCode, FAILURE_CODES.PORTAL_LAYOUT_CHANGED);
+    assert.strictEqual(layout.blocksQuote, true);
+  });
+
+  await t.test('enters half-open recovery after the configured failure threshold', () => {
+    let incident = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      incident = recordSupplierFailure(incident, {
+        liveFailureReason: 'HTTP 503',
+        retryable: true
+      }, {
+        now: 1_000 + attempt,
+        failureThreshold: 3,
+        cooldownMs: 3_000
+      });
+    }
+
+    assert.strictEqual(incident.failureCount, 3);
+    assert.strictEqual(incident.active, true);
+    assert.strictEqual(incident.mode, 'half-open');
+    assert.strictEqual(isSupplierPermanentlyBlocked(incident), false);
+    assert.strictEqual(getSupplierRecoveryDelayMs(incident, 1_002), 3_000);
+  });
+
+  await t.test('blocks a manual authentication failure immediately', () => {
+    const incident = recordSupplierFailure(null, {
+      liveFailureReason: 'login rejeitado',
+      failureCode: FAILURE_CODES.AUTH_REQUIRED,
+      retryable: false
+    }, {
+      now: 1_000,
+      failureThreshold: 3,
+      cooldownMs: 3_000
+    });
+
+    assert.strictEqual(incident.failureCount, 1);
+    assert.strictEqual(incident.mode, 'open');
+    assert.strictEqual(isSupplierPermanentlyBlocked(incident), true);
+  });
+
+  await t.test('runs one half-open probe after the cooldown', async () => {
+    let calls = 0;
+    const events = [];
+    const connector = {
+      supplierName: 'Santa Cruz',
+      searchProduct: async () => {
+        calls++;
+        return [{
+          source: 'Santa Cruz',
+          supplierProductName: 'Losartana 50mg 30 comprimidos',
+          price: 2.8,
+          priceSourceLabel: 'Preco NF',
+          capturedAt: new Date().toISOString()
+        }];
+      }
+    };
+    const incident = {
+      active: true,
+      mode: 'half-open',
+      retryable: true,
+      blocksQuote: false,
+      retryAt: 0,
+      reason: 'HTTP 503'
+    };
+
+    const results = await callConnectorWithRecovery(
+      connector,
+      parseSearchQuery('losartana 50mg'),
+      incident,
+      {
+        retries: 2,
+        onProgress: event => events.push(event)
+      }
+    );
+
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(results.length, 1);
+    assert.ok(events.some(event => event.phase === 'supplier_recovering'));
+  });
+
+  await t.test('keeps a transient supplier in processQuoteQuery and accepts its recovered live price', async () => {
+    let calls = 0;
+    const connector = {
+      supplierName: 'Santa Cruz',
+      searchProduct: async () => {
+        calls++;
+        return [{
+          source: 'Santa Cruz',
+          supplierProductName: 'Losartana potassica 50mg 30 comprimidos',
+          dosage: '50mg',
+          presentation: '30 comprimidos',
+          price: 2.8,
+          unitPrice: 2.8,
+          priceSourceLabel: 'Preco NF',
+          stStatus: 'COM_ST',
+          availability: 'disponivel',
+          capturedAt: new Date().toISOString()
+        }];
+      }
+    };
+    const quote = await processQuoteQuery('losartana 50mg', ['Santa Cruz'], {
+      connectors: [connector],
+      supplierIncidents: {
+        'Santa Cruz': {
+          active: true,
+          mode: 'half-open',
+          retryable: true,
+          blocksQuote: false,
+          retryAt: 0,
+          reason: 'HTTP 503'
+        }
+      }
+    });
+
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(quote.results[0].liveFailureReason, null);
+    assert.strictEqual(quote.results[0].price, 2.8);
+  });
+
+  await t.test('keeps Santa Cruz route oscillations recoverable but blocks manual setup failures', () => {
+    assert.deepStrictEqual(getSantaCruzFailureOptions({ status: 'not-responding' }), {
+      failureCode: FAILURE_CODES.CONNECTION_FAILURE,
+      retryable: true,
+      blocksQuote: false
+    });
+    assert.deepStrictEqual(getSantaCruzFailureOptions({ status: 'price-column-not-found' }), {
+      failureCode: FAILURE_CODES.PORTAL_LAYOUT_CHANGED,
+      retryable: false,
+      blocksQuote: true
+    });
+    assert.deepStrictEqual(getSantaCruzFailureOptions({ status: 'stock-unresolved' }), {
+      retryable: false,
+      blocksQuote: false
+    });
   });
 });
 
