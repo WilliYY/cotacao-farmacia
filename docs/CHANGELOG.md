@@ -2,6 +2,16 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.0] - 2026-07-28
+
+### Barra lateral operacional renovada
+- **Histórico mais útil:** cada cotação exibe data, hora e um resumo dos medicamentos pesquisados, com contador de resultados e destaque claro para o item ativo.
+- **Navegação acessível:** itens do histórico agora são botões navegáveis por teclado, o selecionado usa `aria-current` e o filtro possui ação dedicada para limpeza.
+- **Mais buscados organizados:** pesquisas recorrentes aparecem em ordem numerada, com contagem e alvo de clique mais previsível.
+- **Ações sempre visíveis:** `Nova Cotação` e `Configurar Logins` ficam separadas do conteúdo rolável e usam o mesmo acabamento escuro da barra.
+- **Responsividade corrigida:** em telas estreitas o histórico mantém uma área rolável de `128px` em vez de encolher até desaparecer.
+- **Validação visual:** estados expandido, recolhido, filtrado e selecionado foram conferidos em `1427x900` e `390x844`, sem erros no console; lint e build de produção concluíram sem erros.
+
 ## [1.7.9] - 2026-07-28
 
 ### Revisão da recuperação transitória

@@ -522,6 +522,36 @@ function formatCurrency(value) {
   }).format(Number(value) || 0);
 }
 
+function getHistorySummary(item) {
+  const terms = String(item?.searchTerms || '')
+    .split('|')
+    .map(term => term.trim())
+    .filter(Boolean);
+
+  if (terms.length === 0) return 'Cotação sem itens identificados';
+  if (terms.length === 1) return terms[0];
+  return `${terms[0]} +${terms.length - 1} ${terms.length === 2 ? 'item' : 'itens'}`;
+}
+
+function getHistoryDate(createdAt) {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) {
+    return { dateTime: '', label: 'Data indisponível' };
+  }
+
+  return {
+    dateTime: date.toISOString(),
+    label: `${date.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit'
+    })} • ${date.toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit'
+    })}`
+  };
+}
+
 function getDisplayUnitPrice(result) {
   const explicit = Number(result?.unitPrice || 0);
   if (explicit > 0) return explicit;
@@ -1318,7 +1348,10 @@ function App() {
       )}
 
       {/* Sidebar: Logo + History */}
-      <aside className={`sidebar ${isHistoryOpen ? '' : 'is-collapsed'}`}>
+      <aside
+        className={`sidebar ${isHistoryOpen ? '' : 'is-collapsed'}`}
+        aria-label="Navegação e histórico de cotações"
+      >
         <div className="logo-container">
           <div className="logo-icon" aria-hidden="true"><PackageSearch size={20} /></div>
           <div className="logo-copy">
@@ -1336,46 +1369,77 @@ function App() {
           </button>
         </div>
 
-        <div className="sidebar-section-heading">
-          <History size={14} aria-hidden="true" />
-          <h3 className="sidebar-title">Minhas Cotações</h3>
-        </div>
-        
-        {/* History Search */}
-        <div className="history-search">
-          <Search size={14} aria-hidden="true" />
-          <input
-            type="text"
-            aria-label="Filtrar histórico"
-            placeholder="Filtrar histórico..."
-            value={historySearchTerm}
-            onChange={(e) => setHistorySearchTerm(e.target.value)}
-          />
-        </div>
-
-        {filteredHistory.length === 0 ? (
-          <div className="history-empty">
-            Nenhuma cotação encontrada.
+        <nav className="history-navigation" aria-label="Histórico de cotações">
+          <div className="sidebar-section-heading">
+            <div className="sidebar-section-label">
+              <History size={14} aria-hidden="true" />
+              <h3 className="sidebar-title">Minhas Cotações</h3>
+            </div>
+            <span
+              className="history-count"
+              aria-label={`${filteredHistory.length} ${
+                filteredHistory.length === 1 ? 'cotação exibida' : 'cotações exibidas'
+              }`}
+            >
+              {filteredHistory.length}
+            </span>
           </div>
-        ) : (
-          <ul className="history-list">
-            {filteredHistory.map(item => (
-              <li 
-                key={item.id} 
-                className={`history-item ${selectedQuoteId === item.id && !isSettingsOpen ? 'active' : ''}`}
-                onClick={() => handleSelectQuote(item.id)}
+
+          <div className="history-search">
+            <Search size={14} aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="Filtrar histórico"
+              placeholder="Filtrar histórico..."
+              value={historySearchTerm}
+              onChange={(e) => setHistorySearchTerm(e.target.value)}
+            />
+            {historySearchTerm && (
+              <button
+                className="history-search-clear"
+                type="button"
+                onClick={() => setHistorySearchTerm('')}
+                aria-label="Limpar filtro do histórico"
+                title="Limpar filtro"
               >
-                <div>Cotação #{item.id}</div>
-                <div className="history-date">
-                  {new Date(item.createdAt).toLocaleString('pt-BR', {
-                    day: '2-digit', month: '2-digit', year: '2-digit',
-                    hour: '2-digit', minute: '2-digit'
-                  })}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+                <CircleX size={14} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+
+          {filteredHistory.length === 0 ? (
+            <div className="history-empty" role="status">
+              Nenhuma cotação encontrada.
+            </div>
+          ) : (
+            <ul className="history-list">
+              {filteredHistory.map(item => {
+                const isActive = selectedQuoteId === item.id && !isSettingsOpen;
+                const historyDate = getHistoryDate(item.createdAt);
+
+                return (
+                  <li key={item.id} className="history-item">
+                    <button
+                      type="button"
+                      className={`history-item-button ${isActive ? 'active' : ''}`}
+                      onClick={() => handleSelectQuote(item.id)}
+                      aria-current={isActive ? 'page' : undefined}
+                      title={String(item.searchTerms || `Cotação #${item.id}`)}
+                    >
+                      <span className="history-item-header">
+                        <span className="history-item-label">Cotação #{item.id}</span>
+                        <time className="history-date" dateTime={historyDate.dateTime}>
+                          {historyDate.label}
+                        </time>
+                      </span>
+                      <span className="history-query">{getHistorySummary(item)}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </nav>
 
         {/* Self-Learning Popular Searches Panel inside Sidebar */}
         {popularSearches.length > 0 && (
@@ -1389,8 +1453,11 @@ function App() {
                   key={index}
                   onClick={() => handleExampleClick(item.query)}
                   className="popular-item"
+                  type="button"
+                  title={`Pesquisar novamente: ${item.query}`}
                 >
-                  <span>{item.query}</span>
+                  <span className="popular-rank" aria-hidden="true">{index + 1}</span>
+                  <span className="popular-query">{item.query}</span>
                   <span className="popular-count">
                     {item.searchCount}x
                   </span>
@@ -1411,6 +1478,7 @@ function App() {
           <button 
             className={`btn btn-secondary btn-block ${isSettingsOpen ? 'is-active' : ''}`}
             onClick={() => setIsSettingsOpen(prev => !prev)}
+            aria-pressed={isSettingsOpen}
           >
             {isSettingsOpen ? <ArrowLeft size={16} aria-hidden="true" /> : <Settings size={16} aria-hidden="true" />}
             {isSettingsOpen ? 'Voltar ao Painel' : 'Configurar Logins'}
