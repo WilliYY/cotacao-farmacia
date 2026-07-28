@@ -1757,6 +1757,43 @@ test('Supplier resilience - reopens transient failures without reviving manual f
     assert.strictEqual(getSupplierRecoveryDelayMs(incident, 1_002), 3_000);
   });
 
+  await t.test('counts only consecutive transient failures toward recovery', () => {
+    let incident = recordSupplierFailure(null, {
+      liveFailureReason: 'HTTP 503',
+      retryable: true
+    }, {
+      now: 1_000,
+      failureThreshold: 3,
+      cooldownMs: 3_000
+    });
+
+    incident = recordSupplierFailure(incident, {
+      liveFailureReason: 'estoque sem evidencia visual para este produto',
+      retryable: false,
+      blocksQuote: false
+    }, {
+      now: 2_000,
+      failureThreshold: 3,
+      cooldownMs: 3_000
+    });
+
+    assert.strictEqual(incident.failureCount, 0);
+    assert.strictEqual(incident.active, false);
+    assert.strictEqual(incident.mode, 'closed');
+
+    incident = recordSupplierFailure(incident, {
+      liveFailureReason: 'HTTP 503',
+      retryable: true
+    }, {
+      now: 3_000,
+      failureThreshold: 3,
+      cooldownMs: 3_000
+    });
+
+    assert.strictEqual(incident.failureCount, 1);
+    assert.strictEqual(incident.active, false);
+  });
+
   await t.test('blocks a manual authentication failure immediately', () => {
     const incident = recordSupplierFailure(null, {
       liveFailureReason: 'login rejeitado',
@@ -1850,6 +1887,42 @@ test('Supplier resilience - reopens transient failures without reviving manual f
     assert.strictEqual(calls, 1);
     assert.strictEqual(quote.results[0].liveFailureReason, null);
     assert.strictEqual(quote.results[0].price, 2.8);
+    assert.deepStrictEqual(quote.supplierOutcomes, [{
+      supplier: 'Santa Cruz',
+      status: 'completed',
+      resultCount: 1
+    }]);
+  });
+
+  await t.test('reports a confirmed empty recovery probe as a successful supplier response', async () => {
+    let calls = 0;
+    const connector = {
+      supplierName: 'Santa Cruz',
+      searchProduct: async () => {
+        calls++;
+        return [];
+      }
+    };
+    const quote = await processQuoteQuery('produto inexistente 50mg', ['Santa Cruz'], {
+      connectors: [connector],
+      supplierIncidents: {
+        'Santa Cruz': {
+          active: true,
+          mode: 'half-open',
+          retryable: true,
+          blocksQuote: false,
+          retryAt: 0,
+          reason: 'HTTP 503'
+        }
+      }
+    });
+
+    assert.strictEqual(calls, 1);
+    assert.deepStrictEqual(quote.supplierOutcomes, [{
+      supplier: 'Santa Cruz',
+      status: 'empty',
+      resultCount: 0
+    }]);
   });
 
   await t.test('keeps Santa Cruz route oscillations recoverable but blocks manual setup failures', () => {
@@ -2001,6 +2074,7 @@ test('Recommendation Engine - Pharmacy Safety Rules', async (t) => {
 
     assert.strictEqual(quote.parsed.confidenceStatus, 'DESCRICAO_INSUFICIENTE');
     assert.deepStrictEqual(quote.results, []);
+    assert.deepStrictEqual(quote.supplierOutcomes, []);
     assert.ok(quote.parsed.refinementSuggestion.includes('marca'));
   });
 });

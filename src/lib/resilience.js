@@ -238,9 +238,15 @@ export function recordSupplierFailure(previousIncident, result, options = {}) {
     0,
     30_000
   );
-  const failureCount = Math.max(0, Number(previousIncident?.failureCount) || 0) + 1;
   const incident = createSupplierIncident(result, now, cooldownMs);
   const permanentlyBlocked = incident.blocksQuote === true;
+  const previousTransientFailures = previousIncident?.retryable === true &&
+    previousIncident?.blocksQuote !== true
+    ? Math.max(0, Number(previousIncident?.failureCount) || 0)
+    : 0;
+  const failureCount = incident.retryable
+    ? previousTransientFailures + 1
+    : (permanentlyBlocked ? 1 : 0);
   const recoveryActive = incident.retryable === true && failureCount >= failureThreshold;
 
   return {

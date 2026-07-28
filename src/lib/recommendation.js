@@ -390,7 +390,8 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
     logger.warn(`Bypassing search for vague query "${rawText}". Suggestion: ${parsed.refinementSuggestion}`);
     return {
       parsed,
-      results: []
+      results: [],
+      supplierOutcomes: []
     };
   }
 
@@ -410,17 +411,22 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
   for (const connector of activeConnectors) {
     if (connector) {
       logger.debug(`Calling connector for ${connector.supplierName}...`);
-      searchPromises.push(callConnectorWithRecovery(
-        connector,
-        parsed,
-        supplierIncidents[connector.supplierName],
-        {
-          signal: options.signal,
-          timeoutMs: options.connectorTimeoutMs?.[connector.supplierName],
-          totalTimeoutReason: options.totalTimeoutReason,
-          onProgress: options.onProgress
-        }
-      ));
+      searchPromises.push(
+        callConnectorWithRecovery(
+          connector,
+          parsed,
+          supplierIncidents[connector.supplierName],
+          {
+            signal: options.signal,
+            timeoutMs: options.connectorTimeoutMs?.[connector.supplierName],
+            totalTimeoutReason: options.totalTimeoutReason,
+            onProgress: options.onProgress
+          }
+        ).then(results => ({
+          supplier: connector.supplierName,
+          results: Array.isArray(results) ? results : []
+        }))
+      );
     }
   }
 
@@ -443,8 +449,25 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
         supplierIncidentSkipped: true
       };
     });
-  const allResultsLists = await Promise.all(searchPromises);
-  const rawResults = [...allResultsLists.flat(), ...blockedResults];
+  const supplierResponses = await Promise.all(searchPromises);
+  const rawResults = [
+    ...supplierResponses.flatMap(response => response.results),
+    ...blockedResults
+  ];
+  const supplierOutcomes = [
+    ...supplierResponses.map(response => ({
+      supplier: response.supplier,
+      status: response.results.length === 0
+        ? 'empty'
+        : (response.results.some(result => !result?.liveFailureReason) ? 'completed' : 'failure'),
+      resultCount: response.results.length
+    })),
+    ...blockedResults.map(result => ({
+      supplier: result.source,
+      status: 'blocked',
+      resultCount: 1
+    }))
+  ];
 
   logger.info(`Found ${rawResults.length} raw results across suppliers.`);
 
@@ -681,6 +704,7 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
 
   return {
     parsed,
-    results: finalResults
+    results: finalResults,
+    supplierOutcomes
   };
 }

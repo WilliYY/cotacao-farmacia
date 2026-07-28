@@ -2,6 +2,19 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.7.9] - 2026-07-28
+
+### Revisão da recuperação transitória
+- **Falhas realmente consecutivas:** indisponibilidade de estoque ou outra rejeição específica do produto não aumenta mais o contador de oscilações de rede.
+- **Resposta vazia válida:** quando o portal confirma que não encontrou o medicamento, a conexão é considerada recuperada e deixa de repetir a pausa `half-open` nos itens seguintes.
+- **Evidência por distribuidora:** `processQuoteQuery` registra se cada fonte concluiu, respondeu vazia, falhou ou foi bloqueada, sem transformar ausência de oferta em queda do portal.
+- **Dependência corrigida:** `tar` foi fixado em `7.5.22`, removendo o alerta moderado presente na árvore de produção sem alterar as APIs do aplicativo.
+- **Risco conhecido:** `xlsx@0.18.5` permanece sinalizado pelo `npm audit` sem correção disponível no npm. O aplicativo só gera planilhas com dados internos e não abre arquivos XLSX externos; a troca da biblioteca exige migração separada.
+- **Risco de desenvolvimento:** versões antigas de `brace-expansion` ainda são trazidas pelas ferramentas de empacotamento. A correção automática exigiria uma alteração principal sugerida pelo npm e foi recusada nesta revisão para não arriscar a geração do aplicativo.
+- **Validação:** dois testes de regressão reproduzem os estados incorretos anteriores e a suíte completa passa com 150 testes.
+
+---
+
 ## [1.7.8] - 2026-07-28
 
 ### Recuperação automática das distribuidoras

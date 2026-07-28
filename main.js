@@ -395,10 +395,15 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
         const quoteCancelledDuringItem = quoteController.signal.aborted &&
           quoteController.signal.reason === 'USER_CANCELLED';
         for (const supplier of supplierList) {
-          const supplierResults = quote.results.filter(r => r.source === supplier);
-          if (supplierResults.length === 0) continue;
+          const supplierOutcome = quote.supplierOutcomes?.find(
+            outcome => outcome.supplier === supplier
+          );
+          if (!supplierOutcome) continue;
 
-          const failureResult = supplierResults.find(r => Boolean(r.liveFailureReason));
+          const supplierResults = quote.results.filter(r => r.source === supplier);
+          const failureResult = supplierOutcome.status === 'failure'
+            ? supplierResults.find(r => Boolean(r.liveFailureReason))
+            : null;
           if (failureResult?.supplierIncidentSkipped) continue;
 
           const previousIncident = supplierIncidents[supplier];
