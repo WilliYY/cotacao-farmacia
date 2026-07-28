@@ -26,6 +26,7 @@ import {
 import { analyzeQuoteBatch, INPUT_STATUS } from './lib/search-intelligence.js';
 import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from './lib/quote-progress.js';
 import { buildQuoteSummary } from './lib/quote-summary.js';
+import { getSantaCruzStatusView } from './lib/santacruz-status.js';
 
 // Browser mocks are available only through an explicit development opt-in.
 const mockApi = {
@@ -538,32 +539,6 @@ function getSupplierTone(source) {
   return tones[source] || 'default';
 }
 
-function getSantaCruzStatusLabel(status) {
-  const labels = {
-    checking: 'Verificando Santa Cruz',
-    preparing: 'Abrindo e preparando Santa Cruz',
-    ready: 'Santa Cruz pronta',
-    closed: 'Abra a Santa Cruz para cotar',
-    updating: 'Santa Cruz atualizando',
-    'login-required': 'Login da Santa Cruz identificado',
-    'logged-in-home': 'Santa Cruz aberta na tela inicial',
-    'logged-in-orders': 'Santa Cruz aberta em Pedidos',
-    'running-without-window': 'Santa Cruz sem janela acessível',
-    'not-installed': 'Santa Cruz não localizada',
-    'open-not-ready': 'Santa Cruz aberta, rota ainda não reconhecida',
-    'status-failed': 'Não foi possível verificar a Santa Cruz',
-    'prepare-failed': 'Não foi possível preparar a Santa Cruz'
-  };
-  return labels[status] || 'Estado da Santa Cruz';
-}
-
-function getSantaCruzStatusTone(status, ready) {
-  if (ready || status === 'ready') return 'success';
-  if (['checking', 'preparing', 'updating', 'login-required', 'logged-in-home', 'logged-in-orders'].includes(status)) return 'info';
-  if (['running-without-window', 'not-installed', 'status-failed', 'prepare-failed'].includes(status)) return 'danger';
-  return 'warning';
-}
-
 function SupplierProgressIcon({ status }) {
   if (status === 'searching' || status === 'stopping') {
     return <span className="supplier-progress-spinner" aria-hidden="true" />;
@@ -723,6 +698,8 @@ function App() {
   const reviewModalRef = useRef(null);
   const previousFocusRef = useRef(null);
   const santaCruzStatusRequestRef = useRef(null);
+  const santaCruzStatusRequestVersionRef = useRef(0);
+  const santaCruzPreparingRef = useRef(false);
 
   useEffect(() => {
     loadHistory();
@@ -891,7 +868,7 @@ function App() {
   };
 
   const loadSantaCruzStatus = async (showActivity = true) => {
-    if (!api.getSantaCruzStatus) return;
+    if (!api.getSantaCruzStatus || santaCruzPreparingRef.current) return;
     if (showActivity) setIsCheckingSantaCruz(true);
     if (santaCruzStatusRequestRef.current) {
       try {
@@ -902,35 +879,46 @@ function App() {
     }
 
     const statusRequest = api.getSantaCruzStatus();
+    const requestVersion = ++santaCruzStatusRequestVersionRef.current;
     santaCruzStatusRequestRef.current = statusRequest;
     try {
       const status = await statusRequest;
-      setSantaCruzStatus(status || {
-        status: 'status-failed',
-        reason: 'A Santa Cruz não informou o estado atual.',
-        ready: false,
-        requiresOperator: true,
-        canAutoPrepare: false
-      });
+      if (requestVersion === santaCruzStatusRequestVersionRef.current && !santaCruzPreparingRef.current) {
+        setSantaCruzStatus(status || {
+          status: 'status-failed',
+          reason: 'A Santa Cruz não informou o estado atual.',
+          ready: false,
+          requiresOperator: true,
+          canAutoPrepare: false
+        });
+      }
     } catch (error) {
       console.error('Failed to check Santa Cruz status:', error);
-      setSantaCruzStatus({
-        status: 'status-failed',
-        reason: 'Não foi possível verificar a Santa Cruz neste momento.',
-        ready: false,
-        requiresOperator: true,
-        canAutoPrepare: false
-      });
+      if (requestVersion === santaCruzStatusRequestVersionRef.current && !santaCruzPreparingRef.current) {
+        setSantaCruzStatus({
+          status: 'status-failed',
+          reason: 'Não foi possível verificar a Santa Cruz neste momento.',
+          ready: false,
+          requiresOperator: true,
+          canAutoPrepare: false
+        });
+      }
     } finally {
       if (santaCruzStatusRequestRef.current === statusRequest) {
         santaCruzStatusRequestRef.current = null;
       }
-      if (showActivity) setIsCheckingSantaCruz(false);
+      if (showActivity && requestVersion === santaCruzStatusRequestVersionRef.current) {
+        setIsCheckingSantaCruz(false);
+      }
     }
   };
 
   const handlePrepareSantaCruz = async () => {
-    if (!api.prepareSantaCruz || isPreparingSantaCruz) return;
+    if (!api.prepareSantaCruz || loading || isPreparingSantaCruz || santaCruzPreparingRef.current) return;
+    const requestVersion = ++santaCruzStatusRequestVersionRef.current;
+    santaCruzPreparingRef.current = true;
+    santaCruzStatusRequestRef.current = null;
+    setIsCheckingSantaCruz(false);
     setIsPreparingSantaCruz(true);
     setSantaCruzStatus(previous => ({
       ...previous,
@@ -940,18 +928,25 @@ function App() {
     }));
     try {
       const status = await api.prepareSantaCruz();
-      setSantaCruzStatus(status);
+      if (requestVersion === santaCruzStatusRequestVersionRef.current) {
+        setSantaCruzStatus(status);
+      }
     } catch (error) {
       console.error('Failed to prepare Santa Cruz:', error);
-      setSantaCruzStatus({
-        status: 'prepare-failed',
-        reason: 'Abra ou reinicie a Santa Cruz e tente preparar novamente.',
-        ready: false,
-        requiresOperator: true,
-        canAutoPrepare: true
-      });
+      if (requestVersion === santaCruzStatusRequestVersionRef.current) {
+        setSantaCruzStatus({
+          status: 'prepare-failed',
+          reason: 'Abra ou reinicie a Santa Cruz e tente preparar novamente.',
+          ready: false,
+          requiresOperator: true,
+          canAutoPrepare: true
+        });
+      }
     } finally {
-      setIsPreparingSantaCruz(false);
+      if (requestVersion === santaCruzStatusRequestVersionRef.current) {
+        santaCruzPreparingRef.current = false;
+        setIsPreparingSantaCruz(false);
+      }
     }
   };
 
@@ -986,7 +981,7 @@ function App() {
   };
 
   const handleRunQuote = async () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || loading || isPreparingSantaCruz || santaCruzPreparingRef.current) return;
     const lines = inputText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     if (lines.length === 0) return;
 
@@ -1300,6 +1295,10 @@ function App() {
     }
   };
   const updateStatusNotice = updateStatus ? updateStatusNotices[updateStatus.status] : null;
+  const santaCruzView = getSantaCruzStatusView(santaCruzStatus, {
+    isChecking: isCheckingSantaCruz,
+    isPreparing: isPreparingSantaCruz
+  });
 
   return (
     <div className={`app-container ${isHistoryOpen ? '' : 'history-collapsed'}`}>
@@ -1665,13 +1664,63 @@ function App() {
                   </label>
                 ))}
               </div>
+              {santaCruzSelected && (
+                <div
+                  className={`santacruz-readiness is-${santaCruzView.tone}`}
+                  role="status"
+                  aria-live="polite"
+                  aria-busy={santaCruzView.inProgress}
+                >
+                  <div className="santacruz-readiness__icon" aria-hidden="true">
+                    {santaCruzView.inProgress ? (
+                      <span className="supplier-progress-spinner" />
+                    ) : santaCruzView.ready ? (
+                      <CheckCircle2 size={20} />
+                    ) : (
+                      <CircleAlert size={20} />
+                    )}
+                  </div>
+                  <div className="santacruz-readiness__copy">
+                    <strong>{santaCruzView.label}</strong>
+                    <span>{santaCruzView.reason}</span>
+                    <small>{santaCruzView.hint}</small>
+                  </div>
+                  <div className="santacruz-readiness__actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-compact"
+                      onClick={() => loadSantaCruzStatus(true)}
+                      disabled={isCheckingSantaCruz || isPreparingSantaCruz}
+                      title="Verificar novamente o aplicativo Santa Cruz"
+                    >
+                      <RotateCcw size={14} aria-hidden="true" />
+                      Verificar
+                    </button>
+                    {!santaCruzStatus.ready && santaCruzStatus.canAutoPrepare && (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-compact"
+                        onClick={handlePrepareSantaCruz}
+                        disabled={isCheckingSantaCruz || isPreparingSantaCruz}
+                      >
+                        <PackageSearch size={14} aria-hidden="true" />
+                        {isPreparingSantaCruz ? 'Preparando...' : 'Preparar Santa Cruz'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="action-row">
               <button className="btn btn-secondary" onClick={handleClearInput} disabled={!inputText}>
                 <Trash2 size={16} aria-hidden="true" /> Limpar
               </button>
-              <button className="btn btn-primary" onClick={handleRunQuote} disabled={!inputText.trim()}>
+              <button
+                className="btn btn-primary"
+                onClick={handleRunQuote}
+                disabled={!inputText.trim() || loading || isPreparingSantaCruz}
+              >
                 <Search size={17} aria-hidden="true" /> Pesquisar preços
               </button>
             </div>

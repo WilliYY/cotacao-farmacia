@@ -2,6 +2,17 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.7.7] - 2026-07-28
+
+### Prontidão visível e concorrência da Santa Cruz
+- **Estado antes da cotação:** a tela inicial mostra se a Santa Cruz está pronta, verificando, preparando, atualizando, ocupada, sem responder ou bloqueada, incluindo o motivo técnico e as ações `Verificar` e `Preparar Santa Cruz`.
+- **Proteção contra concorrência:** a cotação não inicia enquanto o preparo controla a Santa Cruz; respostas antigas de verificações em andamento são descartadas para não sobrescrever o estado mais recente.
+- **Acessibilidade:** o painel anuncia atividade com `aria-busy`, usa rótulos explícitos para os estados finais do auxiliar e mantém contraste textual compatível com leitura operacional.
+- **Layout compacto:** o cartão da cotação não é mais comprimido abaixo de seu conteúdo. Em telas baixas ou estreitas, a área principal passa a rolar sem a barra de ações cobrir o estado da Santa Cruz.
+- **Validação:** 140 testes automatizados, build de produção, lint sem erros e inspeção visual em 1440x900, 1024x768, 768x900 e 320x900.
+
+---
+
 ## [1.7.6] - 2026-07-28
 
 ### Farmácia Popular, identidade e portabilidade

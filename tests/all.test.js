@@ -74,6 +74,11 @@ import { classifyDiagnosticResults, getDiagnosticTerms } from '../scripts/live-d
 import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from '../src/lib/quote-progress.js';
 import { createQuoteRunCoordinator } from '../src/lib/quote-run-coordinator.js';
 import { buildQuoteSummary } from '../src/lib/quote-summary.js';
+import {
+  getSantaCruzStatusLabel,
+  getSantaCruzStatusTone,
+  getSantaCruzStatusView
+} from '../src/lib/santacruz-status.js';
 
 process.env.ENABLE_REAL_CONNECTORS = 'false';
 process.env.ENABLE_MOCK_CONNECTORS = 'true';
@@ -678,6 +683,59 @@ test('ST Rules Engine', async (t) => {
 });
 
 test('Santa Cruz Portable Automation', async (t) => {
+  await t.test('maps every operational readiness state to an explicit label and tone', () => {
+    const expectedStates = {
+      ready: ['Santa Cruz pronta', 'success'],
+      checking: ['Verificando Santa Cruz', 'info'],
+      preparing: ['Abrindo e preparando Santa Cruz', 'info'],
+      updating: ['Santa Cruz atualizando', 'info'],
+      'login-required': ['Login da Santa Cruz identificado', 'info'],
+      busy: ['Santa Cruz ocupada com outra cotação', 'warning'],
+      closed: ['Abra a Santa Cruz para cotar', 'warning'],
+      'open-not-ready': ['Santa Cruz aberta, rota ainda não reconhecida', 'warning'],
+      'not-responding': ['Santa Cruz não está respondendo', 'danger'],
+      'launch-failed': ['Santa Cruz não abriu', 'danger'],
+      'search-control-not-found': ['Campo de pesquisa da Santa Cruz não localizado', 'danger'],
+      'automation-failed': ['Automação da Santa Cruz falhou', 'danger']
+    };
+
+    for (const [status, [label, tone]] of Object.entries(expectedStates)) {
+      assert.strictEqual(getSantaCruzStatusLabel(status), label);
+      assert.strictEqual(getSantaCruzStatusTone(status, status === 'ready'), tone);
+    }
+    assert.strictEqual(getSantaCruzStatusTone('checking', true), 'info');
+
+    const initialView = getSantaCruzStatusView({
+      status: 'checking',
+      reason: 'Verificando se a Santa Cruz está aberta e pronta.',
+      ready: false,
+      requiresOperator: false
+    });
+    assert.deepStrictEqual(
+      {
+        status: initialView.status,
+        tone: initialView.tone,
+        inProgress: initialView.inProgress,
+        ready: initialView.ready
+      },
+      { status: 'checking', tone: 'info', inProgress: true, ready: false }
+    );
+
+    const refreshingReadyView = getSantaCruzStatusView(
+      {
+        status: 'ready',
+        reason: 'Santa Cruz pronta',
+        ready: true,
+        requiresOperator: false
+      },
+      { isChecking: true }
+    );
+    assert.strictEqual(refreshingReadyView.status, 'checking');
+    assert.strictEqual(refreshingReadyView.inProgress, true);
+    assert.strictEqual(refreshingReadyView.ready, false);
+    assert.doesNotMatch(refreshingReadyView.hint, /reutilizará/);
+  });
+
   await t.test('serializes GUI commands so two quotations cannot control the same window', async () => {
     const events = [];
     let releaseFirst;
@@ -852,6 +910,7 @@ test('Santa Cruz Portable Automation', async (t) => {
     const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
     const builderConfig = JSON.parse(fs.readFileSync(new URL('../electron-builder.json', import.meta.url), 'utf8'));
     const appSource = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
+    const appStyles = fs.readFileSync(new URL('../src/index.css', import.meta.url), 'utf8');
     const scraperSource = fs.readFileSync(new URL('../src/lib/electron-scraper.js', import.meta.url), 'utf8');
 
     assert.match(script, /Add-Type -AssemblyName UIAutomationClient/);
@@ -902,6 +961,19 @@ test('Santa Cruz Portable Automation', async (t) => {
     }]);
     assert.match(appSource, /santaCruzStatusRequestRef/);
     assert.match(appSource, /setInterval\(\(\) => loadSantaCruzStatus\(false\), 30_000\)/);
+    assert.match(appSource, /className={`santacruz-readiness is-\${santaCruzView\.tone}`}/);
+    assert.ok(appSource.includes('<strong>{santaCruzView.label}</strong>'));
+    assert.match(appSource, /onClick={handlePrepareSantaCruz}/);
+    assert.ok(appSource.includes('aria-busy={santaCruzView.inProgress}'));
+    assert.ok(appSource.includes('santaCruzStatusRequestVersionRef.current'));
+    assert.ok(appSource.includes('santaCruzPreparingRef.current'));
+    assert.ok(appSource.includes('if (!inputText.trim() || loading || isPreparingSantaCruz || santaCruzPreparingRef.current) return;'));
+    assert.ok(appSource.includes('disabled={!inputText.trim() || loading || isPreparingSantaCruz}'));
+    assert.match(appStyles, /\.search-card\s*\{[^}]*flex-shrink:\s*0/s);
+    assert.match(
+      appStyles,
+      /@media \(max-width: 900px\)[\s\S]*?\.app-container\s*\{[^}]*height:\s*100vh;[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s
+    );
     assert.doesNotMatch(scraperSource, /resolve\(results\);\s*setTimeout\(cleanup,\s*2000\)/);
   });
 

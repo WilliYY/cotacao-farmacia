@@ -480,6 +480,7 @@ select:focus-visible {
 
 .search-card {
   position: relative;
+  flex-shrink: 0;
   overflow: hidden;
   width: 100%;
   max-width: 1280px;
@@ -966,7 +967,8 @@ textarea.search-textarea {
 }
 
 .santacruz-readiness__copy small {
-  color: #71848e;
+  color: currentColor;
+  opacity: 1;
 }
 
 .santacruz-readiness__actions {
@@ -2345,8 +2347,8 @@ textarea.search-textarea {
     display: flex;
     flex-direction: column;
     width: 100%;
-    min-height: 100vh;
-    height: auto;
+    height: 100vh;
+    min-height: 0;
     overflow-y: auto;
   }
 
