@@ -2,6 +2,16 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.1] - 2026-07-28
+
+### Resultado da cotação modernizado
+- **Leitura operacional mais rápida:** cabeçalho, cobertura, indicadores e estados da cotação ganharam hierarquia visual clara sem alterar os cálculos ou a origem dos preços.
+- **Recomendações mais verificáveis:** melhor opção e segunda opção mantêm visíveis a distribuidora, o campo oficial de preço, custo por unidade, embalagem, EAN e estoque.
+- **Comparação de embalagens reorganizada:** as opções de 30, 60 e 90 unidades usam o custo unitário como referência e distinguem com clareza o preço final da embalagem.
+- **Detalhamento responsivo:** filtros e ofertas capturadas foram agrupados em uma seção própria; no celular, cada linha continua legível sem rolagem horizontal.
+- **Acabamento textual:** contagens de ofertas e fontes respeitam singular e plural.
+- **Validação:** cotação simulada com três medicamentos foi conferida em `1648x956` e `390x844`, incluindo comparação expandida e tabela responsiva, sem overflow ou erros no console. A suíte completa passou com 150 testes; lint terminou com 0 erros e 23 avisos preexistentes; build de produção concluído.
+
 ## [1.8.0] - 2026-07-28
 
 ### Barra lateral operacional renovada

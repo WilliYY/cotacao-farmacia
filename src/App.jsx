@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   CircleX,
   Clock3,
@@ -1798,41 +1799,65 @@ function App() {
           /* Results Dashboard View */
           <div className="results-view animate-fade-in">
             <header className="results-header">
-              <div className="results-title-group">
-                <span className="eyebrow">Resultado consolidado e auditado</span>
-                <h2>Cotação #{activeQuote.id}</h2>
-                <div className="results-meta">
-                  Realizada em: {new Date(activeQuote.createdAt).toLocaleString('pt-BR')}
+              <div className="results-header-main">
+                <div className="results-title-group">
+                  <span className="eyebrow">Resultado consolidado e auditado</span>
+                  <div className="results-title-row">
+                    <h2>Cotação #{activeQuote.id}</h2>
+                    <span
+                      className={`results-status-dot ${
+                        activeQuote.status === 'cancelled'
+                          ? 'is-danger'
+                          : activeQuote.status === 'completed_with_timeout' || metrics.failedItems > 0
+                            ? 'is-warning'
+                            : 'is-success'
+                      }`}
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <div className="results-meta">
+                    Realizada em {new Date(activeQuote.createdAt).toLocaleString('pt-BR')}
+                  </div>
                 </div>
-                <div className="results-health" aria-label="Resumo rápido da cotação">
-                  <span className={activeQuote.status === 'completed_with_timeout' || activeQuote.status === 'cancelled' || metrics.failedItems > 0 ? 'is-warning' : 'is-success'}>
-                    {activeQuote.status === 'completed_with_timeout' || activeQuote.status === 'cancelled' || metrics.failedItems > 0 ? <CircleAlert size={14} /> : <CheckCircle2 size={14} />}
-                    {activeQuote.status === 'cancelled'
-                      ? 'Cotação cancelada'
-                      : activeQuote.status === 'completed_with_timeout'
-                      ? 'Concluída com resultado parcial'
-                      : metrics.failedItems > 0
-                        ? 'Concluída com pendências'
-                        : 'Concluída e conferida'}
-                  </span>
-                  <span><ShieldCheck size={14} /> {metrics.coverage}% dos itens com opção válida</span>
-                  <span><PackageSearch size={14} /> {metrics.offers} ofertas em {metrics.sources} fontes com preço</span>
+
+                <div className="results-header-side">
+                  <div className="results-coverage" aria-label={`${metrics.coverage}% de cobertura válida`}>
+                    <div className="results-coverage__value">
+                      <strong>{metrics.coverage}%</strong>
+                      <span>cobertura válida</span>
+                    </div>
+                    <div className="results-coverage__track" aria-hidden="true">
+                      <span style={{ width: `${metrics.coverage}%` }} />
+                    </div>
+                  </div>
+                  <div className="results-actions">
+                    <button className="btn btn-secondary" onClick={handleNewQuoteClick}>
+                      <Plus size={16} aria-hidden="true" /> Nova Cotação
+                    </button>
+                    <button className="btn btn-success" onClick={handleExportExcel}>
+                      <FileSpreadsheet size={17} aria-hidden="true" /> Exportar XLSX
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <div className="results-header-side">
-                <div className="results-coverage" aria-label={`${metrics.coverage}% de cobertura`}>
-                  <strong>{metrics.coverage}%</strong>
-                  <span>cobertura válida</span>
-                </div>
-                <div className="results-actions">
-                  <button className="btn btn-secondary" onClick={handleNewQuoteClick}>
-                    <Plus size={16} aria-hidden="true" /> Nova Cotação
-                  </button>
-                  <button className="btn btn-success" onClick={handleExportExcel}>
-                    <FileSpreadsheet size={17} aria-hidden="true" /> Exportar XLSX
-                  </button>
-                </div>
+              <div className="results-health" aria-label="Resumo rápido da cotação">
+                <span className={activeQuote.status === 'completed_with_timeout' || activeQuote.status === 'cancelled' || metrics.failedItems > 0 ? 'is-warning' : 'is-success'}>
+                  {activeQuote.status === 'completed_with_timeout' || activeQuote.status === 'cancelled' || metrics.failedItems > 0 ? <CircleAlert size={14} /> : <CheckCircle2 size={14} />}
+                  {activeQuote.status === 'cancelled'
+                    ? 'Cotação cancelada'
+                    : activeQuote.status === 'completed_with_timeout'
+                    ? 'Concluída com resultado parcial'
+                    : metrics.failedItems > 0
+                      ? 'Concluída com pendências'
+                      : 'Concluída e conferida'}
+                </span>
+                <span><ShieldCheck size={14} /> {metrics.coverage}% dos itens com opção válida</span>
+                <span>
+                  <PackageSearch size={14} />
+                  {metrics.offers} {metrics.offers === 1 ? 'oferta' : 'ofertas'} em {metrics.sources}{' '}
+                  {metrics.sources === 1 ? 'fonte' : 'fontes'} com preço
+                </span>
               </div>
             </header>
 
@@ -1856,7 +1881,7 @@ function App() {
             )}
 
             {/* Metrics Dashboard Cards */}
-            <div className="metrics-grid">
+            <section className="metrics-grid" aria-label="Indicadores da cotação">
               <div className="metric-card metric-neutral">
                 <div className="metric-icon"><PackageSearch size={17} aria-hidden="true" /></div>
                 <div><span>Itens pesquisados</span><strong>{metrics.total}</strong><small>{metrics.offers} ofertas capturadas</small></div>
@@ -1877,7 +1902,7 @@ function App() {
                 <div className="metric-icon"><TrendingDown size={17} aria-hidden="true" /></div>
                 <div><span>Economia comparável</span><strong>{metrics.comparableSavingsItems > 0 ? formatCurrency(metrics.savings) : 'Não aplicável'}</strong><small>{metrics.comparableSavingsItems} embalagens equivalentes</small></div>
               </div>
-            </div>
+            </section>
 
             {activeQuote.items?.some(item => item.correctionMessage || item.status !== 'completed') && (
               <section className="interpretation-panel" aria-labelledby="interpretation-title">
@@ -1935,18 +1960,24 @@ function App() {
                       {hasResult ? (
                         <>
                           <div className="recommendation-card__topline">
-                            <span className="recommendation-badge is-best"><CheckCircle2 size={13} /> Item #{index + 1} - Melhor opção com ST</span>
+                            <div className="recommendation-status">
+                              <span className="recommendation-index">Item {String(index + 1).padStart(2, '0')}</span>
+                              <span className="recommendation-badge is-best"><CheckCircle2 size={13} /> Melhor opção com ST</span>
+                            </div>
                             <span className={`supplier-chip is-${getSupplierTone(best.source)}`}>{best.source}</span>
                           </div>
-                          <div className="rec-search-name">Solicitado: “{rawText}”</div>
+                          <div className="rec-search-name">
+                            <span>Solicitado</span>
+                            <strong>“{rawText}”</strong>
+                          </div>
                           <div className="rec-product-title">{best.supplierProductName}</div>
 
                           <div className="recommendation-price-block">
-                            <div>
+                            <div className="recommendation-final-price">
                               <span>{getPriceSourceLabel(best)}</span>
                               <strong>{formatCurrency(best.price)}</strong>
                             </div>
-                            <div>
+                            <div className="recommendation-unit-price">
                               <span>Custo por unidade</span>
                               <strong>{formatCurrency(getDisplayUnitPrice(best))}</strong>
                             </div>
@@ -1960,20 +1991,30 @@ function App() {
 
                           {second && (
                             <div className="recommendation-second">
-                              <span>2ª opção</span>
-                              <strong>{second.source}</strong>
-                              <span>{formatCurrency(second.price)}</span>
-                              <small>{second.packaging || `${second.quantity || 1} unidades`} · {getPriceSourceLabel(second)}</small>
+                              <div className="recommendation-second__label">
+                                <span>2ª opção</span>
+                                <strong>{second.source}</strong>
+                              </div>
+                              <div className="recommendation-second__value">
+                                <strong>{formatCurrency(second.price)}</strong>
+                                <small>{second.packaging || `${second.quantity || 1} unidades`} · {getPriceSourceLabel(second)}</small>
+                              </div>
                             </div>
                           )}
                         </>
                       ) : (
                         <>
                           <div className="recommendation-card__topline">
-                            <span className="recommendation-badge is-warning"><CircleAlert size={13} /> Item #{index + 1} - Indisponível</span>
+                            <div className="recommendation-status">
+                              <span className="recommendation-index">Item {String(index + 1).padStart(2, '0')}</span>
+                              <span className="recommendation-badge is-warning"><CircleAlert size={13} /> Indisponível</span>
+                            </div>
                           </div>
-                          <div className="rec-search-name">Solicitado: “{rawText}”</div>
-                          <div className="rec-product-title" style={{ color: '#f87171', fontWeight: 650, marginTop: '0.5rem', fontSize: '0.9rem' }}>
+                          <div className="rec-search-name">
+                            <span>Solicitado</span>
+                            <strong>“{rawText}”</strong>
+                          </div>
+                          <div className="recommendation-empty-message">
                             Não Disponível nas distribuidoras pesquisadas.
                           </div>
                         </>
@@ -1988,30 +2029,21 @@ function App() {
             {hasSolidPackageOptions && (
               <details className="comparison-disclosure">
                 <summary>
-                  <span><PackageSearch size={17} aria-hidden="true" /> Comparar embalagens sólidas</span>
-                  <small>30, 60 e 90 unidades</small>
+                  <span className="comparison-summary-main">
+                    <span className="comparison-summary-icon" aria-hidden="true"><PackageSearch size={17} /></span>
+                    <span className="comparison-summary-copy">
+                      <strong>Comparar embalagens sólidas</strong>
+                      <small>30, 60 e 90 unidades</small>
+                    </span>
+                  </span>
+                  <ChevronDown className="comparison-chevron" size={18} aria-hidden="true" />
                 </summary>
-              <div className="comparison-panel" style={{
-                marginBottom: '2rem',
-                padding: '1.5rem',
-                background: 'rgba(30, 41, 59, 0.4)',
-                border: '1px solid rgba(255, 255, 255, 0.06)',
-                borderRadius: '16px',
-                backdropFilter: 'blur(20px)'
-              }}>
-                <h3 style={{
-                  fontSize: '1.1rem',
-                  fontWeight: 800,
-                  marginBottom: '1.25rem',
-                  color: '#fff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}>
+              <div className="comparison-panel">
+                <h3 className="comparison-panel-title">
                   <ShieldCheck size={18} aria-hidden="true" /> Comparativo e validação de embalagens
                 </h3>
                 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div className="comparison-list">
                   {activeQuote.items.map((item, idx) => {
                     const valid = (item.results || []).filter(r => {
                       const presentation = String(r.presentation || '').toLowerCase();
@@ -2034,104 +2066,50 @@ function App() {
                     const absBest = [...valid].sort((a, b) => getDisplayUnitPrice(a) - getDisplayUnitPrice(b))[0];
 
                     return (
-                      <div key={idx} style={{
-                        padding: '1rem',
-                        background: 'rgba(255, 255, 255, 0.02)',
-                        border: '1px solid rgba(255, 255, 255, 0.04)',
-                        borderRadius: '12px'
-                      }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                          <span style={{ fontSize: '0.9rem', fontWeight: 750, color: '#f8fafc' }}>
-                            Busca: <span style={{ color: '#06b6d4' }}>"{item.rawText}"</span>
+                      <div key={idx} className="comparison-item">
+                        <div className="comparison-item-header">
+                          <span className="comparison-query">
+                            Busca: <strong>"{item.rawText}"</strong>
                           </span>
                            {absBest && (
-                            <span style={{
-                              fontSize: '0.75rem',
-                              padding: '0.25rem 0.5rem',
-                              borderRadius: '6px',
-                              background: 'rgba(16, 185, 129, 0.15)',
-                              color: '#10b981',
-                              fontWeight: 650,
-                              border: '1px solid rgba(16, 185, 129, 0.25)'
-                            }}>
-                              Melhor preço: R$ {absBest.price.toFixed(2).replace('.', ',')} ({absBest.source})
+                            <span className="comparison-best">
+                              Melhor custo/un: {formatCurrency(getDisplayUnitPrice(absBest))} ({absBest.source})
                             </span>
                           )}
                         </div>
 
-                        <div style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                          gap: '1rem'
-                        }}>
-                          {/* 30 Comp Card */}
-                          <div style={{
-                            padding: '0.75rem',
-                            background: 'rgba(15, 23, 42, 0.5)',
-                            borderRadius: '8px',
-                            border: '1px solid ' + (absBest && best30 && absBest.ean === best30.ean ? 'rgba(6, 182, 212, 0.3)' : 'rgba(255, 255, 255, 0.02)')
-                          }}>
-                            <div style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Embalagem c/ 30 (20-40 cp)</div>
-                            {best30 ? (
-                              <div style={{ marginTop: '0.25rem' }}>
-                                <div style={{ fontSize: '0.75rem', fontWeight: 650, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={best30.supplierProductName}>
-                                  {best30.supplierProductName}
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem', fontSize: '0.75rem', alignItems: 'center' }}>
-                                  <span style={{ color: '#10b981', fontWeight: 700 }}>R$ {best30.price.toFixed(2).replace('.', ',')}</span>
-                                  <span style={{ color: '#64748b', fontSize: '0.7rem' }}>({best30.source})</span>
-                                </div>
+                        <div className="comparison-package-grid">
+                          {[
+                            { label: 'Embalagem c/ 30', range: '20-40 cp', result: best30 },
+                            { label: 'Embalagem c/ 60', range: '45-75 cp', result: best60 },
+                            { label: 'Embalagem c/ 90', range: '80-120 cp', result: best90 }
+                          ].map(({ label, range, result }) => (
+                            <div
+                              key={label}
+                              className={`comparison-package-option ${
+                                absBest && result && absBest.ean === result.ean ? 'is-best' : ''
+                              }`}
+                            >
+                              <div className="comparison-package-label">
+                                <span>{label}</span>
+                                <small>{range}</small>
                               </div>
-                            ) : (
-                              <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem' }}>Não encontrado</div>
-                            )}
-                          </div>
-
-                          {/* 60 Comp Card */}
-                          <div style={{
-                            padding: '0.75rem',
-                            background: 'rgba(15, 23, 42, 0.5)',
-                            borderRadius: '8px',
-                            border: '1px solid ' + (absBest && best60 && absBest.ean === best60.ean ? 'rgba(6, 182, 212, 0.3)' : 'rgba(255, 255, 255, 0.02)')
-                          }}>
-                            <div style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Embalagem c/ 60 (45-75 cp)</div>
-                            {best60 ? (
-                              <div style={{ marginTop: '0.25rem' }}>
-                                <div style={{ fontSize: '0.75rem', fontWeight: 650, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={best60.supplierProductName}>
-                                  {best60.supplierProductName}
+                              {result ? (
+                                <div className="comparison-package-result">
+                                  <div className="comparison-package-name" title={result.supplierProductName}>
+                                    {result.supplierProductName}
+                                  </div>
+                                  <div className="comparison-package-values">
+                                    <strong>{formatCurrency(result.price)}</strong>
+                                    <span>{result.source}</span>
+                                  </div>
+                                  <small>{formatCurrency(getDisplayUnitPrice(result))} por unidade</small>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem', fontSize: '0.75rem', alignItems: 'center' }}>
-                                  <span style={{ color: '#10b981', fontWeight: 700 }}>R$ {best60.price.toFixed(2).replace('.', ',')}</span>
-                                  <span style={{ color: '#64748b', fontSize: '0.7rem' }}>({best60.source})</span>
-                                </div>
-                              </div>
-                            ) : (
-                              <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem' }}>Não encontrado</div>
-                            )}
-                          </div>
-
-                          {/* 90 Comp Card */}
-                          <div style={{
-                            padding: '0.75rem',
-                            background: 'rgba(15, 23, 42, 0.5)',
-                            borderRadius: '8px',
-                            border: '1px solid ' + (absBest && best90 && absBest.ean === best90.ean ? 'rgba(6, 182, 212, 0.3)' : 'rgba(255, 255, 255, 0.02)')
-                          }}>
-                            <div style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Embalagem c/ 90 (80-120 cp)</div>
-                            {best90 ? (
-                              <div style={{ marginTop: '0.25rem' }}>
-                                <div style={{ fontSize: '0.75rem', fontWeight: 650, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={best90.supplierProductName}>
-                                  {best90.supplierProductName}
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem', fontSize: '0.75rem', alignItems: 'center' }}>
-                                  <span style={{ color: '#10b981', fontWeight: 700 }}>R$ {best90.price.toFixed(2).replace('.', ',')}</span>
-                                  <span style={{ color: '#64748b', fontSize: '0.7rem' }}>({best90.source})</span>
-                                </div>
-                              </div>
-                            ) : (
-                              <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.25rem' }}>Não encontrado</div>
-                            )}
-                          </div>
+                              ) : (
+                                <div className="comparison-package-empty">Não encontrado</div>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       </div>
                     );
@@ -2143,49 +2121,38 @@ function App() {
 
             {/* Vague Description warnings block */}
             {activeQuote.items && activeQuote.items.some(item => item.confidenceStatus === 'DESCRICAO_INSUFICIENTE') && (
-              <div className="vague-warnings-panel" style={{
-                marginBottom: '2rem',
-                padding: '1.25rem',
-                background: 'rgba(217, 119, 6, 0.08)',
-                border: '1px solid rgba(217, 119, 6, 0.25)',
-                borderRadius: '12px'
-              }}>
-                <h4 style={{
-                  color: '#fbbf24',
-                  fontSize: '0.95rem',
-                  fontWeight: 800,
-                  margin: 0,
-                  marginBottom: '0.75rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}>
+              <div className="vague-warnings-panel">
+                <h4>
                   <CircleAlert size={18} aria-hidden="true" /> Itens com descrição insuficiente
                 </h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div className="vague-warnings-list">
                   {activeQuote.items
                     .filter(item => item.confidenceStatus === 'DESCRICAO_INSUFICIENTE')
                     .map((item, idx) => (
-                      <div key={idx} style={{
-                        fontSize: '0.8rem',
-                        color: '#f8fafc',
-                        padding: '0.5rem 0.75rem',
-                        background: 'rgba(0, 0, 0, 0.2)',
-                        borderRadius: '6px',
-                        borderLeft: '4px solid #d97706'
-                      }}>
-                        <strong>"{item.rawText}"</strong>: <span style={{ color: '#cbd5e1' }}>{item.refinementSuggestion || 'Especifique melhor a descrição do produto (marca, dosagem, etc.) para cotar.'}</span>
+                      <div key={idx} className="vague-warning-item">
+                        <strong>"{item.rawText}"</strong>: <span>{item.refinementSuggestion || 'Especifique melhor a descrição do produto (marca, dosagem, etc.) para cotar.'}</span>
                       </div>
                     ))}
                 </div>
               </div>
             )}
 
-            {/* Filters panel */}
-            <div className="filters-bar">
+            <section className="offers-section" aria-labelledby="offers-title">
+              <div className="offers-heading">
+                <div>
+                  <span className="eyebrow">Detalhamento da cotação</span>
+                  <h3 id="offers-title">Todas as ofertas capturadas</h3>
+                </div>
+                <span className="offers-count">
+                  {filteredRows.length} {filteredRows.length === 1 ? 'linha exibida' : 'linhas exibidas'}
+                </span>
+              </div>
+
+              {/* Filters panel */}
+              <div className="filters-bar">
               <div className="filter-group">
                 <span className="filter-label">Filtros ST:</span>
-                <label className="supplier-label" style={{ fontSize: '0.8rem' }}>
+                <label className="supplier-label">
                   <input
                     type="checkbox"
                     checked={filterOnlyST}
@@ -2202,7 +2169,7 @@ function App() {
                 
                 {!filterOnlyST && (
                   <>
-                    <label className="supplier-label" style={{ fontSize: '0.8rem' }}>
+                    <label className="supplier-label">
                       <input
                         type="checkbox"
                         checked={filterShowIgnored}
@@ -2211,7 +2178,7 @@ function App() {
                       Mostrar sem ST
                     </label>
 
-                    <label className="supplier-label" style={{ fontSize: '0.8rem' }}>
+                    <label className="supplier-label">
                       <input
                         type="checkbox"
                         checked={filterShowUnknown}
@@ -2223,20 +2190,12 @@ function App() {
                 )}
               </div>
 
-              <div className="filter-group" style={{ marginLeft: 'auto' }}>
+              <div className="filter-group filter-group--supplier">
                 <span className="filter-label">Distribuidora:</span>
                 <select
                   className="filter-select"
                   value={filterSupplier}
                   onChange={(e) => setFilterSupplier(e.target.value)}
-                  style={{
-                    background: '#0f172a',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    color: '#fff',
-                    padding: '0.35rem 0.75rem',
-                    borderRadius: '6px',
-                    fontSize: '0.85rem'
-                  }}
                 >
                   <option value="All">Todos</option>
                   <option value="ANB">ANB</option>
@@ -2245,16 +2204,16 @@ function App() {
                   <option value="DM Paraná">DM Paraná</option>
                 </select>
               </div>
-            </div>
-
-            {/* Results Table */}
-            {filteredRows.length === 0 ? (
-              <div className="alert-empty" style={{ borderRadius: '10px' }}>
-                Nenhum produto correspondente aos filtros de visualização ativos.
               </div>
-            ) : (
-              <div className="table-container">
-                <table className="quote-table">
+
+              {/* Results Table */}
+              {filteredRows.length === 0 ? (
+                <div className="alert-empty">
+                  Nenhum produto correspondente aos filtros de visualização ativos.
+                </div>
+              ) : (
+                <div className="table-container">
+                  <table className="quote-table">
                   <thead>
                     <tr>
                       <th>Busca</th>
@@ -2365,9 +2324,10 @@ function App() {
                       );
                     })}
                   </tbody>
-                </table>
-              </div>
-            )}
+                  </table>
+                </div>
+              )}
+            </section>
           </div>
         )}
       </main>
