@@ -28,6 +28,7 @@ import { analyzeQuoteBatch, INPUT_STATUS } from './lib/search-intelligence.js';
 import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from './lib/quote-progress.js';
 import { buildQuoteSummary } from './lib/quote-summary.js';
 import { getSantaCruzStatusView } from './lib/santacruz-status.js';
+import { completeBrowserMockResults } from './lib/browser-mock.js';
 
 // Browser mocks are available only through an explicit development opt-in.
 const mockApi = {
@@ -284,6 +285,14 @@ const mockApi = {
         );
       }
 
+      const completedResults = completeBrowserMockResults(results, activeSuppliers, {
+        itemIndex: idx,
+        rawText,
+        name,
+        dosage,
+        presentation
+      });
+
       return {
         id: idx + 1,
         rawText,
@@ -291,7 +300,7 @@ const mockApi = {
         dosage,
         presentation,
         status: 'completed',
-        results
+        results: completedResults
       };
     });
 

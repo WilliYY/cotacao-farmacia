@@ -86,6 +86,7 @@ import { classifyDiagnosticResults, getDiagnosticTerms } from '../scripts/live-d
 import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from '../src/lib/quote-progress.js';
 import { createQuoteRunCoordinator } from '../src/lib/quote-run-coordinator.js';
 import { buildQuoteSummary } from '../src/lib/quote-summary.js';
+import { completeBrowserMockResults } from '../src/lib/browser-mock.js';
 import {
   getSantaCruzStatusLabel,
   getSantaCruzStatusTone,
@@ -1411,6 +1412,106 @@ test('ANB product grid contract', async (t) => {
       { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: null }
     ], 'metformina 500mg');
     assert.strictEqual(nameSearch[0].ean, null);
+  });
+});
+
+test('Browser mock supplier coverage', async (t) => {
+  await t.test('includes DM Parana with its authoritative price label', () => {
+    const results = completeBrowserMockResults(
+      [
+        {
+          id: 1,
+          quoteItemId: 1,
+          supplierProductName: 'Losartana Potassica 50mg 30 comprimidos',
+          laboratory: 'Medley',
+          dosage: '50mg',
+          presentation: 'comprimido',
+          packaging: '30 comprimidos',
+          quantity: 30,
+          price: 9,
+          unitPrice: 0.3,
+          hasST: 1,
+          stStatus: 'COM_ST',
+          availability: 'disponível',
+          isValidOption: 1,
+          source: 'ANB',
+          supplierName: 'ANB',
+          ean: '7896004719047'
+        }
+      ],
+      ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'],
+      {
+        itemIndex: 0,
+        rawText: 'losartana 50mg',
+        name: 'losartana',
+        dosage: '50mg',
+        presentation: 'comprimido',
+        capturedAt: '2026-07-29T10:00:00.000Z'
+      }
+    );
+
+    assert.deepStrictEqual(
+      [...new Set(results.map(result => result.source))],
+      ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná']
+    );
+    const dmResult = results.find(result => result.source === 'DM Paraná');
+    assert.strictEqual(dmResult.priceSourceLabel, 'Preço final: R$');
+    assert.strictEqual(dmResult.isValidOption, 1);
+    assert.strictEqual(dmResult.availability, 'disponível');
+  });
+
+  await t.test('returns only the suppliers selected for the visual test', () => {
+    const results = completeBrowserMockResults(
+      [
+        {
+          supplierProductName: 'Metformina 500mg 30 comprimidos',
+          dosage: '500mg',
+          presentation: 'comprimido',
+          packaging: '30 comprimidos',
+          quantity: 30,
+          price: 5.4,
+          unitPrice: 0.18,
+          hasST: 1,
+          stStatus: 'COM_ST',
+          availability: 'disponível',
+          isValidOption: 1,
+          source: 'ANB',
+          supplierName: 'ANB'
+        }
+      ],
+      ['DM Paraná'],
+      {
+        itemIndex: 0,
+        rawText: 'metformina 500mg',
+        name: 'metformina',
+        dosage: '500mg',
+        presentation: 'comprimido',
+        capturedAt: '2026-07-29T10:00:00.000Z'
+      }
+    );
+
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0].source, 'DM Paraná');
+    assert.strictEqual(results[0].priceSourceLabel, 'Preço final: R$');
+  });
+
+  await t.test('does not invent offers when every supplier is unselected', () => {
+    const results = completeBrowserMockResults(
+      [
+        {
+          source: 'ANB',
+          supplierName: 'ANB',
+          supplierProductName: 'Losartana Potassica 50mg 30 comprimidos',
+          price: 9,
+          quantity: 30,
+          isValidOption: 1
+        }
+      ],
+      [],
+      { itemIndex: 0 }
+    );
+
+    assert.deepStrictEqual(results, []);
   });
 });
 

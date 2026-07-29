@@ -2,6 +2,17 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.2] - 2026-07-29
+
+### DM Paraná visível nos testes do frontend
+- **Causa identificada:** o teste visual fora do Electron gerava ofertas apenas para algumas fontes fixas e ignorava a lista de distribuidoras selecionadas, fazendo a DM parecer indisponível mesmo com o conector real funcionando.
+- **Simulação fiel às fontes:** o modo visual agora inclui somente as distribuidoras selecionadas, garante cobertura das quatro fontes e preserva os rótulos oficiais `Unit c/ST`, `Preço Final`, `Preço NF` e `Preço final: R$`.
+- **Separação segura:** valores simulados continuam restritos ao opt-in `VITE_ENABLE_UI_MOCKS=true`; a cotação real, o ranking e os conectores de produção não foram alterados.
+- **Teste ao vivo da DM:** em 29/07/2026, a consulta isolada retornou opções válidas para losartana 50 mg, hidroclorotiazida 25 mg e metformina 500 mg. Os menores `Preço final: R$` capturados foram `R$ 2,66`, `R$ 1,50` e `R$ 3,88`, respectivamente.
+- **Regressão automatizada:** novos testes exigem a presença da DM e o rótulo oficial de preço no simulador, além de confirmar que fontes desmarcadas não aparecem.
+- **Portabilidade preservada:** os testes do bootstrap continuam aprovando atualização automática em clone Git limpo e rastreado; a entrega permanece pelo `wimi cotacao.bat`.
+- **Validação geral:** 154 testes aprovados, lint com 0 erros e 22 avisos preexistentes, build de produção concluído e inspeção visual com 13 ofertas nas quatro fontes sem erros no console.
+
 ## [1.8.1] - 2026-07-28
 
 ### Resultado da cotação modernizado
