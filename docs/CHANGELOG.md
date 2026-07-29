@@ -2,6 +2,16 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.4] - 2026-07-29
+
+### Distribuidoras selecionadas por cotação
+- **Padrão seguro:** ANB, Profarma, Santa Cruz e DM Paraná agora começam desmarcadas na abertura da tela.
+- **Nova cotação limpa:** ao clicar em `Nova Cotação`, a seleção anterior não é reaproveitada; o operador escolhe novamente somente as fontes desejadas.
+- **Pesquisa protegida:** o botão `Pesquisar preços` permanece desabilitado e o manipulador interrompe a execução enquanto nenhuma distribuidora estiver selecionada.
+- **Interface clara:** o cabeçalho mostra `0 de 4 distribuidoras` e orienta a selecionar ao menos uma fonte antes da pesquisa.
+- **Regressão automatizada:** o teste cobre o estado inicial vazio, a lista de escolhas explícitas, o reset e a trava da interface.
+- **Validação geral:** 156 testes aprovados, lint com 0 erros e 22 avisos preexistentes, build de produção concluído e inspeção visual em `1427x900` e `390x844` sem erros no console ou rolagem horizontal.
+
 ## [1.8.3] - 2026-07-29
 
 ### Busca resiliente e dose exata na Santa Cruz

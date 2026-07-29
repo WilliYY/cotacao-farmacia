@@ -29,6 +29,11 @@ import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgres
 import { buildQuoteSummary } from './lib/quote-summary.js';
 import { getSantaCruzStatusView } from './lib/santacruz-status.js';
 import { completeBrowserMockResults } from './lib/browser-mock.js';
+import {
+  SUPPLIER_NAMES,
+  createDeselectedSupplierSelection,
+  listSelectedSuppliers
+} from './lib/supplier-selection.js';
 
 // Browser mocks are available only through an explicit development opt-in.
 const mockApi = {
@@ -709,12 +714,7 @@ function App() {
   const [isPreparingSantaCruz, setIsPreparingSantaCruz] = useState(false);
 
   // Suppliers selection
-  const [selectedSuppliers, setSelectedSuppliers] = useState({
-    ANB: true,
-    Profarma: true,
-    'Santa Cruz': true,
-    'DM Paraná': true
-  });
+  const [selectedSuppliers, setSelectedSuppliers] = useState(createDeselectedSupplierSelection);
   const santaCruzSelected = selectedSuppliers['Santa Cruz'];
 
   // Table filters
@@ -1026,7 +1026,9 @@ function App() {
     const lines = inputText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     if (lines.length === 0) return;
 
-    const activeList = Object.keys(selectedSuppliers).filter(k => selectedSuppliers[k]);
+    const activeList = listSelectedSuppliers(selectedSuppliers);
+    if (activeList.length === 0) return;
+
     const plannedSearches = analyzeQuoteBatch(lines);
     const startedAt = Date.now();
     setQuoteProgress(createInitialQuoteProgress(plannedSearches.length, activeList));
@@ -1084,6 +1086,7 @@ function App() {
     setActiveQuote(null);
     setSelectedQuoteId(null);
     setIsSettingsOpen(false);
+    setSelectedSuppliers(createDeselectedSupplierSelection());
   };
 
   const handleClearInput = () => {
@@ -1300,7 +1303,7 @@ function App() {
   const inputAnalysis = analyzeQuoteBatch(rawInputLines);
   const inputItemCount = inputAnalysis.length;
   const inputNeedsInfo = inputAnalysis.filter(plan => plan.status === INPUT_STATUS.NEEDS_INFO).length;
-  const selectedSupplierCount = Object.values(selectedSuppliers).filter(Boolean).length;
+  const selectedSupplierCount = listSelectedSuppliers(selectedSuppliers).length;
   const updateStatusNotices = {
     updated: {
       type: 'success',
@@ -1728,10 +1731,14 @@ function App() {
             <div className="supplier-section">
               <div className="field-heading">
                 <span>Distribuidoras consultadas</span>
-                <span>Selecione as fontes desta cotação</span>
+                <span>
+                  {selectedSupplierCount === 0
+                    ? 'Selecione ao menos uma fonte'
+                    : `${selectedSupplierCount} ${selectedSupplierCount === 1 ? 'selecionada' : 'selecionadas'}`}
+                </span>
               </div>
               <div className="suppliers-checkboxes" role="group" aria-label="Distribuidoras consultadas">
-                {['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'].map(sup => (
+                {SUPPLIER_NAMES.map(sup => (
                   <label key={sup} className="supplier-label">
                     <input
                       type="checkbox"
@@ -1798,7 +1805,8 @@ function App() {
               <button
                 className="btn btn-primary"
                 onClick={handleRunQuote}
-                disabled={!inputText.trim() || loading || isPreparingSantaCruz}
+                disabled={!inputText.trim() || selectedSupplierCount === 0 || loading || isPreparingSantaCruz}
+                title={selectedSupplierCount === 0 ? 'Selecione ao menos uma distribuidora' : 'Pesquisar preços'}
               >
                 <Search size={17} aria-hidden="true" /> Pesquisar preços
               </button>

@@ -93,11 +93,29 @@ import {
   getSantaCruzStatusTone,
   getSantaCruzStatusView
 } from '../src/lib/santacruz-status.js';
+import {
+  SUPPLIER_NAMES,
+  createDeselectedSupplierSelection,
+  listSelectedSuppliers
+} from '../src/lib/supplier-selection.js';
 
 process.env.ENABLE_REAL_CONNECTORS = 'false';
 process.env.ENABLE_MOCK_CONNECTORS = 'true';
 process.env.DATABASE_PATH = '';
 process.env.DB_TYPE = 'sqlite';
+
+test('Supplier selection - starts empty and returns only explicit choices', () => {
+  const initialSelection = createDeselectedSupplierSelection();
+
+  assert.deepStrictEqual(Object.keys(initialSelection), SUPPLIER_NAMES);
+  assert.ok(Object.values(initialSelection).every(selected => selected === false));
+
+  initialSelection.ANB = true;
+  initialSelection['DM Paraná'] = true;
+
+  assert.deepStrictEqual(listSelectedSuppliers(initialSelection), ['ANB', 'DM Paraná']);
+  assert.ok(Object.values(createDeselectedSupplierSelection()).every(selected => selected === false));
+});
 
 test('Quote summary - reports reliable backend indicators', () => {
   const summary = buildQuoteSummary([
@@ -1076,7 +1094,10 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.ok(appSource.includes('santaCruzStatusRequestVersionRef.current'));
     assert.ok(appSource.includes('santaCruzPreparingRef.current'));
     assert.ok(appSource.includes('if (!inputText.trim() || loading || isPreparingSantaCruz || santaCruzPreparingRef.current) return;'));
-    assert.ok(appSource.includes('disabled={!inputText.trim() || loading || isPreparingSantaCruz}'));
+    assert.ok(appSource.includes('const [selectedSuppliers, setSelectedSuppliers] = useState(createDeselectedSupplierSelection);'));
+    assert.ok(appSource.includes('setSelectedSuppliers(createDeselectedSupplierSelection());'));
+    assert.ok(appSource.includes('if (activeList.length === 0) return;'));
+    assert.ok(appSource.includes('disabled={!inputText.trim() || selectedSupplierCount === 0 || loading || isPreparingSantaCruz}'));
     assert.match(appStyles, /\.search-card\s*\{[^}]*flex-shrink:\s*0/s);
     assert.match(
       appStyles,
