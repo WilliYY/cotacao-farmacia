@@ -22,9 +22,12 @@ function getPositiveInteger(value, fallback) {
 export function createSantaCruzProcessEnvironment(
   credentials = {},
   baseEnvironment = process.env,
-  fallbackQuery = ''
+  fallbackQuery = '',
+  fallbackQueries = []
 ) {
   const environment = { ...baseEnvironment };
+  delete environment.SANTACRUZ_FALLBACK_QUERY;
+  delete environment.SANTACRUZ_FALLBACK_QUERIES;
   const configuredPath = String(credentials?.url || '').trim();
   if (configuredPath && !/^https?:\/\//i.test(configuredPath)) {
     environment.SANTACRUZ_APP_PATH = configuredPath;
@@ -33,6 +36,12 @@ export function createSantaCruzProcessEnvironment(
   if (credentials?.password) environment.SANTACRUZ_PASSWORD = String(credentials.password);
   if (credentials?.clientCode) environment.SANTACRUZ_CLIENT_CODE = String(credentials.clientCode);
   if (fallbackQuery) environment.SANTACRUZ_FALLBACK_QUERY = String(fallbackQuery);
+  const normalizedFallbackQueries = Array.isArray(fallbackQueries)
+    ? fallbackQueries.map(value => String(value || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+    : [];
+  if (normalizedFallbackQueries.length > 0) {
+    environment.SANTACRUZ_FALLBACK_QUERIES = JSON.stringify(normalizedFallbackQueries);
+  }
   return environment;
 }
 
@@ -131,19 +140,46 @@ export function normalizeSantaCruzProductResult(result = {}) {
   };
 }
 
-export function getSantaCruzRetryTerm(searchTerm = '', productName = '') {
+export function getSantaCruzSearchTerms(searchTerm = '', productName = '') {
   const original = String(searchTerm || '').replace(/\s+/g, ' ').trim();
-  if (!original || /^\d{13}$/.test(original)) return '';
-  if (!/\d+(?:[.,]\d+)?\s*(?:mcg|mg)\b/i.test(original)) return '';
+  if (!original) return [];
+  if (/^\d{13}$/.test(original)) return [original];
+
+  const terms = [];
+  const appendUnique = value => {
+    const normalized = String(value || '')
+      .replace(/\s*\+\s*/g, ' + ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return;
+    if (!terms.some(term => term.toLocaleLowerCase('pt-BR') === normalized.toLocaleLowerCase('pt-BR'))) {
+      terms.push(normalized);
+    }
+  };
+  appendUnique(original);
+
+  const dosageWithUnit = /\b(\d+(?:[.,]\d+)?)\s*(mcg|mg|g|ml|ui)\b/gi;
+  if (dosageWithUnit.test(original)) {
+    dosageWithUnit.lastIndex = 0;
+    appendUnique(original.replace(dosageWithUnit, '$1'));
+  }
+
   const activeIngredient = String(productName || '')
     .replace(/\s+/g, ' ')
     .trim();
   const broadTerm = activeIngredient || original
-    .replace(/\b\d+(?:[.,]\d+)?\s*(?:mcg|mg)\b/gi, ' ')
+    .replace(/\b\d+(?:[.,]\d+)?\s*(?:mcg|mg|g|ml|ui)\b/gi, ' ')
     .replace(/\s*\+\s*/g, ' + ')
     .replace(/\s+/g, ' ')
     .trim();
-  return broadTerm && broadTerm !== original ? broadTerm : '';
+  if (activeIngredient && /\d/.test(original)) appendUnique(broadTerm);
+  else if (broadTerm !== original) appendUnique(broadTerm);
+  return terms;
+}
+
+export function getSantaCruzRetryTerm(searchTerm = '', productName = '') {
+  const terms = getSantaCruzSearchTerms(searchTerm, productName);
+  return terms.length > 1 ? terms.at(-1) : '';
 }
 
 function triggerSantaCruzCleanup(scriptPath, credentials) {
@@ -193,7 +229,12 @@ function executeSantaCruzGuiCommand(scriptPath, command, credentials, options = 
       windowsHide: true,
       timeout,
       maxBuffer: 4 * 1024 * 1024,
-      env: createSantaCruzProcessEnvironment(credentials, process.env, options.fallbackQuery),
+      env: createSantaCruzProcessEnvironment(
+        credentials,
+        process.env,
+        options.fallbackQuery,
+        options.fallbackQueries
+      ),
       signal: options.signal
     }, async (error, stdout, stderr) => {
       const payload = normalizeSantaCruzGuiPayload(stdout);
@@ -370,15 +411,20 @@ export class SantaCruzRealConnector extends SupplierConnector {
     logger.info(`Searching Santa Cruz for: "${searchTerm}"...`);
     logger.info('Locating the Santa Cruz installation and starting autonomous GUI search...');
 
-    const retryTerm = getSantaCruzRetryTerm(searchTerm, parsedQuery.name);
-    if (retryTerm) {
-      logger.info(`Santa Cruz will retry with the active ingredient "${retryTerm}" if the dosage search is empty.`);
+    const searchTerms = getSantaCruzSearchTerms(searchTerm, parsedQuery.name);
+    const retryTerm = searchTerms.length > 1 ? searchTerms.at(-1) : '';
+    if (searchTerms.length > 1) {
+      logger.info(`Santa Cruz fallback sequence: ${searchTerms.map(term => `"${term}"`).join(' -> ')}.`);
     }
     const guiPayload = await runSantaCruzGuiCommand(
       scriptPath,
       searchTerm,
       credentials,
-      { ...options, fallbackQuery: retryTerm }
+      {
+        ...options,
+        fallbackQuery: retryTerm,
+        fallbackQueries: searchTerms.slice(1)
+      }
     );
     let rawResults = [];
 

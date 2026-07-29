@@ -89,7 +89,7 @@ const VAGUE_SUGGESTIONS = {
 const COSMETIC_KEYWORDS = ['shampoo', 'condicionador', 'desodorante', 'absorvente', 'fralda', 'fraldas', 'tintura', 'tinta', 'shamp', 'cond'];
 
 const MCG_MEDICATIONS = new Set([
-  'clenil', 'puran', 'synthroid', 'euthyrox', 'levotiroxina', 'aerolin',
+  'clenil', 'puran', 't4', 'synthroid', 'euthyrox', 'levotiroxina', 'aerolin',
   'alenia', 'symbicort', 'seretide', 'relvar', 'busonid', 'budesonida',
   'tiotropio', 'spiriva', 'atrimon', 'beclometasona', 'salbutamol', 'formoterol'
 ]);

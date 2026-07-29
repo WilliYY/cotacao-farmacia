@@ -2,6 +2,20 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.3] - 2026-07-29
+
+### Busca resiliente e dose exata na Santa Cruz
+- **Três variantes ordenadas:** buscas com dose agora tentam o texto completo, repetem sem `mg`, `mcg`, `g`, `ml` ou `ui` e, após vazio confirmado, pesquisam somente nome ou princípio ativo.
+- **Dose original obrigatória:** a busca ampla continua filtrada pela dose solicitada; a comparação usa limites numéricos e de unidade, impedindo que `25mcg` aceite `125mcg`.
+- **Marca Puran corrigida:** `Puran`, `Puran T4` e o atalho `T4` passam a resolver para levotiroxina sem substituir o texto digitado no portal; números sem unidade nesses nomes são interpretados em `mcg`.
+- **Preço preservado:** a Santa Cruz continua aceitando exclusivamente a coluna literal `Preço NF`; preço parcial, coluna ambígua, grade antiga e aplicativo sem resposta permanecem bloqueados.
+- **Aplicativo preservado:** cada tentativa limpa o campo e reutiliza a mesma janela. Timeout ou travamento interrompe o auxiliar sem fechar a Santa Cruz e sem reutilizar preço histórico.
+- **Teste real:** `puran 25` percorreu `puran 25mcg`, `puran 25` e `puran`, varreu 13 linhas e retornou somente `PURAN T4 25MCG C/30 COMPRIMIDOS`, EAN `7897595901309`, com `Preço NF` de `R$ 13,48`, estoque disponível e ST válido.
+- **Teste real de losartana:** após reabrir a Santa Cruz, `losartana 50` percorreu as três variantes, varreu 47 linhas e retornou 10 produtos de 50mg. Nove ofertas ficaram bloqueadas por `SEM_ST`; a única com ST era `LOTAR 5/50MG`, associação incompatível, e também foi rejeitada. Nenhum preço incorreto entrou na recomendação.
+- **Recuperação confirmada:** a Santa Cruz ficou sem resposta após várias automações consecutivas, foi interrompida sem preço parcial e sem fechamento forçado; depois de reaberta pelo operador, concluiu a busca seguinte, limpou o campo e permaneceu no estado `ready`.
+- **Autoteste portátil:** o PowerShell valida sem abrir o fornecedor a ordem dos fallbacks, o token curto `T4` e os limites exatos que aceitam 25mcg e rejeitam 125mcg.
+- **Validação geral:** 155 testes aprovados, lint com 0 erros e 22 avisos preexistentes, build de produção concluído e dois diagnósticos ao vivo sem reutilização de preços antigos.
+
 ## [1.8.2] - 2026-07-29
 
 ### DM Paraná visível nos testes do frontend

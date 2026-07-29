@@ -30,6 +30,7 @@ import {
   getSantaCruzFinalPrice,
   getSantaCruzFailureOptions,
   getSantaCruzRetryTerm,
+  getSantaCruzSearchTerms,
   getSantaCruzStStatus,
   normalizeSantaCruzGuiPayload,
   normalizeSantaCruzProductResult,
@@ -841,7 +842,32 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.strictEqual(getSantaCruzStStatus({ st: 0, stRaw: '', category: 'GEN' }), 'ST_DESCONHECIDO');
   });
 
-  await t.test('retries an empty milligram search without mg and submits it with Enter', () => {
+  await t.test('retries Santa Cruz searches without the unit and then with the product name', () => {
+    assert.deepStrictEqual(
+      getSantaCruzSearchTerms('losartana 50mg', 'losartana'),
+      ['losartana 50mg', 'losartana 50', 'losartana']
+    );
+    assert.deepStrictEqual(
+      getSantaCruzSearchTerms('puran 25mcg', 'puran'),
+      ['puran 25mcg', 'puran 25', 'puran']
+    );
+    assert.deepStrictEqual(
+      getSantaCruzSearchTerms(
+        'olmesartana 40 mg + hidroclorotiazida 25mg',
+        'olmesartana + hidroclorotiazida'
+      ),
+      [
+        'olmesartana 40 mg + hidroclorotiazida 25mg',
+        'olmesartana 40 + hidroclorotiazida 25',
+        'olmesartana + hidroclorotiazida'
+      ]
+    );
+    assert.deepStrictEqual(getSantaCruzSearchTerms('7896004719016', 'losartana'), ['7896004719016']);
+    assert.deepStrictEqual(
+      getSantaCruzSearchTerms('losartana 50', 'losartana'),
+      ['losartana 50', 'losartana']
+    );
+
     assert.strictEqual(getSantaCruzRetryTerm('losartana 50mg', 'losartana'), 'losartana');
     assert.strictEqual(getSantaCruzRetryTerm('clenil 250mcg', 'clenil'), 'clenil');
     assert.strictEqual(
@@ -849,14 +875,76 @@ test('Santa Cruz Portable Automation', async (t) => {
       'olmesartana + hidroclorotiazida'
     );
     assert.strictEqual(getSantaCruzRetryTerm('7896004719016'), '');
-    assert.strictEqual(getSantaCruzRetryTerm('losartana 50'), '');
+    assert.strictEqual(getSantaCruzRetryTerm('losartana 50', 'losartana'), 'losartana');
 
     const script = fs.readFileSync(new URL('../src/lib/santacruz-search.ps1', import.meta.url), 'utf8');
     const connector = fs.readFileSync(new URL('../src/connectors/real/santacruz-real.js', import.meta.url), 'utf8');
     assert.match(script, /\$FallbackSearchQuery = if \(\$args\.Count -gt 4\)/);
+    assert.match(script, /SANTACRUZ_FALLBACK_QUERIES/);
+    assert.match(script, /\[object\[\]\]\$parsedFallbackValues/);
     assert.match(script, /submitting search with Enter/);
     assert.match(script, /requiredDosages/);
-    assert.match(connector, /fallbackQuery: retryTerm/);
+    assert.match(script, /\[regex\]::Escape\(\$dosageParts\.Groups\["number"\]\.Value\)/);
+    assert.match(script, /\(\?<!\[0-9\.,\]\).+\\s\*\$unitPattern\\b/);
+    assert.doesNotMatch(script, /\$compactName\.Contains\(\$dosage\)/);
+    assert.match(connector, /fallbackQueries: searchTerms\.slice\(1\)/);
+
+    const environment = createSantaCruzProcessEnvironment(
+      {},
+      {},
+      'puran',
+      ['puran 25', 'puran']
+    );
+    assert.deepStrictEqual(
+      JSON.parse(environment.SANTACRUZ_FALLBACK_QUERIES),
+      ['puran 25', 'puran']
+    );
+  });
+
+  await t.test('runs the PowerShell fallback and exact-dose self-test without opening Santa Cruz', async () => {
+    const scriptPath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'src',
+      'lib',
+      'santacruz-search.ps1'
+    );
+    const environment = createSantaCruzProcessEnvironment(
+      {},
+      process.env,
+      'puran',
+      ['puran 25', 'puran']
+    );
+    const output = await new Promise((resolve, reject) => {
+      execFile('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        scriptPath,
+        '--self-test'
+      ], {
+        env: environment,
+        timeout: 15000,
+        windowsHide: true
+      }, (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`Santa Cruz self-test failed: ${error.message}; ${stderr}`));
+          return;
+        }
+        resolve(stdout);
+      });
+    });
+
+    const payloadLine = String(output).trim().split(/\r?\n/).findLast(line => line.trim().startsWith('{'));
+    assert.ok(payloadLine, 'O autoteste deve retornar um resultado JSON estruturado.');
+    const payload = JSON.parse(payloadLine);
+    assert.strictEqual(payload.status, 'self-test-ok');
+    assert.deepStrictEqual(payload.fallbackQueries, ['puran 25', 'puran']);
+    assert.strictEqual(payload.t4QueryToken, 't4');
+    assert.strictEqual(payload.dosage25Matches, true);
+    assert.strictEqual(payload.dosage125Matches, false);
   });
 
   await t.test('preserves portable readiness evidence from the GUI probe', () => {
@@ -1276,11 +1364,44 @@ test('Farmacia Popular & Reference Brand Intelligence', async (t) => {
     assert.strictEqual(resolveReferenceBrandName('Aradois'), 'losartana');
     assert.strictEqual(resolveReferenceBrandName('Selozok'), 'metoprolol');
     assert.strictEqual(resolveReferenceBrandName('Pura T4'), 'levotiroxina');
+    assert.strictEqual(resolveReferenceBrandName('Puran'), 'levotiroxina');
+    assert.strictEqual(resolveReferenceBrandName('Puran T4'), 'levotiroxina');
+    assert.strictEqual(resolveReferenceBrandName('T4'), 'levotiroxina');
     assert.strictEqual(resolveReferenceBrandName('Novalgina'), 'dipirona');
     assert.strictEqual(resolveReferenceBrandName('Clenil'), 'beclometasona');
     assert.strictEqual(fuzzyMatch('clenil', 'Dipropionato de beclometasona 250mcg spray'), true);
     assert.strictEqual(fuzzyMatch('Buscopan 10mg', 'Escopolamina 10mg 20 comprimidos'), true);
     assert.strictEqual(fuzzyMatch('Aerolin 100mcg', 'Salbutamol 100mcg spray'), true);
+
+    const puran = auditQuoteResult(parseSearchQuery('puran 25'), {
+      source: 'Santa Cruz',
+      supplierProductName: 'PURAN T4 25MCG C/30 COMPRIMIDOS',
+      dosage: '25mcg',
+      presentation: 'comprimido',
+      price: 13.48,
+      priceSourceLabel: 'Preço NF',
+      stStatus: 'COM_ST',
+      availability: 'Disponivel',
+      ean: '7897595901309',
+      quantity: 30
+    });
+    assert.notStrictEqual(puran.status, AUDIT_STATUS.BLOCKED, puran.summary);
+
+    const t4 = parseSearchQuery('t4 25');
+    assert.strictEqual(t4.dosage, '25mcg');
+    const auditedT4 = auditQuoteResult(t4, {
+      source: 'Santa Cruz',
+      supplierProductName: 'PURAN T4 25MCG C/30 COMPRIMIDOS',
+      dosage: '25mcg',
+      presentation: 'comprimido',
+      price: 13.48,
+      priceSourceLabel: 'Preço NF',
+      stStatus: 'COM_ST',
+      availability: 'Disponivel',
+      ean: '7897595901309',
+      quantity: 30
+    });
+    assert.notStrictEqual(auditedT4.status, AUDIT_STATUS.BLOCKED, auditedT4.summary);
   });
 
   await t.test('requires every active ingredient for combination brands', () => {

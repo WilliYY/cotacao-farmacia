@@ -45,10 +45,24 @@ $SantaUser = if ($args.Count -gt 1) { [string]$args[1] } else { [string]$env:SAN
 $SantaPassword = if ($args.Count -gt 2) { [string]$args[2] } else { [string]$env:SANTACRUZ_PASSWORD }
 $SantaClientCode = if ($args.Count -gt 3) { [string]$args[3] } else { [string]$env:SANTACRUZ_CLIENT_CODE }
 $FallbackSearchQuery = if ($args.Count -gt 4) { [string]$args[4] } else { [string]$env:SANTACRUZ_FALLBACK_QUERY }
+$FallbackSearchQueries = @()
+if ($env:SANTACRUZ_FALLBACK_QUERIES) {
+    try {
+        $parsedFallbackValues = $env:SANTACRUZ_FALLBACK_QUERIES | ConvertFrom-Json
+        foreach ($fallbackValue in [object[]]$parsedFallbackValues) {
+            $normalizedFallbackValue = ([string]$fallbackValue).Trim()
+            if ($normalizedFallbackValue) { $FallbackSearchQueries += $normalizedFallbackValue }
+        }
+    } catch {}
+}
+if ($FallbackSearchQueries.Count -eq 0 -and $FallbackSearchQuery) {
+    $FallbackSearchQueries = @($FallbackSearchQuery)
+}
 $DiscoveryOnly = $SearchQuery -eq "--discover-only" -or $env:SANTACRUZ_DISCOVERY_ONLY -eq "true"
 $StatusOnly = $SearchQuery -eq "--status-only"
 $PrepareOnly = $SearchQuery -eq "--prepare"
 $CleanupOnly = $SearchQuery -eq "--cleanup"
+$SelfTestOnly = $SearchQuery -eq "--self-test"
 
 $StartupWaitSeconds = 180
 if ($env:SANTACRUZ_STARTUP_WAIT_SECONDS) {
@@ -694,6 +708,59 @@ function ConvertTo-NormalizedText {
         }
     }
     return (($builder.ToString().ToLowerInvariant() -replace '\s+', ' ').Trim())
+}
+
+function Get-SantaCruzDosageTokens {
+    param([string]$Value)
+    if (-not $Value) { return @() }
+    $tokens = @()
+    foreach ($match in [regex]::Matches($Value, '(?i)(?<!\d)(\d+(?:[.,]\d+)?)\s*(mcg|mg|g|ml|ui)\b')) {
+        $number = $match.Groups[1].Value.Replace(",", ".")
+        $unit = $match.Groups[2].Value.ToLowerInvariant()
+        $token = "$number$unit"
+        if ($tokens -notcontains $token) { $tokens += $token }
+    }
+    return @($tokens)
+}
+
+function Get-SantaCruzQueryToken {
+    param([string]$Value)
+    $normalized = ConvertTo-NormalizedText $Value
+    return @($normalized -split '\s+' | Where-Object {
+        $_.Length -ge 3 -or $_ -match '^(?=.*[a-z])(?=.*\d)[a-z0-9]{2,}$'
+    } | Select-Object -First 1)
+}
+
+function Test-SantaCruzSearchRow {
+    param(
+        $Row,
+        [string]$Query,
+        [string]$QueryToken,
+        [bool]$IsEanSearch,
+        [string[]]$RequiredDosages
+    )
+    if ($IsEanSearch) { return $Row.ean -eq $Query }
+
+    $normalizedName = ConvertTo-NormalizedText $Row.name
+    if (-not $QueryToken -or -not $normalizedName.Contains($QueryToken)) { return $false }
+
+    $dosageText = $normalizedName.Replace(",", ".")
+    foreach ($dosage in @($RequiredDosages)) {
+        if (-not $dosage) { continue }
+        $dosageParts = [regex]::Match($dosage, '^(?<number>\d+(?:\.\d+)?)(?<unit>mcg|mg|g|ml|ui)$')
+        if (-not $dosageParts.Success) { return $false }
+        $numberPattern = [regex]::Escape($dosageParts.Groups["number"].Value)
+        $unitPattern = [regex]::Escape($dosageParts.Groups["unit"].Value)
+        $dosagePattern = "(?<![0-9.,])$numberPattern\s*$unitPattern\b"
+        if (-not [regex]::IsMatch(
+            $dosageText,
+            $dosagePattern,
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )) {
+            return $false
+        }
+    }
+    return $true
 }
 
 function Get-WindowTextSummary {
@@ -1837,6 +1904,20 @@ function Read-AllSantaCruzRowsWithScroll {
 }
 
 Write-SantaCruzTrace "start query=$SearchQuery"
+if ($SelfTestOnly) {
+    $requestedDosages = @(Get-SantaCruzDosageTokens "t4 25mcg")
+    $t4Token = Get-SantaCruzQueryToken "t4"
+    Complete-SantaCruzResult "self-test-ok" "Validacao interna concluida" @() "" "" "" @{
+        fallbackQueries = @($FallbackSearchQueries)
+        t4QueryToken = $t4Token
+        dosage25Matches = Test-SantaCruzSearchRow `
+            ([PSCustomObject]@{ ean = "7897595901309"; name = "PURAN T4 25MCG C/30 COMPRIMIDOS" }) `
+            "t4" $t4Token $false $requestedDosages
+        dosage125Matches = Test-SantaCruzSearchRow `
+            ([PSCustomObject]@{ ean = "7897595901446"; name = "PURAN T4 125MCG C/30 COMPRIMIDOS" }) `
+            "t4" $t4Token $false $requestedDosages
+    }
+}
 if (-not $DiscoveryOnly -and -not $StatusOnly -and -not (Enter-SantaCruzAutomationMutex)) {
     Complete-SantaCruzResult "busy" "Outra cotacao ja esta controlando a Santa Cruz; aguarde a conclusao"
 }
@@ -2198,39 +2279,6 @@ if (-not $columns) {
     Complete-SantaCruzSearchResult "price-column-not-found" "Cabecalho literal Preco NF nao encontrado ou ambiguo; nenhum preco foi considerado" @() $searchControl $readyWindow $installation
 }
 
-function Get-SantaCruzDosageTokens {
-    param([string]$Value)
-    if (-not $Value) { return @() }
-    $tokens = @()
-    foreach ($match in [regex]::Matches($Value, '(?i)(?<!\d)(\d+(?:[.,]\d+)?)\s*(mcg|mg|g|ml)\b')) {
-        $number = $match.Groups[1].Value.Replace(",", ".")
-        $unit = $match.Groups[2].Value.ToLowerInvariant()
-        $token = "$number$unit"
-        if ($tokens -notcontains $token) { $tokens += $token }
-    }
-    return @($tokens)
-}
-
-function Test-SantaCruzSearchRow {
-    param(
-        $Row,
-        [string]$Query,
-        [string]$QueryToken,
-        [bool]$IsEanSearch,
-        [string[]]$RequiredDosages
-    )
-    if ($IsEanSearch) { return $Row.ean -eq $Query }
-
-    $normalizedName = ConvertTo-NormalizedText $Row.name
-    if (-not $QueryToken -or -not $normalizedName.Contains($QueryToken)) { return $false }
-
-    $compactName = $normalizedName.Replace(",", ".") -replace '\s+', ''
-    foreach ($dosage in @($RequiredDosages)) {
-        if ($dosage -and -not $compactName.Contains($dosage)) { return $false }
-    }
-    return $true
-}
-
 function Invoke-SantaCruzSearchAttempt {
     param(
         $InitialTable,
@@ -2249,7 +2297,7 @@ function Invoke-SantaCruzSearchAttempt {
     }
 
     $normalizedQuery = ConvertTo-NormalizedText $Query
-    $queryToken = @($normalizedQuery -split '\s+' | Where-Object { $_.Length -ge 3 } | Select-Object -First 1)
+    $queryToken = Get-SantaCruzQueryToken $Query
     $isEanSearch = $Query -match '^\d{13}$'
     $readDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(8, $ResultWaitSeconds))
     $lastObservedSignature = ""
@@ -2362,10 +2410,17 @@ function Invoke-SantaCruzSearchAttempt {
 $attempts = New-Object System.Collections.ArrayList
 [void]$attempts.Add([PSCustomObject]@{ Query = $SearchQuery; UseEnter = $false })
 $requiredDosages = @(Get-SantaCruzDosageTokens $SearchQuery)
-if ($FallbackSearchQuery -and
-    (ConvertTo-NormalizedText $FallbackSearchQuery) -ne (ConvertTo-NormalizedText $SearchQuery) -and
-    $SearchQuery -notmatch '^\d{13}$') {
-    [void]$attempts.Add([PSCustomObject]@{ Query = $FallbackSearchQuery; UseEnter = $true })
+if ($SearchQuery -notmatch '^\d{13}$') {
+    foreach ($fallbackCandidate in @($FallbackSearchQueries)) {
+        $normalizedFallback = ConvertTo-NormalizedText $fallbackCandidate
+        if (-not $normalizedFallback) { continue }
+        $alreadyQueued = @($attempts | Where-Object {
+            (ConvertTo-NormalizedText $_.Query) -eq $normalizedFallback
+        }).Count -gt 0
+        if (-not $alreadyQueued) {
+            [void]$attempts.Add([PSCustomObject]@{ Query = $fallbackCandidate; UseEnter = $true })
+        }
+    }
 }
 
 $attemptResult = $null
@@ -2378,7 +2433,7 @@ for ($attemptIndex = 0; $attemptIndex -lt $attempts.Count; $attemptIndex++) {
     if ($attemptResult.Status -eq "ok") { break }
     if ($attemptResult.Status -in @("empty", "stale-empty") -and
         $attemptIndex -lt ($attempts.Count - 1)) {
-        Write-SantaCruzTrace "empty result; retrying with active ingredient in the same Santa Cruz session"
+        Write-SantaCruzTrace "empty result; retrying with the next search variant in the same Santa Cruz session"
         continue
     }
     break
@@ -2400,7 +2455,7 @@ if ($attemptResult.Status -eq "scan-timeout") {
     Complete-SantaCruzSearchResult "scan-timeout" "A grade da Santa Cruz excedeu o prazo da varredura completa; nenhum preco parcial foi considerado" @() $searchControl $readyWindow $installation
 }
 if ($attemptResult.Status -eq "empty") {
-    Complete-SantaCruzSearchResult "empty" "Pesquisa concluida sem produtos relacionados, inclusive na tentativa pelo principio ativo" @() $searchControl $readyWindow $installation
+    Complete-SantaCruzSearchResult "empty" "Pesquisa concluida sem produtos relacionados nas tentativas exata, sem unidade e pelo nome" @() $searchControl $readyWindow $installation
 }
 
 $results = @($attemptResult.Results)
