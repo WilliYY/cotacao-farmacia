@@ -10,7 +10,7 @@ if %errorlevel% neq 0 (
     echo [ERRO] Node.js nao foi encontrado neste computador!
     echo Para rodar o aplicativo do pendrive, o Node.js deve estar instalado.
     echo.
-    pause
+    if not "%WIMI_HIDDEN_LAUNCH%"=="1" pause
     exit /b 1
 )
 
@@ -23,6 +23,6 @@ call npm run dev -- %*
 if %errorlevel% neq 0 (
     echo.
     echo [ERRO] Nao foi possivel iniciar o Wimifarma Cotacao.
-    pause
+    if not "%WIMI_HIDDEN_LAUNCH%"=="1" pause
     exit /b 1
 )

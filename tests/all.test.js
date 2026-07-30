@@ -420,11 +420,32 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
   await t.test('uses a hidden Windows launcher while preserving startup logs', () => {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const launcherBatch = fs.readFileSync(path.join(root, 'wimi cotacao.bat'), 'utf8');
+    const powershellLauncher = fs.readFileSync(path.join(root, 'scripts', 'launch-hidden.ps1'), 'utf8');
+    const shortcutUpdater = fs.readFileSync(path.join(root, 'scripts', 'update-shortcut.ps1'), 'utf8');
     const hiddenLauncher = fs.readFileSync(path.join(root, 'wimi cotacao.vbs'), 'utf8');
     const technicalBatch = fs.readFileSync(path.join(root, 'cotacao.bat'), 'utf8');
     const electronMain = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
 
+    assert.match(launcherBatch, /powershell\.exe/i);
+    assert.match(launcherBatch, /scripts\\launch-hidden\.ps1/i);
     assert.match(launcherBatch, /wscript\.exe/i);
+    assert.ok(
+      launcherBatch.search(/powershell\.exe/i) < launcherBatch.search(/wscript\.exe/i),
+      'PowerShell deve ser a rota principal e VBScript apenas a reserva.'
+    );
+    assert.match(powershellLauncher, /CreateNoWindow\s*=\s*\$true/i);
+    assert.match(powershellLauncher, /WindowStyle\s*=\s*['"]Hidden['"]/i);
+    assert.match(powershellLauncher, /startup-\{0\}-\{1\}\.log/i);
+    assert.match(powershellLauncher, /Get-Command\s+node/i);
+    assert.match(powershellLauncher, /Test-LauncherWorkspaceWritable/i);
+    assert.match(powershellLauncher, /update-shortcut\.ps1/i);
+    assert.match(powershellLauncher, /--launcher-wait/i);
+    assert.doesNotMatch(powershellLauncher, /C:\\Users\\/i);
+    assert.match(shortcutUpdater, /Split-Path -Parent \$PSScriptRoot/i);
+    assert.match(shortcutUpdater, /launch-hidden\.ps1/i);
+    assert.match(shortcutUpdater, /\$shortcut\.Arguments\s*=/i);
+    assert.doesNotMatch(shortcutUpdater, /localShortcutPath/i);
+    assert.doesNotMatch(shortcutUpdater, /wimi cotacao\.vbs/i);
     assert.match(hiddenLauncher, /shell\.Run\(command, 0, waitForExit\)/i);
     assert.match(hiddenLauncher, /logs["']?\)/i);
     assert.match(hiddenLauncher, /startup\.log/i);

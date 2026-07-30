@@ -1,25 +1,41 @@
-$WshShell = New-Object -ComObject WScript.Shell
+param(
+    [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
+    [switch]$Quiet
+)
+
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = 'Stop'
+
+$projectPath = [System.IO.Path]::GetFullPath($ProjectRoot)
+$launcherPath = Join-Path $projectPath 'scripts\launch-hidden.ps1'
+$iconPath = Join-Path $projectPath 'assets\icon.ico'
 $desktopPath = [System.Environment]::GetFolderPath('Desktop')
 $shortcutPath = Join-Path $desktopPath 'wimi cotacao.lnk'
-$projectPath = (Get-Location).Path
-$iconPath = Join-Path $projectPath 'assets\icon.ico'
-$vbsPath = Join-Path $projectPath 'wimi cotacao.vbs'
+$powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
-# 1. Update Desktop shortcut
-$Shortcut = $WshShell.CreateShortcut($shortcutPath)
-$Shortcut.TargetPath = $vbsPath
-$Shortcut.WorkingDirectory = $projectPath
-$Shortcut.IconLocation = "$iconPath, 0"
-$Shortcut.Description = 'Wimifarma Cotação - Sistema Inteligente de Cotação de Medicamentos'
-$Shortcut.Save()
+if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
+    throw "Inicializador nao encontrado: $launcherPath"
+}
 
-# 2. Update local project shortcut
-$localShortcutPath = Join-Path $projectPath 'wimi cotacao.lnk'
-$LocalShortcut = $WshShell.CreateShortcut($localShortcutPath)
-$LocalShortcut.TargetPath = $vbsPath
-$LocalShortcut.WorkingDirectory = $projectPath
-$LocalShortcut.IconLocation = "$iconPath, 0"
-$LocalShortcut.Description = 'Wimifarma Cotação'
-$LocalShortcut.Save()
+if (-not (Test-Path -LiteralPath $powershellPath -PathType Leaf)) {
+    $powershellCommand = Get-Command powershell.exe -ErrorAction Stop
+    $powershellPath = $powershellCommand.Source
+}
 
-Write-Host 'Desktop shortcut updated successfully with custom icon!'
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $powershellPath
+$shortcut.Arguments = (
+    '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass ' +
+    '-WindowStyle Hidden -File "' + $launcherPath + '"'
+)
+$shortcut.WorkingDirectory = $projectPath
+if (Test-Path -LiteralPath $iconPath -PathType Leaf) {
+    $shortcut.IconLocation = "$iconPath,0"
+}
+$shortcut.Description = 'Wimifarma Cotacao - pesquisa inteligente de precos'
+$shortcut.Save()
+
+if (-not $Quiet) {
+    Write-Output "Atalho atualizado: $shortcutPath"
+}

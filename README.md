@@ -13,7 +13,7 @@ O sistema roda localmente no computador da farmácia. Certifique-se de possuir o
    ```bash
    copy .env.example .env
    ```
-3. Abra `wimi cotacao.bat`. O inicializador roda oculto, verifica uma versão remota segura, instala ou atualiza as dependências necessárias, garante o runtime do Electron e então abre somente o aplicativo.
+3. Na pasta copiada, abra `wimi cotacao.bat` uma vez. O inicializador roda oculto, recria o atalho da Área de Trabalho com o caminho correto daquele computador, verifica uma versão remota segura, instala ou atualiza as dependências necessárias, garante o runtime do Electron e então abre somente o aplicativo. Não copie nem reutilize um arquivo `.lnk` de outra máquina, pois atalhos do Windows guardam caminhos absolutos.
 
 ### Configuração em outro computador
 
@@ -172,7 +172,7 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 
 - No uso diário, abra **`wimi cotacao.bat`**. Esse atalho chama `cotacao.bat`, que valida o Node.js e executa o bootstrap seguro de atualização e dependências antes de iniciar o Electron.
 - A janela principal abre maximizada, respeita um tamanho mínimo operacional e reorganiza o conteúdo sem rolagem horizontal em notebooks e telas compactas.
-- O processo técnico permanece oculto e grava sua saída em `logs/startup.log`; a janela preta do CMD não fica aberta junto do aplicativo.
+- O processo técnico permanece oculto e grava cada abertura em um arquivo próprio `logs/startup-*.log`, evitando conflito quando outra instância já está aberta; a janela preta do CMD não fica aberta junto do aplicativo.
 - Uma cotação nunca permanece carregando indefinidamente: por padrão, portais web têm limite de 5 minutos, enquanto Santa Cruz e a cotação completa têm limite de 10 minutos. Ao atingir o limite, processos pendentes são cancelados, resultados reais já obtidos são preservados e as fontes incompletas ficam sinalizadas.
 - Durante a espera, o painel mostra o medicamento atual, o progresso total, o tempo decorrido e o estado real de cada distribuidora: aguardando, pesquisando, recuperando, concluída, sem resultado, falha, ignorada ou tempo limite. As mensagens também identificam o campo final conferido em cada portal.
 - Antes da cotação, a faixa da Santa Cruz verifica a instalação e a janela a cada 30 segundos. Ela informa o estado e o motivo, oferece `Verificar` e `Preparar Santa Cruz` quando aplicável e reconhece também ocupação, falha de abertura e aplicativo sem resposta. Enquanto o preparo estiver em andamento, uma nova cotação fica bloqueada e respostas antigas de verificação não podem sobrescrever o estado mais recente.

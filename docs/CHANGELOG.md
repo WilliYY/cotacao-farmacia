@@ -2,6 +2,17 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.5] - 2026-07-30
+
+### Inicialização portátil sem dependência do VBScript
+- **Causa confirmada no segundo computador:** o atalho copiado apontava para `C:\Users\Pichau\Desktop\wimi cotacao.vbs`, caminho absoluto que não existia na nova máquina. A atualização do projeto não havia corrompido o VBS.
+- **PowerShell como rota principal:** `wimi cotacao.bat` agora inicia pelo PowerShell nativo do Windows sem janela visível; o VBS permanece apenas como compatibilidade quando o PowerShell não estiver disponível.
+- **Atalho por computador:** a primeira abertura pela pasta recria somente o atalho da Área de Trabalho, apontando para o caminho real daquela cópia. O projeto não gera mais um `.lnk` local que poderia ser levado para outra máquina com destino antigo.
+- **Pasta gravável obrigatória:** antes de iniciar, o launcher testa a escrita em `logs` e orienta a copiar a pasta do pendrive para a Área de Trabalho quando o local estiver protegido.
+- **Logs concorrentes:** cada abertura usa `logs/startup-*.log`; uma instância já aberta não bloqueia o diagnóstico ou a próxima inicialização.
+- **Falha sem processo preso:** o lote técnico não executa `pause` quando foi iniciado oculto, evitando um CMD invisível esperando indefinidamente.
+- **Validação real:** `wimi cotacao.bat --launcher-wait --diagnose` retornou `exit 0`, registrou o diagnóstico completo e gerou um atalho cujo destino é o PowerShell do Windows e cujo argumento referencia a pasta atual.
+
 ## [1.8.4] - 2026-07-29
 
 ### Distribuidoras selecionadas por cotação
