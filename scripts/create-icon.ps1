@@ -77,44 +77,32 @@ function Draw-WimifarmaIcon([int]$size) {
 }
 
 # Generate 256x256 Master PNG and ICO
-if (-not (Test-Path 'assets')) { New-Item -ItemType Directory -Path 'assets' | Out-Null }
+$projectPath = Split-Path -Parent $PSScriptRoot
+$assetsDirectory = Join-Path $projectPath 'assets'
+$publicDirectory = Join-Path $projectPath 'public'
+if (-not (Test-Path -LiteralPath $assetsDirectory)) {
+    New-Item -ItemType Directory -Path $assetsDirectory | Out-Null
+}
+if (-not (Test-Path -LiteralPath $publicDirectory)) {
+    New-Item -ItemType Directory -Path $publicDirectory | Out-Null
+}
 
 $master256 = Draw-WimifarmaIcon 256
-$master256.Save('assets/icon.png', [System.Drawing.Imaging.ImageFormat]::Png)
-$master256.Save('public/icon.png', [System.Drawing.Imaging.ImageFormat]::Png)
+$master256.Save((Join-Path $assetsDirectory 'icon.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+$master256.Save((Join-Path $publicDirectory 'icon.png'), [System.Drawing.Imaging.ImageFormat]::Png)
 
 $hIcon = $master256.GetHicon()
 $icon = [System.Drawing.Icon]::FromHandle($hIcon)
 
-$fs = [System.IO.File]::Create((Join-Path (Get-Location) 'assets/icon.ico'))
+$fs = [System.IO.File]::Create((Join-Path $assetsDirectory 'icon.ico'))
 $icon.Save($fs)
 $fs.Close()
 
-$fs2 = [System.IO.File]::Create((Join-Path (Get-Location) 'public/favicon.ico'))
+$fs2 = [System.IO.File]::Create((Join-Path $publicDirectory 'favicon.ico'))
 $icon.Save($fs2)
 $fs2.Close()
 
-# Update Desktop shortcut
-$WshShell = New-Object -ComObject WScript.Shell
-$desktopPath = [System.Environment]::GetFolderPath('Desktop')
-$shortcutPath = Join-Path $desktopPath 'wimi cotacao.lnk'
-$projectPath = (Get-Location).Path
-$iconPath = Join-Path $projectPath 'assets\icon.ico'
-$vbsPath = Join-Path $projectPath 'wimi cotacao.vbs'
+$shortcutUpdater = Join-Path $PSScriptRoot 'update-shortcut.ps1'
+& $shortcutUpdater -ProjectRoot $projectPath
 
-$Shortcut = $WshShell.CreateShortcut($shortcutPath)
-$Shortcut.TargetPath = $vbsPath
-$Shortcut.WorkingDirectory = $projectPath
-$Shortcut.IconLocation = "$iconPath, 0"
-$Shortcut.Description = 'Wimifarma Cotação - Sistema Inteligente de Cotação de Medicamentos'
-$Shortcut.Save()
-
-$localShortcutPath = Join-Path $projectPath 'wimi cotacao.lnk'
-$LocalShortcut = $WshShell.CreateShortcut($localShortcutPath)
-$LocalShortcut.TargetPath = $vbsPath
-$LocalShortcut.WorkingDirectory = $projectPath
-$LocalShortcut.IconLocation = "$iconPath, 0"
-$LocalShortcut.Description = 'Wimifarma Cotação'
-$LocalShortcut.Save()
-
-Write-Host 'Ultra-clean transparent icon generated and desktop shortcut updated!'
+Write-Host 'Icones gerados e atalho portatil atualizado.'

@@ -2,6 +2,18 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.6] - 2026-08-03
+
+### Atualização multi-PC auditada e atalhos protegidos
+- **Atualização Git simulada de ponta a ponta:** a suíte cria repositório remoto e clone temporários, aplica um `fast-forward` real e comprova que histórico divergente ou servidor indisponível preservam a instalação.
+- **Canal exato:** `AUTO_UPDATE_BRANCH` agora bloqueia uma máquina que esteja em outra branch, em vez de atualizar silenciosamente pelo upstream incorreto.
+- **Internet instável:** o `fetch` passou de 5 para 30 segundos por padrão, com faixa configurável de 5 segundos a 2 minutos e limpeza de referências remotas removidas por `--prune`.
+- **Divergência protegida:** commits locais, histórico divergente, upstream removido e falha de comparação possuem estados próprios e nunca disparam `merge`.
+- **Configuração coerente:** opções de atualização carregadas do `.env` são repassadas ao Electron; desativar a atualização também desativa a consulta periódica.
+- **Atalho verificado:** depois de criar o `.lnk`, o sistema relê destino, argumentos e diretório de trabalho. O gerador de ícones antigo passou a usar o criador portátil canônico e não gera mais atalho local ou destino VBS.
+- **Validação automática no GitHub:** workflow Windows executa `npm ci`, testes, lint, build e validação sintática dos scripts PowerShell em cada push e pull request; a documentação deixa explícito que proteção de branch ainda é necessária para transformar essa validação em bloqueio de publicação.
+- **Validação local limpa:** `npm ci` reinstalou 396 pacotes; o bootstrap detectou o runtime Electron ausente, baixou-o novamente e concluiu `--prepare-only` com código `0`. Também passaram 160 testes, lint com 0 erros e 22 avisos preexistentes, build Vite, parser PowerShell e validação real do atalho desta instalação.
+
 ## [1.8.5] - 2026-07-30
 
 ### Inicialização portátil sem dependência do VBScript

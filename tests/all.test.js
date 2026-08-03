@@ -3,8 +3,8 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile, spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { execFile, spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import XLSX from 'xlsx';
 
 import { parseSearchQuery, levenshteinDistance, fuzzyMatch } from '../src/lib/parser.js';
@@ -79,6 +79,8 @@ import { generateExcelBuffer } from '../src/lib/exporter.js';
 import {
   acquireBootstrapLock,
   createUpdateStatus,
+  getUpdateCheckIntervalMs,
+  getUpdateFetchTimeoutMs,
   getUpdateBlockReason,
   isElectronRuntimeReady,
   shouldBuildProductionAssets
@@ -297,6 +299,33 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     );
   });
 
+  await t.test('refuses to update through a different configured branch', () => {
+    assert.strictEqual(
+      getUpdateBlockReason(cleanRepository, { AUTO_UPDATE_BRANCH: 'release' }),
+      'branch-mismatch'
+    );
+    assert.strictEqual(
+      getUpdateBlockReason(cleanRepository, { AUTO_UPDATE_BRANCH: 'main' }),
+      ''
+    );
+  });
+
+  await t.test('uses a practical and bounded Git fetch timeout', () => {
+    assert.strictEqual(getUpdateFetchTimeoutMs({}), 30_000);
+    assert.strictEqual(getUpdateFetchTimeoutMs({ AUTO_UPDATE_FETCH_TIMEOUT_MS: '100' }), 5_000);
+    assert.strictEqual(getUpdateFetchTimeoutMs({ AUTO_UPDATE_FETCH_TIMEOUT_MS: '45000' }), 45_000);
+    assert.strictEqual(getUpdateFetchTimeoutMs({ AUTO_UPDATE_FETCH_TIMEOUT_MS: '999999' }), 120_000);
+    assert.strictEqual(getUpdateFetchTimeoutMs({ AUTO_UPDATE_FETCH_TIMEOUT_MS: 'invalido' }), 30_000);
+  });
+
+  await t.test('reports the effective and bounded periodic check interval', () => {
+    assert.strictEqual(getUpdateCheckIntervalMs({}), 900_000);
+    assert.strictEqual(getUpdateCheckIntervalMs({ AUTO_UPDATE_CHECK_INTERVAL_MS: '1000' }), 300_000);
+    assert.strictEqual(getUpdateCheckIntervalMs({ AUTO_UPDATE_CHECK_INTERVAL_MS: '1800000' }), 1_800_000);
+    assert.strictEqual(getUpdateCheckIntervalMs({ AUTO_UPDATE_CHECK_INTERVAL_MS: '999999999' }), 86_400_000);
+    assert.strictEqual(getUpdateCheckIntervalMs({ AUTO_UPDATE_CHECK_INTERVAL_MS: 'invalido' }), 900_000);
+  });
+
   await t.test('allows a clean tracked repository', () => {
     assert.strictEqual(getUpdateBlockReason(cleanRepository, {}), '');
   });
@@ -382,6 +411,83 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     }
   });
 
+  await t.test('fast-forwards a real clone and preserves a divergent installation', async () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cotacao-updater-integration-'));
+    const remoteDir = path.join(tempDir, 'remote.git');
+    const seedDir = path.join(tempDir, 'seed');
+    const workerDir = path.join(tempDir, 'worker');
+
+    const git = (cwd, args) => {
+      const result = spawnSync('git', args, {
+        cwd,
+        encoding: 'utf8',
+        windowsHide: true
+      });
+      assert.strictEqual(
+        result.status,
+        0,
+        `git ${args.join(' ')} falhou: ${result.stderr || result.stdout}`
+      );
+      return String(result.stdout || '').trim();
+    };
+
+    try {
+      fs.mkdirSync(seedDir, { recursive: true });
+      git(tempDir, ['init', '--bare', remoteDir]);
+      git(seedDir, ['init', '-b', 'main']);
+      git(seedDir, ['config', 'user.email', 'cotacao-test@local']);
+      git(seedDir, ['config', 'user.name', 'Cotacao Test']);
+      fs.mkdirSync(path.join(seedDir, 'scripts'), { recursive: true });
+      fs.copyFileSync(
+        path.join(root, 'scripts', 'bootstrap.mjs'),
+        path.join(seedDir, 'scripts', 'bootstrap.mjs')
+      );
+      fs.writeFileSync(path.join(seedDir, 'version.txt'), 'v1\n');
+      git(seedDir, ['add', '.']);
+      git(seedDir, ['commit', '-m', 'initial']);
+      git(seedDir, ['remote', 'add', 'origin', remoteDir]);
+      git(seedDir, ['push', '-u', 'origin', 'main']);
+      git(tempDir, ['clone', '--branch', 'main', remoteDir, workerDir]);
+
+      fs.writeFileSync(path.join(seedDir, 'version.txt'), 'v2\n');
+      git(seedDir, ['add', 'version.txt']);
+      git(seedDir, ['commit', '-m', 'remote update']);
+      git(seedDir, ['push']);
+
+      const workerBootstrapUrl = `${pathToFileURL(path.join(workerDir, 'scripts', 'bootstrap.mjs')).href}?test=${Date.now()}`;
+      const workerBootstrap = await import(workerBootstrapUrl);
+      const updated = workerBootstrap.updateRepository({ AUTO_UPDATE_FETCH_TIMEOUT_MS: '10000' });
+      assert.strictEqual(updated.updated, true);
+      assert.strictEqual(fs.readFileSync(path.join(workerDir, 'version.txt'), 'utf8').trim(), 'v2');
+
+      git(workerDir, ['config', 'user.email', 'cotacao-test@local']);
+      git(workerDir, ['config', 'user.name', 'Cotacao Test']);
+      fs.writeFileSync(path.join(workerDir, 'local-only.txt'), 'nao sobrescrever\n');
+      git(workerDir, ['add', 'local-only.txt']);
+      git(workerDir, ['commit', '-m', 'local change']);
+
+      fs.writeFileSync(path.join(seedDir, 'version.txt'), 'v3\n');
+      git(seedDir, ['add', 'version.txt']);
+      git(seedDir, ['commit', '-m', 'second remote update']);
+      git(seedDir, ['push']);
+
+      const diverged = workerBootstrap.updateRepository({ AUTO_UPDATE_FETCH_TIMEOUT_MS: '10000' });
+      assert.strictEqual(diverged.updated, false);
+      assert.strictEqual(diverged.skipped, 'diverged');
+      assert.strictEqual(fs.readFileSync(path.join(workerDir, 'local-only.txt'), 'utf8').trim(), 'nao sobrescrever');
+      assert.strictEqual(fs.readFileSync(path.join(workerDir, 'version.txt'), 'utf8').trim(), 'v2');
+
+      git(workerDir, ['remote', 'set-url', 'origin', path.join(tempDir, 'servidor-indisponivel.git')]);
+      const offline = workerBootstrap.updateRepository({ AUTO_UPDATE_FETCH_TIMEOUT_MS: '5000' });
+      assert.strictEqual(offline.updated, false);
+      assert.strictEqual(offline.skipped, 'fetch-failed');
+      assert.strictEqual(fs.readFileSync(path.join(workerDir, 'local-only.txt'), 'utf8').trim(), 'nao sobrescrever');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   await t.test('distinguishes a missing Git installation from a folder without repository metadata', () => {
     assert.strictEqual(
       getUpdateBlockReason({ ...cleanRepository, gitAvailable: false }, {}),
@@ -422,6 +528,8 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     const launcherBatch = fs.readFileSync(path.join(root, 'wimi cotacao.bat'), 'utf8');
     const powershellLauncher = fs.readFileSync(path.join(root, 'scripts', 'launch-hidden.ps1'), 'utf8');
     const shortcutUpdater = fs.readFileSync(path.join(root, 'scripts', 'update-shortcut.ps1'), 'utf8');
+    const iconGenerator = fs.readFileSync(path.join(root, 'scripts', 'create-icon.ps1'), 'utf8');
+    const bootstrapSource = fs.readFileSync(path.join(root, 'scripts', 'bootstrap.mjs'), 'utf8');
     const hiddenLauncher = fs.readFileSync(path.join(root, 'wimi cotacao.vbs'), 'utf8');
     const technicalBatch = fs.readFileSync(path.join(root, 'cotacao.bat'), 'utf8');
     const electronMain = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
@@ -446,6 +554,12 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     assert.match(shortcutUpdater, /\$shortcut\.Arguments\s*=/i);
     assert.doesNotMatch(shortcutUpdater, /localShortcutPath/i);
     assert.doesNotMatch(shortcutUpdater, /wimi cotacao\.vbs/i);
+    assert.match(shortcutUpdater, /Atalho criado, mas a verificacao falhou/i);
+    assert.match(iconGenerator, /Split-Path -Parent \$PSScriptRoot/i);
+    assert.match(iconGenerator, /update-shortcut\.ps1/i);
+    assert.doesNotMatch(iconGenerator, /Get-Location/i);
+    assert.doesNotMatch(iconGenerator, /wimi cotacao\.vbs/i);
+    assert.doesNotMatch(iconGenerator, /localShortcutPath/i);
     assert.match(hiddenLauncher, /shell\.Run\(command, 0, waitForExit\)/i);
     assert.match(hiddenLauncher, /logs["']?\)/i);
     assert.match(hiddenLauncher, /startup\.log/i);
@@ -453,8 +567,14 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     assert.match(hiddenLauncher, /MsgBox/i);
     assert.match(technicalBatch, /npm run dev -- %\*/i);
     assert.match(electronMain, /AUTO_UPDATE_CHECK_INTERVAL_MS/);
+    assert.match(electronMain, /AUTO_UPDATE_ON_STARTUP[\s\S]*automatic Git updates are disabled/i);
+    assert.match(electronMain, /currentBranch[\s\S]*configuredBranch[\s\S]*differs from configured update branch/i);
+    assert.match(electronMain, /fetch['"], ['"]--quiet['"], ['"]--prune/i);
     assert.match(electronMain, /windowsHide:\s*true/);
     assert.match(electronMain, /get-update-status/);
+    assert.match(bootstrapSource, /AUTO_UPDATE_FETCH_TIMEOUT_MS/);
+    assert.match(bootstrapSource, /startApplication\(environment\)/);
+    assert.match(bootstrapSource, /env:\s*environment/);
   });
 
   await t.test('opens the Electron workspace maximized after it is ready', () => {

@@ -8,7 +8,7 @@ Sistema local de cotação de medicamentos em fornecedores com filtragem por Sub
 
 O sistema roda localmente no computador da farmácia. Certifique-se de possuir o Node.js instalado (Versão LTS sugerida).
 
-1. Clone o repositório com Git ou copie a pasta completa, incluindo a pasta oculta `.git`. Uma pasta baixada apenas como ZIP funciona localmente, mas não consegue receber atualizações automáticas.
+1. Feche o Wimifarma Cotação antes de transportar a instalação. Clone o repositório com Git ou copie a pasta completa, incluindo a pasta oculta `.git`. Uma pasta baixada apenas como ZIP funciona localmente, mas não consegue receber atualizações automáticas.
 2. Copie o arquivo `.env.example` para `.env`:
    ```bash
    copy .env.example .env
@@ -53,14 +53,23 @@ npm run dev
 
 Na abertura, `scripts/bootstrap.mjs`:
 - aplica atualizações Git somente quando a pasta está limpa e a branch rastreia um remoto ou corresponde à branch padrão de `origin`, sempre com `fast-forward`;
-- preserva a versão local quando existem alterações rastreadas, não há referência remota segura ou o remoto está indisponível;
+- exige que `AUTO_UPDATE_BRANCH`, quando configurada, seja exatamente a branch ativa; o sistema nunca troca de branch sozinho;
+- preserva a versão local quando existem alterações rastreadas, commits locais, histórico divergente, referência remota removida ou indisponibilidade do GitHub;
+- usa `git fetch --prune` com limite de 30 segundos por padrão, evitando tanto espera indefinida quanto falso estado de “atualizado” para uma branch removida;
 - executa `npm install` para reconciliar `package-lock.json` e dependências antes de abrir o Electron.
 - mantém um bloqueio por computador para impedir duas atualizações ou compilações simultâneas;
 - recompila quando o Git atualiza o código e repete a preparação completa na abertura seguinte quando a tentativa anterior falha;
 - registra o resultado em `logs/update-status.json`; o aplicativo avisa quando a atualização automática está bloqueada, quando abriu offline ou quando uma versão foi instalada.
 - verifica novas versões a cada 15 minutos enquanto permanece aberto. A aplicação segura ocorre na próxima abertura, antes de qualquer cotação.
 
-Use `AUTO_UPDATE_ON_STARTUP=false` para desativar a atualização de código. `AUTO_UPDATE_CHECK_INTERVAL_MS` controla a verificação em segundo plano e `AUTO_UPDATE_BRANCH` pode indicar a branch remota esperada em uma instalação distribuída. O diagnóstico sem alterações é `node scripts/bootstrap.mjs --diagnose`.
+Use `AUTO_UPDATE_ON_STARTUP=false` para desativar atualização e verificação. `AUTO_UPDATE_CHECK_INTERVAL_MS` controla a verificação em segundo plano, `AUTO_UPDATE_FETCH_TIMEOUT_MS` controla a espera pelo GitHub entre 5 segundos e 2 minutos e `AUTO_UPDATE_BRANCH` fixa o canal esperado. Essas opções do `.env` são repassadas ao Electron. O diagnóstico sem alterações é `node scripts/bootstrap.mjs --diagnose`.
+
+### Modelo mental da distribuição
+
+- **Portabilidade:** arquivos do projeto podem ser copiados; atalhos `.lnk`, cache da Santa Cruz e caminhos locais não podem. Cada computador os recria ou descobre novamente.
+- **Atualização:** depende de Git instalado, pasta `.git`, upstream válido, internet e arquivos rastreados sem alteração local. Se uma dessas condições falhar, a versão instalada é preservada e o motivo aparece na interface.
+- **Qualidade da versão:** atualização automática não transforma qualquer commit em versão aprovada. O workflow `.github/workflows/validate.yml` executa instalação reproduzível, testes, lint, build e análise PowerShell em Windows. Para crescer com mais computadores, o canal recomendado é uma branch estável protegida que só receba mudanças após essa validação.
+- **Dados locais:** `.env`, credenciais, banco, logs e descobertas da Santa Cruz permanecem em cada máquina e não devem entrar no Git.
 
 ### 2. Rodar Testes Unitários
 Para rodar a suite de testes unitários local (alimentada pelo runner nativo do Node):

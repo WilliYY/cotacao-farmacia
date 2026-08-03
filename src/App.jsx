@@ -1321,6 +1321,10 @@ function App() {
       type: 'warning',
       message: 'Atualização automática indisponível: o Git não está instalado ou não foi encontrado neste computador.'
     },
+    'branch-mismatch': {
+      type: 'warning',
+      message: 'Atualização pausada: esta instalação está em uma branch diferente do canal configurado.'
+    },
     'dirty-worktree': {
       type: 'warning',
       message: 'Atualização automática pausada para preservar alterações locais neste computador.'
@@ -1336,6 +1340,22 @@ function App() {
     'merge-failed': {
       type: 'warning',
       message: 'A nova versão não pôde ser aplicada com segurança. A versão local foi preservada.'
+    },
+    'upstream-missing': {
+      type: 'warning',
+      message: 'O canal remoto desta instalação não existe mais. A versão local foi preservada.'
+    },
+    'local-ahead': {
+      type: 'warning',
+      message: 'Este computador possui commits locais ainda não publicados. A atualização foi pausada para não sobrescrevê-los.'
+    },
+    diverged: {
+      type: 'warning',
+      message: 'A versão local e a versão remota seguiram caminhos diferentes. Nenhum arquivo foi sobrescrito.'
+    },
+    'sync-state-failed': {
+      type: 'warning',
+      message: 'Não foi possível comparar com segurança a versão local e a remota. A versão instalada foi mantida.'
     }
   };
   const updateStatusNotice = updateStatus ? updateStatusNotices[updateStatus.status] : null;

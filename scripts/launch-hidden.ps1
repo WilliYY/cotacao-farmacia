@@ -69,6 +69,11 @@ if (-not (Test-LauncherWorkspaceWritable -Directory $logDirectory)) {
     exit 2
 }
 
+if (-not (Test-Path -LiteralPath $batchPath -PathType Leaf)) {
+    Show-LauncherError "O arquivo cotacao.bat nao foi encontrado na pasta do sistema."
+    exit 4
+}
+
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     [System.IO.File]::AppendAllText(
         $logPath,
@@ -91,11 +96,6 @@ if (Test-Path -LiteralPath $shortcutScript -PathType Leaf) {
             "[$([DateTime]::Now.ToString('s'))] Atalho nao atualizado: $($_.Exception.Message)`r`n"
         )
     }
-}
-
-if (-not (Test-Path -LiteralPath $batchPath -PathType Leaf)) {
-    Show-LauncherError "O arquivo cotacao.bat nao foi encontrado na pasta do sistema."
-    exit 4
 }
 
 $waitForExit = $false

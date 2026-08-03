@@ -36,3 +36,6 @@ dist-ssr/
 *.njsproj
 *.sln
 *.sw?
+
+# Windows shortcuts are machine-specific and must be regenerated locally.
+wimi cotacao.lnk

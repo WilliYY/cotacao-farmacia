@@ -15,12 +15,17 @@ const bootstrapLockPath = path.join(
   'bootstrap.lock'
 );
 
-function loadBootstrapEnvironment() {
+export function loadBootstrapEnvironment() {
   const environment = { ...process.env };
   const environmentPath = path.join(projectRoot, '.env');
   if (!fs.existsSync(environmentPath)) return environment;
 
-  const supportedKeys = new Set(['AUTO_UPDATE_ON_STARTUP', 'AUTO_UPDATE_BRANCH']);
+  const supportedKeys = new Set([
+    'AUTO_UPDATE_ON_STARTUP',
+    'AUTO_UPDATE_BRANCH',
+    'AUTO_UPDATE_CHECK_INTERVAL_MS',
+    'AUTO_UPDATE_FETCH_TIMEOUT_MS'
+  ]);
   const lines = fs.readFileSync(environmentPath, 'utf8').split(/\r?\n/);
   for (const line of lines) {
     const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
@@ -28,6 +33,18 @@ function loadBootstrapEnvironment() {
     environment[match[1]] = match[2].replace(/^(['"])(.*)\1$/, '$2');
   }
   return environment;
+}
+
+export function getUpdateFetchTimeoutMs(environment = process.env) {
+  const configured = Number.parseInt(environment.AUTO_UPDATE_FETCH_TIMEOUT_MS || '30000', 10);
+  if (!Number.isInteger(configured)) return 30_000;
+  return Math.min(120_000, Math.max(5_000, configured));
+}
+
+export function getUpdateCheckIntervalMs(environment = process.env) {
+  const configured = Number.parseInt(environment.AUTO_UPDATE_CHECK_INTERVAL_MS || '900000', 10);
+  if (!Number.isInteger(configured)) return 900_000;
+  return Math.min(24 * 60 * 60_000, Math.max(5 * 60_000, configured));
 }
 
 function run(command, args, options = {}) {
@@ -80,6 +97,9 @@ export function createUpdateStatus(updateResult, repositoryState, environment = 
     automaticUpdateEnabled: String(environment.AUTO_UPDATE_ON_STARTUP || '').toLowerCase() !== 'false',
     updated: !failed && updateResult?.updated === true,
     commitCount: Number.isInteger(updateResult?.commitCount) ? updateResult.commitCount : 0,
+    ...(Number.isInteger(updateResult?.aheadCount) && updateResult.aheadCount > 0
+      ? { aheadCount: updateResult.aheadCount }
+      : {}),
     gitAvailable: repositoryState?.gitAvailable !== false,
     branch: repositoryState?.branch || '',
     upstream: repositoryState?.upstream || '',
@@ -229,18 +249,21 @@ export function getUpdateBlockReason(state, environment = process.env) {
   }
   if (!state.isRepository) return 'not-a-repository';
   if (state.gitAvailable === false) return 'git-unavailable';
+  const configuredBranch = String(environment.AUTO_UPDATE_BRANCH || '').trim();
+  if (configuredBranch && state.branch !== configuredBranch) return 'branch-mismatch';
   if (state.dirty) return 'dirty-worktree';
   if (!state.upstream) return 'no-upstream';
   return '';
 }
 
-function updateRepository(environment = process.env) {
+export function updateRepository(environment = process.env) {
   const initialState = getRepositoryState(environment);
   const blockReason = getUpdateBlockReason(initialState, environment);
   const blockMessages = {
     disabled: '[UPDATE] Atualizacao automatica desativada por configuracao.',
     'not-a-repository': '[UPDATE] Pasta sem Git; mantendo a versao instalada.',
     'git-unavailable': '[UPDATE] Programa Git nao encontrado; mantendo a versao instalada.',
+    'branch-mismatch': '[UPDATE] Branch local diferente do canal configurado; atualizacao ignorada com seguranca.',
     'dirty-worktree': '[UPDATE] Alteracoes locais detectadas; atualizacao Git ignorada para preservar os arquivos.',
     'no-upstream': '[UPDATE] Branch sem upstream; configure o rastreamento remoto ou AUTO_UPDATE_BRANCH.'
   };
@@ -251,14 +274,44 @@ function updateRepository(environment = process.env) {
 
   console.log(`[UPDATE] Verificando ${initialState.upstream}...`);
   const remote = initialState.upstream.split('/')[0];
-  const fetch = run('git', ['fetch', '--quiet', remote], { timeout: 5_000 });
+  const fetch = run('git', ['fetch', '--quiet', '--prune', remote], {
+    timeout: getUpdateFetchTimeoutMs(environment)
+  });
   if (!fetch.ok) {
     console.log('[UPDATE] Sem acesso ao repositorio remoto ou conexao lenta; iniciando a versao local.');
     return { updated: false, skipped: 'fetch-failed' };
   }
 
-  const behind = run('git', ['rev-list', '--count', `HEAD..${initialState.upstream}`]);
-  const commitCount = behind.ok ? Number.parseInt(behind.stdout, 10) : 0;
+  const upstreamExists = run('git', ['rev-parse', '--verify', initialState.upstream]);
+  if (!upstreamExists.ok) {
+    console.log('[UPDATE] O canal remoto configurado nao existe mais; mantendo a versao local.');
+    return { updated: false, skipped: 'upstream-missing' };
+  }
+
+  const divergence = run('git', ['rev-list', '--left-right', '--count', `HEAD...${initialState.upstream}`]);
+  if (!divergence.ok) {
+    console.log('[UPDATE] Nao foi possivel comparar a versao local com a remota.');
+    return { updated: false, skipped: 'sync-state-failed' };
+  }
+
+  const [aheadCount, commitCount] = divergence.stdout
+    .split(/\s+/)
+    .map(value => Number.parseInt(value, 10));
+  if (!Number.isInteger(aheadCount) || !Number.isInteger(commitCount)) {
+    console.log('[UPDATE] O estado de sincronizacao do Git retornou dados invalidos.');
+    return { updated: false, skipped: 'sync-state-failed' };
+  }
+
+  if (aheadCount > 0) {
+    const skipped = commitCount > 0 ? 'diverged' : 'local-ahead';
+    console.log(
+      skipped === 'diverged'
+        ? '[UPDATE] A instalacao local e o servidor possuem historicos diferentes; nenhum arquivo foi sobrescrito.'
+        : '[UPDATE] A instalacao possui commits locais ainda nao publicados; nenhum arquivo foi sobrescrito.'
+    );
+    return { updated: false, skipped, aheadCount, commitCount };
+  }
+
   if (!Number.isInteger(commitCount) || commitCount <= 0) {
     console.log('[UPDATE] Codigo ja esta na versao mais recente.');
     return { updated: false, skipped: 'up-to-date' };
@@ -339,7 +392,7 @@ function ensureProductionBuild(updateResult, previousStatus = {}) {
   }
 }
 
-function startApplication() {
+function startApplication(environment = process.env) {
   console.log('[APP] Iniciando Wimifarma Cotacao...');
   const distHtml = path.join(projectRoot, 'dist', 'index.html');
 
@@ -347,11 +400,11 @@ function startApplication() {
 
   // Launch Electron executable directly for 100% clean process tree and instant exit
   if (electronExec && fs.existsSync(distHtml) && !process.env.FORCE_DEV_SERVER) {
-    const result = run(electronExec, ['.'], { stdio: 'inherit' });
+    const result = run(electronExec, ['.'], { stdio: 'inherit', env: environment });
     return result.status ?? 0;
   }
 
-  const application = runNpm(['run', 'dev:app'], { stdio: 'inherit' });
+  const application = runNpm(['run', 'dev:app'], { stdio: 'inherit', env: environment });
   return application.status ?? 1;
 }
 
@@ -366,6 +419,8 @@ function printDiagnostics(environment) {
     updateStatusPath,
     autoUpdateEnabled: String(environment.AUTO_UPDATE_ON_STARTUP || '').toLowerCase() !== 'false',
     configuredBranch: String(environment.AUTO_UPDATE_BRANCH || ''),
+    updateFetchTimeoutMs: getUpdateFetchTimeoutMs(environment),
+    updateCheckIntervalMs: getUpdateCheckIntervalMs(environment),
     ...state
   }));
 }
@@ -393,7 +448,7 @@ if (isMainModule) {
       if (process.argv.includes('--prepare-only')) {
         console.log('[APP] Preparacao concluida; abertura ignorada por --prepare-only.');
       } else {
-        process.exitCode = startApplication();
+        process.exitCode = startApplication(environment);
       }
     } catch (error) {
       writeUpdateStatus({

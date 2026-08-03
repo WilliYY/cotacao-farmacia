@@ -61,6 +61,12 @@ function getUpdateCheckIntervalMs() {
   return Math.min(24 * 60 * 60_000, Math.max(5 * 60_000, configured));
 }
 
+function getUpdateFetchTimeoutMs() {
+  const configured = Number.parseInt(process.env.AUTO_UPDATE_FETCH_TIMEOUT_MS || '30000', 10);
+  if (!Number.isInteger(configured)) return 30_000;
+  return Math.min(120_000, Math.max(5_000, configured));
+}
+
 function getDatabaseStartupTimeoutMs() {
   const configured = Number.parseInt(process.env.DATABASE_STARTUP_TIMEOUT_MS || '120000', 10);
   if (!Number.isInteger(configured)) return 120_000;
@@ -84,13 +90,13 @@ async function initDatabaseWithTimeout(userDataPath) {
   }
 }
 
-function runGit(args) {
+function runGit(args, timeoutMs = 60_000) {
   return new Promise((resolve, reject) => {
     execFile('git', args, {
       cwd: process.cwd(),
       encoding: 'utf8',
       windowsHide: true,
-      timeout: 60_000
+      timeout: timeoutMs
     }, (error, stdout, stderr) => {
       if (error) {
         error.gitStderr = String(stderr || '').trim();
@@ -121,6 +127,10 @@ function readUpdateStatus() {
 
 async function checkGitUpdates() {
   if (updateCheckInProgress) return;
+  if (String(process.env.AUTO_UPDATE_ON_STARTUP || '').toLowerCase() === 'false') {
+    logger.info('Automatic Git updates are disabled, skipping update check.');
+    return;
+  }
   if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
     logger.info('Not a git repository, skipping update check.');
     return;
@@ -129,17 +139,32 @@ async function checkGitUpdates() {
   updateCheckInProgress = true;
   logger.info('Checking for Git updates...');
   try {
+    const currentBranch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD']);
+    const configuredBranch = String(process.env.AUTO_UPDATE_BRANCH || '').trim();
+    if (configuredBranch && currentBranch !== configuredBranch) {
+      logger.warn(`Current branch ${currentBranch} differs from configured update branch ${configuredBranch}.`);
+      return;
+    }
     const upstream = await runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
     const separatorIndex = upstream.indexOf('/');
     if (separatorIndex <= 0) throw new Error('Git upstream is not configured.');
     const remote = upstream.slice(0, separatorIndex);
     const branch = upstream.slice(separatorIndex + 1);
-    await runGit(['fetch', '--quiet', remote]);
-    const count = Number.parseInt(await runGit(['rev-list', '--count', `HEAD..${upstream}`]), 10);
-    if (Number.isInteger(count) && count > 0) {
-      logger.info(`Git updates available: ${count} commits behind ${upstream}`);
+    await runGit(['fetch', '--quiet', '--prune', remote], getUpdateFetchTimeoutMs());
+    await runGit(['rev-parse', '--verify', upstream]);
+    const divergence = await runGit(['rev-list', '--left-right', '--count', `HEAD...${upstream}`]);
+    const [aheadCount, behindCount] = divergence
+      .split(/\s+/)
+      .map(value => Number.parseInt(value, 10));
+    if (!Number.isInteger(aheadCount) || !Number.isInteger(behindCount)) {
+      throw new Error('Git returned an invalid synchronization state.');
+    }
+    if (aheadCount > 0) {
+      logger.warn(`Local installation is ${aheadCount} commit(s) ahead and cannot be updated automatically.`);
+    } else if (behindCount > 0) {
+      logger.info(`Git updates available: ${behindCount} commits behind ${upstream}`);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('git-update-available', { count, branch });
+        mainWindow.webContents.send('git-update-available', { count: behindCount, branch });
       }
     } else {
       logger.info('App is up to date with Git repository.');

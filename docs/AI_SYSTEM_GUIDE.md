@@ -299,15 +299,16 @@ PG_DATABASE=cotador_st
 
 ### Startup Bootstrap and Updates
 - `cotação.bat`, `start-app.bat` e `wimi cotacao.bat` convergem para o launcher oculto; `cotacao.bat` permanece como entrada técnica e todos executam o mesmo bootstrap Node.
-- Antes do Electron, o bootstrap consulta o estado Git. Uma atualização só é aceita com worktree limpa, upstream conhecido ou branch idêntica ao padrão de `origin`, `git fetch` bem-sucedido e `git merge --ff-only`.
-- Alterações locais em arquivos rastreados, ausência de referência remota segura, falta de Git ou indisponibilidade de rede não apagam arquivos nem bloqueiam a versão instalada; nesses casos a atualização de código é ignorada. Arquivos locais não rastreados são preservados e qualquer conflito faz o `merge --ff-only` abortar.
+- Antes do Electron, o bootstrap consulta o estado Git. Uma atualização só é aceita com worktree limpa, branch compatível com `AUTO_UPDATE_BRANCH`, upstream existente, histórico local sem commits à frente, `git fetch --prune` bem-sucedido e `git merge --ff-only`.
+- Alterações rastreadas, branch incorreta, commits locais, divergência, referência remota removida, falta de Git ou indisponibilidade de rede não apagam arquivos nem bloqueiam a versão instalada; nesses casos a atualização é ignorada e recebe um estado específico na interface. Arquivos locais não rastreados são preservados.
 - `npm install --no-audit --no-fund` reconcilia as dependências declaradas antes de iniciar `dev:app`.
 - `package.json#allowScripts` aprova somente as versões fixadas de `sqlite3` e `electron-winstaller`, evitando bloqueio futuro do npm em uma instalação nova sem liberar scripts de dependências indiscriminadamente.
 - Cada inicialização grava um estado sanitizado em `logs/update-status.json`. A interface torna visíveis atualização aplicada, falta de conexão, pasta sem `.git`, branch sem upstream, atualização desativada ou bloqueio por alterações locais.
-- O Electron consulta o upstream com `execFile` oculto na abertura e a cada `AUTO_UPDATE_CHECK_INTERVAL_MS` (15 minutos por padrão). A interface avisa sobre commits detectados; a instalação acontece na próxima abertura, fora do processo Electron, evitando atualizar arquivos em uso.
-- `AUTO_UPDATE_ON_STARTUP=false` desativa a etapa Git. `AUTO_UPDATE_BRANCH` é opcional e só pode completar o upstream da mesma branch que já está ativa; o bootstrap nunca troca de branch automaticamente.
+- O Electron consulta o upstream com `execFile` oculto na abertura e a cada `AUTO_UPDATE_CHECK_INTERVAL_MS` (15 minutos por padrão). A interface avisa sobre commits detectados; a instalação acontece na próxima abertura, fora do processo Electron, evitando atualizar arquivos em uso. `AUTO_UPDATE_FETCH_TIMEOUT_MS` usa 30 segundos por padrão e aceita de 5 segundos a 2 minutos.
+- `AUTO_UPDATE_ON_STARTUP=false` desativa a etapa Git e a verificação periódica. `AUTO_UPDATE_BRANCH` é opcional, mas quando preenchida precisa corresponder exatamente à branch ativa; o bootstrap nunca troca de branch automaticamente. Todas essas opções carregadas do `.env` são repassadas ao Electron.
 - Para outro computador, usar `git clone` ou copiar também a pasta oculta `.git`. Um ZIP sem metadados Git é deliberadamente marcado como incapaz de se atualizar, embora a versão local continue utilizável.
-- O launcher VBS valida Node.js antes de iniciar o processo oculto e mostra uma caixa de erro quando o requisito não existe. Git ausente é um estado separado de `.git` ausente para orientar corretamente a preparação do computador.
+- O launcher PowerShell valida pasta gravável, lote técnico e Node.js antes de iniciar o processo oculto. Ele recria e relê o atalho da Área de Trabalho para confirmar destino, argumentos e diretório de trabalho; o VBS permanece apenas como fallback. O gerador de ícones reutiliza esse mesmo criador canônico e não produz `.lnk` dentro do projeto.
+- `.github/workflows/validate.yml` executa `npm ci`, testes, lint, build e parser PowerShell em `windows-latest`. Para distribuição maior, uma branch estável protegida deve ser o canal de atualização; o workflow valida commits, mas branch sem proteção ainda pode receber push direto.
 
 ### Test Coverage Focus
 The Node test suite validates the high-risk pharmacy purchase paths:
@@ -318,8 +319,7 @@ The Node test suite validates the high-risk pharmacy purchase paths:
 - Structured unavailable rows when suppliers return no matches.
 - SQLite quote persistence plus manual review recalculation.
 - XLSX export workbook structure and best/ignored sheet routing.
-- Startup update safety for disabled updates, dirty worktrees, missing upstreams, and clean tracked repositories.
-- Current validation: `npm test` 115/115, `npm run build` approved, `npm run lint` without blocking errors, plus live `clenil 250` checks on all four suppliers.
+- Startup update safety for disabled updates, dirty worktrees, wrong branches, missing upstreams, local-ahead/diverged histories, offline remotes, bounded fetches, portable shortcuts, and real fast-forward clones.
 
 ### Delivery Workflow
 - Every completed project change includes synchronized documentation, executable validation, a scoped Git commit, and a push of the current branch by default.
