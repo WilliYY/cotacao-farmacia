@@ -2,6 +2,16 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.7] - 2026-08-03
+
+### Recuperação do atualizador e retenção de diagnósticos
+- **Erro de repositório separado:** falha de permissão, diretório inseguro ou leitura corrompida do Git agora aparece como `repository-error`; não é mais confundida com alterações locais no projeto.
+- **Git realmente oculto:** as verificações em segundo plano e o `fetch` de abertura usam `GIT_TERMINAL_PROMPT=0` e `GCM_INTERACTIVE=Never`, impedindo uma janela invisível de aguardar login indefinidamente.
+- **Reserva VBS isolada:** o launcher de compatibilidade ganhou log único por abertura e valida `cotacao.bat` antes de executar, evitando disputa pelo antigo `logs/startup.log` e erro silencioso em cópia incompleta.
+- **Logs de abertura limitados:** o PowerShell preserva somente os 30 diagnósticos `startup-*.log` mais recentes sem impedir a inicialização quando a limpeza falha.
+- **Banco com retenção:** `SystemLog` mantém no máximo 5.000 registros, é podado na abertura e a cada 100 novas mensagens; o histórico de cotações e os preços capturados não são afetados.
+- **Regressão automatizada:** a suíte cobre ambiente Git não interativo, distinção de erro do repositório, launchers portáteis e retenção ordenada dos logs do banco.
+
 ## [1.8.6] - 2026-08-03
 
 ### Atualização multi-PC auditada e atalhos protegidos

@@ -47,6 +47,14 @@ export function getUpdateCheckIntervalMs(environment = process.env) {
   return Math.min(24 * 60 * 60_000, Math.max(5 * 60_000, configured));
 }
 
+export function createNonInteractiveGitEnvironment(environment = process.env) {
+  return {
+    ...environment,
+    GIT_TERMINAL_PROMPT: '0',
+    GCM_INTERACTIVE: 'Never'
+  };
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: projectRoot,
@@ -209,6 +217,7 @@ export function getRepositoryState(environment = process.env) {
     return {
       isRepository: hasGitDirectory,
       gitAvailable,
+      repositoryError: false,
       dirty: false,
       branch: '',
       upstream: ''
@@ -237,7 +246,8 @@ export function getRepositoryState(environment = process.env) {
   return {
     isRepository: true,
     gitAvailable: true,
-    dirty: !status.ok || status.stdout.length > 0,
+    repositoryError: !status.ok || !branch.ok,
+    dirty: status.ok && status.stdout.length > 0,
     branch: branch.ok ? branch.stdout : '',
     upstream: upstream.ok ? upstream.stdout : ''
   };
@@ -249,6 +259,7 @@ export function getUpdateBlockReason(state, environment = process.env) {
   }
   if (!state.isRepository) return 'not-a-repository';
   if (state.gitAvailable === false) return 'git-unavailable';
+  if (state.repositoryError) return 'repository-error';
   const configuredBranch = String(environment.AUTO_UPDATE_BRANCH || '').trim();
   if (configuredBranch && state.branch !== configuredBranch) return 'branch-mismatch';
   if (state.dirty) return 'dirty-worktree';
@@ -263,6 +274,7 @@ export function updateRepository(environment = process.env) {
     disabled: '[UPDATE] Atualizacao automatica desativada por configuracao.',
     'not-a-repository': '[UPDATE] Pasta sem Git; mantendo a versao instalada.',
     'git-unavailable': '[UPDATE] Programa Git nao encontrado; mantendo a versao instalada.',
+    'repository-error': '[UPDATE] O Git nao conseguiu ler esta instalacao com seguranca; mantendo a versao local.',
     'branch-mismatch': '[UPDATE] Branch local diferente do canal configurado; atualizacao ignorada com seguranca.',
     'dirty-worktree': '[UPDATE] Alteracoes locais detectadas; atualizacao Git ignorada para preservar os arquivos.',
     'no-upstream': '[UPDATE] Branch sem upstream; configure o rastreamento remoto ou AUTO_UPDATE_BRANCH.'
@@ -275,7 +287,8 @@ export function updateRepository(environment = process.env) {
   console.log(`[UPDATE] Verificando ${initialState.upstream}...`);
   const remote = initialState.upstream.split('/')[0];
   const fetch = run('git', ['fetch', '--quiet', '--prune', remote], {
-    timeout: getUpdateFetchTimeoutMs(environment)
+    timeout: getUpdateFetchTimeoutMs(environment),
+    env: createNonInteractiveGitEnvironment(environment)
   });
   if (!fetch.ok) {
     console.log('[UPDATE] Sem acesso ao repositorio remoto ou conexao lenta; iniciando a versao local.');

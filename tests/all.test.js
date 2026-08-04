@@ -73,12 +73,16 @@ import {
   recordQueryCorrection,
   updateQuoteResult,
   getDb,
-  normalizePostgresRow
+  getSystemLogs,
+  normalizePostgresRow,
+  pruneSystemLogs,
+  saveLogToDb,
 } from '../src/lib/database.js';
 import { generateExcelBuffer } from '../src/lib/exporter.js';
 import {
   acquireBootstrapLock,
   createUpdateStatus,
+  createNonInteractiveGitEnvironment,
   getUpdateCheckIntervalMs,
   getUpdateFetchTimeoutMs,
   getUpdateBlockReason,
@@ -290,6 +294,20 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
       getUpdateBlockReason({ ...cleanRepository, dirty: true }, {}),
       'dirty-worktree'
     );
+  });
+
+  await t.test('distinguishes a repository read failure from local changes', () => {
+    assert.strictEqual(
+      getUpdateBlockReason({ ...cleanRepository, repositoryError: true }, {}),
+      'repository-error'
+    );
+  });
+
+  await t.test('prevents hidden Git credential prompts', () => {
+    const environment = createNonInteractiveGitEnvironment({ TEST_VALUE: 'preserved' });
+    assert.strictEqual(environment.TEST_VALUE, 'preserved');
+    assert.strictEqual(environment.GIT_TERMINAL_PROMPT, '0');
+    assert.strictEqual(environment.GCM_INTERACTIVE, 'Never');
   });
 
   await t.test('requires a tracked remote branch', () => {
@@ -544,6 +562,8 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     assert.match(powershellLauncher, /CreateNoWindow\s*=\s*\$true/i);
     assert.match(powershellLauncher, /WindowStyle\s*=\s*['"]Hidden['"]/i);
     assert.match(powershellLauncher, /startup-\{0\}-\{1\}\.log/i);
+    assert.match(powershellLauncher, /Select-Object\s+-Skip\s+30/i);
+    assert.match(powershellLauncher, /Remove-Item\s+-LiteralPath/i);
     assert.match(powershellLauncher, /Get-Command\s+node/i);
     assert.match(powershellLauncher, /Test-LauncherWorkspaceWritable/i);
     assert.match(powershellLauncher, /update-shortcut\.ps1/i);
@@ -562,7 +582,10 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     assert.doesNotMatch(iconGenerator, /localShortcutPath/i);
     assert.match(hiddenLauncher, /shell\.Run\(command, 0, waitForExit\)/i);
     assert.match(hiddenLauncher, /logs["']?\)/i);
-    assert.match(hiddenLauncher, /startup\.log/i);
+    assert.match(hiddenLauncher, /startup-vbs-/i);
+    assert.match(hiddenLauncher, /GetTempName/i);
+    assert.doesNotMatch(hiddenLauncher, /BuildPath\(logDirectory,\s*"startup\.log"\)/i);
+    assert.match(hiddenLauncher, /FileExists\(batchPath\)/i);
     assert.match(hiddenLauncher, /where node/i);
     assert.match(hiddenLauncher, /MsgBox/i);
     assert.match(technicalBatch, /npm run dev -- %\*/i);
@@ -571,6 +594,8 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     assert.match(electronMain, /currentBranch[\s\S]*configuredBranch[\s\S]*differs from configured update branch/i);
     assert.match(electronMain, /fetch['"], ['"]--quiet['"], ['"]--prune/i);
     assert.match(electronMain, /windowsHide:\s*true/);
+    assert.match(electronMain, /GIT_TERMINAL_PROMPT:\s*['"]0['"]/);
+    assert.match(electronMain, /GCM_INTERACTIVE:\s*['"]Never['"]/);
     assert.match(electronMain, /get-update-status/);
     assert.match(bootstrapSource, /AUTO_UPDATE_FETCH_TIMEOUT_MS/);
     assert.match(bootstrapSource, /startApplication\(environment\)/);
@@ -617,6 +642,37 @@ test('Startup updater - applies only when the repository is safe', async (t) => 
     assert.match(mainSource, /fields\?\.reviewStatus === 'APROVADO'/);
     assert.match(mainSource, /'MANUAL_REVIEW'/);
   });
+});
+
+test('Database logs - retention keeps only the most recent rows', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cotacao-system-log-test-'));
+  const previousDatabasePath = process.env.DATABASE_PATH;
+  const previousDbType = process.env.DB_TYPE;
+
+  try {
+    process.env.DATABASE_PATH = tempDir;
+    process.env.DB_TYPE = 'sqlite';
+    await initDatabase(tempDir);
+
+    for (let index = 1; index <= 8; index += 1) {
+      await saveLogToDb('info', `retention-${index}`);
+    }
+    await pruneSystemLogs(3);
+
+    const logs = await getSystemLogs(10);
+    assert.deepStrictEqual(logs.map(log => log.message), [
+      'retention-8',
+      'retention-7',
+      'retention-6'
+    ]);
+  } finally {
+    await closeDatabase();
+    if (previousDatabasePath === undefined) delete process.env.DATABASE_PATH;
+    else process.env.DATABASE_PATH = previousDatabasePath;
+    if (previousDbType === undefined) delete process.env.DB_TYPE;
+    else process.env.DB_TYPE = previousDbType;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('Quote run coordinator - cancellation lifecycle', () => {

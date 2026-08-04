@@ -55,11 +55,12 @@ Na abertura, `scripts/bootstrap.mjs`:
 - aplica atualizações Git somente quando a pasta está limpa e a branch rastreia um remoto ou corresponde à branch padrão de `origin`, sempre com `fast-forward`;
 - exige que `AUTO_UPDATE_BRANCH`, quando configurada, seja exatamente a branch ativa; o sistema nunca troca de branch sozinho;
 - preserva a versão local quando existem alterações rastreadas, commits locais, histórico divergente, referência remota removida ou indisponibilidade do GitHub;
+- separa alterações locais de falhas de leitura/permissão do repositório e nunca abre uma solicitação invisível de credenciais do Git;
 - usa `git fetch --prune` com limite de 30 segundos por padrão, evitando tanto espera indefinida quanto falso estado de “atualizado” para uma branch removida;
 - executa `npm install` para reconciliar `package-lock.json` e dependências antes de abrir o Electron.
 - mantém um bloqueio por computador para impedir duas atualizações ou compilações simultâneas;
 - recompila quando o Git atualiza o código e repete a preparação completa na abertura seguinte quando a tentativa anterior falha;
-- registra o resultado em `logs/update-status.json`; o aplicativo avisa quando a atualização automática está bloqueada, quando abriu offline ou quando uma versão foi instalada.
+- registra o resultado em `logs/update-status.json`; o aplicativo avisa quando a atualização automática está bloqueada, quando abriu offline, quando o Git não consegue ler a instalação ou quando uma versão foi instalada.
 - verifica novas versões a cada 15 minutos enquanto permanece aberto. A aplicação segura ocorre na próxima abertura, antes de qualquer cotação.
 
 Use `AUTO_UPDATE_ON_STARTUP=false` para desativar atualização e verificação. `AUTO_UPDATE_CHECK_INTERVAL_MS` controla a verificação em segundo plano, `AUTO_UPDATE_FETCH_TIMEOUT_MS` controla a espera pelo GitHub entre 5 segundos e 2 minutos e `AUTO_UPDATE_BRANCH` fixa o canal esperado. Essas opções do `.env` são repassadas ao Electron. O diagnóstico sem alterações é `node scripts/bootstrap.mjs --diagnose`.
@@ -167,6 +168,7 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - **Recuperação configurável:** `SUPPLIER_FAILURE_THRESHOLD` controla o limiar de falhas consecutivas e `SUPPLIER_RECOVERY_COOLDOWN_MS` controla a pausa antes da tentativa de reentrada. Ambos têm limites internos para impedir espera ou repetição indefinida.
 - **Automação discreta:** `SHOW_SCRAPER_WINDOW=false` mantém ANB, Profarma e DM ocultas e fora da barra de tarefas. A Santa Cruz tenta escrever pelo controle de acessibilidade e restaura o foco anterior; por ser um aplicativo Java local, uma sessão Windows/VM dedicada é a única garantia de interferência visual zero.
 - **Privacidade Local:** O sistema grava histórico local em banco SQLite (`cotador-st.db`) na pasta de dados do usuário e gera logs limpos em `logs/app.log` sem armazenar dados de cookies, senhas, tokens ou contas de acesso.
+- **Retenção de diagnóstico:** `SystemLog` é limitado aos 5.000 registros mais recentes. Essa limpeza não remove cotações, ofertas, aprendizado linguístico nem credenciais.
 
 ### 5. Regra de preço da DM Paraná
 
@@ -181,7 +183,7 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 
 - No uso diário, abra **`wimi cotacao.bat`**. Esse atalho chama `cotacao.bat`, que valida o Node.js e executa o bootstrap seguro de atualização e dependências antes de iniciar o Electron.
 - A janela principal abre maximizada, respeita um tamanho mínimo operacional e reorganiza o conteúdo sem rolagem horizontal em notebooks e telas compactas.
-- O processo técnico permanece oculto e grava cada abertura em um arquivo próprio `logs/startup-*.log`, evitando conflito quando outra instância já está aberta; a janela preta do CMD não fica aberta junto do aplicativo.
+- O processo técnico permanece oculto e grava cada abertura em um arquivo próprio `logs/startup-*.log`, evitando conflito quando outra instância já está aberta; a janela preta do CMD não fica aberta junto do aplicativo. Somente os 30 diagnósticos de abertura mais recentes são preservados.
 - Uma cotação nunca permanece carregando indefinidamente: por padrão, portais web têm limite de 5 minutos, enquanto Santa Cruz e a cotação completa têm limite de 10 minutos. Ao atingir o limite, processos pendentes são cancelados, resultados reais já obtidos são preservados e as fontes incompletas ficam sinalizadas.
 - Durante a espera, o painel mostra o medicamento atual, o progresso total, o tempo decorrido e o estado real de cada distribuidora: aguardando, pesquisando, recuperando, concluída, sem resultado, falha, ignorada ou tempo limite. As mensagens também identificam o campo final conferido em cada portal.
 - Antes da cotação, a faixa da Santa Cruz verifica a instalação e a janela a cada 30 segundos. Ela informa o estado e o motivo, oferece `Verificar` e `Preparar Santa Cruz` quando aplicável e reconhece também ocupação, falha de abertura e aplicativo sem resposta. Enquanto o preparo estiver em andamento, uma nova cotação fica bloqueada e respostas antigas de verificação não podem sobrescrever o estado mais recente.

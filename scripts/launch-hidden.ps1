@@ -44,6 +44,21 @@ function ConvertTo-CmdQuotedArgument {
     return '"' + $Value.Replace('"', '""') + '"'
 }
 
+function Remove-StaleLauncherLogs {
+    param([string]$Directory)
+
+    try {
+        Get-ChildItem -LiteralPath $Directory -Filter 'startup-*.log' -File -ErrorAction Stop |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -Skip 30 |
+            ForEach-Object {
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+            }
+    } catch {
+        # A limpeza de diagnosticos antigos nunca deve impedir a abertura do aplicativo.
+    }
+}
+
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $logDirectory = Join-Path $projectRoot 'logs'
 $logFileName = 'startup-{0}-{1}.log' -f ([DateTime]::Now.ToString('yyyyMMdd-HHmmss')), $PID
@@ -68,6 +83,9 @@ if (-not (Test-LauncherWorkspaceWritable -Directory $logDirectory)) {
     )
     exit 2
 }
+
+[System.IO.File]::AppendAllText($logPath, '')
+Remove-StaleLauncherLogs -Directory $logDirectory
 
 if (-not (Test-Path -LiteralPath $batchPath -PathType Leaf)) {
     Show-LauncherError "O arquivo cotacao.bat nao foi encontrado na pasta do sistema."

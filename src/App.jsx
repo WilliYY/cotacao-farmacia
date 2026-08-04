@@ -1321,6 +1321,10 @@ function App() {
       type: 'warning',
       message: 'Atualização automática indisponível: o Git não está instalado ou não foi encontrado neste computador.'
     },
+    'repository-error': {
+      type: 'warning',
+      message: 'Atualização automática pausada: o Git não conseguiu ler esta instalação. Verifique as permissões da pasta ou refaça o clone oficial.'
+    },
     'branch-mismatch': {
       type: 'warning',
       message: 'Atualização pausada: esta instalação está em uma branch diferente do canal configurado.'

@@ -289,7 +289,10 @@ PG_DATABASE=cotador_st
 `ENABLE_REAL_CONNECTORS=false` is a deterministic mock mode and must be treated as business-rule testing only. It returns catalog fixtures instantly and does not represent live supplier pricing. For pharmacy price quotation, use `ENABLE_REAL_CONNECTORS=true` with saved supplier credentials. When `DATABASE_PATH=local`, SQLite is opened from `data/cotador-st.db`; this is the portable database used for local credentials and quote history.
 
 ### Running Commands
-- **Daily Windows launcher:** `wimi cotacao.bat` delegates to `wimi cotacao.vbs`, which starts `cotacao.bat` with window style `0` and redirects output to `logs/startup.log`.
+- **Daily Windows launcher:** `wimi cotacao.bat` delegates primarily to `scripts/launch-hidden.ps1`, which recreates the machine-local shortcut, starts `cotacao.bat` without a console window, and writes a unique `logs/startup-*.log`. `wimi cotacao.vbs` is only the compatibility fallback and also uses a unique log.
+- **Launcher retention:** the PowerShell launcher keeps only the 30 newest startup diagnostics. Cleanup is best-effort and never blocks application startup.
+- **Non-interactive Git:** startup and background fetches set `GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=Never`. Repository read/permission failures are reported as `repository-error`, distinct from a dirty worktree, and always preserve the installed version.
+- **System log retention:** `SystemLog` is pruned on database initialization and after every 100 persisted messages so it stays at or below 5,000 rows. Quote history, results, corrections, and credentials are separate tables and are not pruned by this maintenance.
 - **Prepare and Start:** `npm run dev` (Git seguro, dependências e aplicativo)
 - **Preparation Only:** `node scripts/bootstrap.mjs --prepare-only`
 - **Startup Diagnostics:** `node scripts/bootstrap.mjs --diagnose`

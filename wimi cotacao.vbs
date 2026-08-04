@@ -1,6 +1,6 @@
 Option Explicit
 
-Dim shell, fileSystem, projectRoot, logDirectory, logPath
+Dim shell, fileSystem, projectRoot, logDirectory, logPath, logName
 Dim batchPath, command, forwardedArguments, waitForExit, exitCode, index, argument, nodeCheck
 
 Set shell = CreateObject("WScript.Shell")
@@ -8,11 +8,18 @@ Set fileSystem = CreateObject("Scripting.FileSystemObject")
 
 projectRoot = fileSystem.GetParentFolderName(WScript.ScriptFullName)
 logDirectory = fileSystem.BuildPath(projectRoot, "logs")
-logPath = fileSystem.BuildPath(logDirectory, "startup.log")
+logName = "startup-vbs-" & fileSystem.GetTempName & ".log"
+logPath = fileSystem.BuildPath(logDirectory, logName)
 batchPath = fileSystem.BuildPath(projectRoot, "cotacao.bat")
 
 If Not fileSystem.FolderExists(logDirectory) Then
     fileSystem.CreateFolder(logDirectory)
+End If
+
+If Not fileSystem.FileExists(batchPath) Then
+    MsgBox "O arquivo cotacao.bat nao foi encontrado na pasta do sistema.", _
+        vbCritical, "Wimifarma Cotacao"
+    WScript.Quit 4
 End If
 
 nodeCheck = shell.Run("cmd.exe /d /c where node >nul 2>&1", 0, True)

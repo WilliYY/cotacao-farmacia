@@ -96,7 +96,12 @@ function runGit(args, timeoutMs = 60_000) {
       cwd: process.cwd(),
       encoding: 'utf8',
       windowsHide: true,
-      timeout: timeoutMs
+      timeout: timeoutMs,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GCM_INTERACTIVE: 'Never'
+      }
     }, (error, stdout, stderr) => {
       if (error) {
         error.gitStderr = String(stderr || '').trim();

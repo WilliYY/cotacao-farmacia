@@ -10,6 +10,11 @@ let dbInstance = null;
 let isPostgres = false;
 let pgPool = null;
 let sqliteDb = null;
+let systemLogWritesSincePrune = 0;
+
+const SYSTEM_LOG_MAX_ROWS = 5000;
+const SYSTEM_LOG_PRUNE_INTERVAL = 100;
+const SYSTEM_LOG_PRUNE_TARGET = SYSTEM_LOG_MAX_ROWS - SYSTEM_LOG_PRUNE_INTERVAL;
 
 const POSTGRES_CAMEL_CASE_KEYS = [
   'rawText', 'normalizedName', 'createdAt', 'quoteId', 'searchText', 'correctionType',
@@ -563,6 +568,8 @@ export async function initDatabase(userDataPath) {
   }
 
   await reconcileCanonicalSupplierReferences();
+  await pruneSystemLogs(SYSTEM_LOG_PRUNE_TARGET);
+  systemLogWritesSincePrune = 0;
 
   return dbInstance;
 }
@@ -978,6 +985,23 @@ export async function recalculateQuoteItemRecommendations(quoteItemId) {
   }
 }
 
+export async function pruneSystemLogs(maxRows = SYSTEM_LOG_MAX_ROWS) {
+  if (!dbInstance) return 0;
+  const parsedLimit = Number.parseInt(String(maxRows), 10);
+  const safeLimit = Number.isInteger(parsedLimit)
+    ? Math.min(100_000, Math.max(1, parsedLimit))
+    : SYSTEM_LOG_MAX_ROWS;
+
+  const result = await dbInstance.run(
+    `DELETE FROM SystemLog
+     WHERE id NOT IN (
+       SELECT id FROM SystemLog ORDER BY id DESC LIMIT ?
+     )`,
+    safeLimit
+  );
+  return result?.changes || 0;
+}
+
 // Log persistence helper
 export async function saveLogToDb(level, message) {
   if (!dbInstance) return;
@@ -987,6 +1011,11 @@ export async function saveLogToDb(level, message) {
       level,
       message
     );
+    systemLogWritesSincePrune += 1;
+    if (systemLogWritesSincePrune >= SYSTEM_LOG_PRUNE_INTERVAL) {
+      systemLogWritesSincePrune = 0;
+      await pruneSystemLogs(SYSTEM_LOG_PRUNE_TARGET);
+    }
   } catch (err) {
     // Fail silently to avoid infinite log loops
   }
@@ -995,7 +1024,7 @@ export async function saveLogToDb(level, message) {
 export async function getSystemLogs(limit = 100) {
   if (!dbInstance) return [];
   try {
-    return await dbInstance.all('SELECT * FROM SystemLog ORDER BY timestamp DESC LIMIT ?', limit);
+    return await dbInstance.all('SELECT * FROM SystemLog ORDER BY timestamp DESC, id DESC LIMIT ?', limit);
   } catch (err) {
     return [];
   }
@@ -1136,4 +1165,5 @@ export async function closeDatabase() {
     sqliteDb = null;
   }
   dbInstance = null;
+  systemLogWritesSincePrune = 0;
 }
