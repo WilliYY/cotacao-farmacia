@@ -1,4 +1,4 @@
-import { fuzzyMatch } from './parser.js';
+import { fuzzyMatch, parseSearchQuery } from './parser.js';
 import {
   combinationMatches,
   ingredientDosagePairsMatch,
@@ -137,6 +137,36 @@ function pickPrimaryReason(blocks, warnings) {
   return blocks[0] || warnings[0] || '';
 }
 
+export function productIdentityMatches(parsed, result = {}) {
+  const supplierProductName = String(result.supplierProductName || result.name || '').trim();
+  if (!parsed?.name || !supplierProductName || !fuzzyMatch(parsed.name, supplierProductName)) {
+    return false;
+  }
+
+  const parsedResult = parseSearchQuery(supplierProductName);
+  const resultDosage = result.dosage || parsedResult.dosage;
+  const resultPresentation = result.presentation || parsedResult.presentation;
+  const quantityEvidence = [Number(result.quantity || 0), Number(parsedResult.quantity || 0)]
+    .filter(quantity => quantity > 1);
+
+  if (!combinationMatches(parsed.originalTerms || parsed.name, supplierProductName)) return false;
+  if (parsed.isCombination && !ingredientDosagePairsMatch(
+    parsed.originalTerms || parsed.name,
+    supplierProductName
+  )) return false;
+  if (!dosageMatches(parsed.dosage, resultDosage, supplierProductName)) return false;
+  if (!presentationsMatch(parsed.presentation, resultPresentation, {
+    queryText: parsed.originalTerms || parsed.name,
+    resultText: supplierProductName
+  })) return false;
+  if (!packageSizeMatches(parsed.packageSize, result.packaging, supplierProductName)) return false;
+  if (parsed.quantity > 1 && (
+    quantityEvidence.length === 0 ||
+    quantityEvidence.some(quantity => Number(parsed.quantity) !== quantity)
+  )) return false;
+  return true;
+}
+
 export function auditQuoteResult(parsed, result) {
   const blocks = [];
   const warnings = [];
@@ -186,6 +216,14 @@ export function auditQuoteResult(parsed, result) {
     }
   } else if (!result.ean) {
     warnings.push('EAN nao retornado pelo fornecedor');
+  }
+
+  if (result.searchFallback === 'EAN_CONFIRMADO_ENTRE_DISTRIBUIDORAS') {
+    warnings.push('EAN confirmado pelo produto exato retornado por outra distribuidora');
+  } else if (result.searchFallback === 'EAN_CONFIRMADO_PELA_BUSCA_EXATA') {
+    warnings.push('EAN confirmado pela busca exata de resultado unico no fornecedor');
+  } else if (result.searchFallback === 'EAN_RESOLVIDO_POR_OUTRA_DISTRIBUIDORA') {
+    warnings.push('Fornecedor pesquisado novamente pelo nome confirmado em outra distribuidora');
   }
 
   if (!eanIsOnlyIdentity && parsed.name && supplierProductName && !fuzzyMatch(parsed.name, supplierProductName)) {

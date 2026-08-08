@@ -101,6 +101,52 @@ export function getSantaCruzFinalPrice(result = {}) {
   return Number.isFinite(price) && price > 0 ? price : 0;
 }
 
+export function isCredibleSantaCruzRawProduct(result = {}) {
+  if (result.rowIntegrityValid === false) return false;
+  const ean = String(result.ean || '').trim();
+  const supplierProductName = String(result.name || result.supplierProductName || '').trim();
+  const normalizedName = supplierProductName
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const finalPrice = getSantaCruzFinalPrice(result);
+  const stock = String(result.stock || result.availability || '').trim();
+  const stRaw = String(result.stRaw ?? '').trim();
+
+  return /^\d{13}$/.test(ean) &&
+    /[A-Za-z]/.test(normalizedName) &&
+    supplierProductName !== ean &&
+    Number.isFinite(finalPrice) &&
+    finalPrice > 0 &&
+    finalPrice < 1_000_000 &&
+    Boolean(stock) &&
+    Boolean(stRaw);
+}
+
+export async function runSantaCruzGuiWithIntegrityRetry(executeGuiCommand, options = {}) {
+  const requestedAttempts = Number.isInteger(options.maxAttempts) && options.maxAttempts > 0
+    ? options.maxAttempts
+    : 2;
+  const maxAttempts = Math.min(requestedAttempts, 2);
+  let guiPayload = { status: 'automation-failed', results: [] };
+
+  for (let integrityAttempt = 1; integrityAttempt <= maxAttempts; integrityAttempt++) {
+    guiPayload = await executeGuiCommand();
+    if (guiPayload.status !== 'ok' && guiPayload.status !== 'ok-cleanup-warning') {
+      return { guiPayload, rawResults: [], integrityFailed: false };
+    }
+
+    const rawResults = Array.isArray(guiPayload.results) ? guiPayload.results : [];
+    const malformedRows = rawResults.filter(result => !isCredibleSantaCruzRawProduct(result));
+    if (malformedRows.length === 0) {
+      return { guiPayload, rawResults, integrityFailed: false };
+    }
+
+    options.onInvalid?.({ integrityAttempt, maxAttempts, malformedCount: malformedRows.length });
+  }
+
+  return { guiPayload, rawResults: [], integrityFailed: true };
+}
+
 export function getSantaCruzStStatus(result = {}) {
   if (Number(result.st) > 0) return 'COM_ST';
   const rawSt = String(result.stRaw ?? '').trim();
@@ -416,20 +462,43 @@ export class SantaCruzRealConnector extends SupplierConnector {
     if (searchTerms.length > 1) {
       logger.info(`Santa Cruz fallback sequence: ${searchTerms.map(term => `"${term}"`).join(' -> ')}.`);
     }
-    const guiPayload = await runSantaCruzGuiCommand(
-      scriptPath,
-      searchTerm,
-      credentials,
+    const integrityResult = await runSantaCruzGuiWithIntegrityRetry(
+      () => runSantaCruzGuiCommand(
+        scriptPath,
+        searchTerm,
+        credentials,
+        {
+          ...options,
+          fallbackQuery: retryTerm,
+          fallbackQueries: searchTerms.slice(1)
+        }
+      ),
       {
-        ...options,
-        fallbackQuery: retryTerm,
-        fallbackQueries: searchTerms.slice(1)
+        onInvalid: ({ integrityAttempt, maxAttempts, malformedCount }) => {
+          logger.warn(
+            `Santa Cruz returned ${malformedCount} inconsistent grid row(s); ` +
+            `discarding the capture${integrityAttempt < maxAttempts ? ' and retrying once' : ''}.`
+          );
+        }
       }
     );
-    let rawResults = [];
+    const { guiPayload, rawResults } = integrityResult;
+
+    if (integrityResult.integrityFailed) {
+      return [createLiveUnavailableResult(
+        'Santa Cruz',
+        parsedQuery,
+        'grade da Santa Cruz retornou colunas inconsistentes apos nova tentativa',
+        {
+          failureCode: FAILURE_CODES.PORTAL_LAYOUT_CHANGED,
+          retryable: false,
+          blocksQuote: true,
+          operatorAction: 'Mantenha a Santa Cruz aberta na Lista de Produtos e tente novamente.'
+        }
+      )];
+    }
 
     if (guiPayload.status === 'ok' || guiPayload.status === 'ok-cleanup-warning') {
-      rawResults = guiPayload.results;
       logger.info(`Santa Cruz GUI search returned ${rawResults.length} items.`);
       if (guiPayload.status === 'ok-cleanup-warning') {
         logger.warn('Santa Cruz returned current prices, but the search field cleanup needs attention before the next query.');

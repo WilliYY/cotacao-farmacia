@@ -24,11 +24,49 @@ export function isRetryableAnbError(error) {
 
 export function applyAnbEanEvidence(results, searchTerm) {
   const exactEan = String(searchTerm || '').trim();
-  if (!/^\d{13}$/.test(exactEan)) return results;
-  return results.map(result => ({
-    ...result,
-    eanEvidence: String(result.ean || '') === exactEan ? 'PORTAL_ROW' : undefined
-  }));
+  const isCredibleEanResult = result => {
+    const resultName = String(result.supplierProductName || result.name || '').trim();
+    const normalizedResultName = resultName
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    const resultPrice = Number(result.price || 0);
+    const resultPriceSource = String(result.priceSourceLabel || '').trim();
+    const resultAvailability = String(result.availability || result.stock || '').trim();
+
+    return /[A-Za-z]/.test(normalizedResultName) &&
+      Number.isFinite(resultPrice) &&
+      resultPrice > 0 &&
+      resultPrice < 1_000_000 &&
+      /^Unit c\/ST\.?$/i.test(resultPriceSource) &&
+      Boolean(resultAvailability);
+  };
+  const credibleResults = results.filter(isCredibleEanResult);
+  if (!/^\d{13}$/.test(exactEan)) return credibleResults;
+  const singleResult = credibleResults[0] || {};
+  const singleResultCanConfirm = results.length === 1 &&
+    credibleResults.length === 1 &&
+    !singleResult.ean &&
+    isCredibleEanResult(singleResult);
+
+  const evidencedResults = credibleResults.map(result => {
+    if (String(result.ean || '') === exactEan && isCredibleEanResult(result)) {
+      return { ...result, eanEvidence: 'PORTAL_ROW' };
+    }
+    if (singleResultCanConfirm) {
+      return {
+        ...result,
+        ean: exactEan,
+        eanEvidence: 'EXACT_EAN_SEARCH_SINGLE_RESULT',
+        searchFallback: result.searchFallback || 'EAN_CONFIRMADO_PELA_BUSCA_EXATA',
+        eanEvidenceNote: `EAN ${exactEan} confirmado pela busca exata com um unico resultado na ANB`
+      };
+    }
+    return { ...result, eanEvidence: undefined };
+  });
+  const exactEvidenceResults = evidencedResults.filter(result =>
+    String(result.ean || '') === exactEan && Boolean(result.eanEvidence)
+  );
+  return exactEvidenceResults.length === 1 ? exactEvidenceResults : [];
 }
 
 export class ANBRealConnector extends SupplierConnector {
@@ -71,9 +109,11 @@ export class ANBRealConnector extends SupplierConnector {
       );
       
       const evidencedResults = applyAnbEanEvidence(results, searchTerm);
-      if (parsedQuery.ean && !evidencedResults.some(result => String(result.ean || '') === String(parsedQuery.ean))) {
+      if (parsedQuery.ean && !evidencedResults.some(result =>
+        String(result.ean || '') === String(parsedQuery.ean) && Boolean(result.eanEvidence)
+      )) {
         logger.warn(`ANB did not return evidence for EAN ${parsedQuery.ean}; allowing name fallback.`);
-        return parsedQuery.name ? [] : evidencedResults;
+        return [];
       }
 
       return evidencedResults.map(res => ({

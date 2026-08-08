@@ -2,6 +2,16 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.8] - 2026-08-08
+
+### EAN exato e integridade da grade da Santa Cruz
+- **EAN confirmado na ANB:** uma busca por EAN com exatamente uma linha nomeada pode usar o código pesquisado como evidência explícita somente com `Unit c/ST`, disponibilidade e preço monetário plausível, sem aceitar grades ambíguas ou um EAN conflitante retornado pelo portal.
+- **Corroboração entre distribuidoras:** quando uma fonte retorna o EAN exato, o sistema pode completar uma linha sem código de outra fonte somente se nome, associação, dose, apresentação e quantidade/tamanho da embalagem estiverem presentes e conferirem. Uma fonte vazia pode ser repetida pelo nome confirmado, mantendo o EAN original como filtro obrigatório.
+- **Santa Cruz protegida contra grade transitória:** linhas que usam qualquer valor com escala de código de barras como `Preço NF` são descartadas e a pesquisa é repetida no máximo uma vez. Persistindo a inconsistência, a fonte fica bloqueada como alteração de tela em vez de produzir uma cotação falsa.
+- **Validação real do Puran T4 em 04/08/2026:** os 10 EANs informados foram reconhecidos na ANB com os mesmos valores manuais; o Puran T4 62,5 mcg foi localizado, mas excluído por falta de estoque. O EAN `7897595901316` também foi confirmado na Santa Cruz como `PURAN T4 50MCG C/30 COMPRIMIDOS`, `Preço NF: R$ 15,71`, disponível e com ST.
+- **Revalidação em 08/08/2026:** o EAN `7897595901316` retornou na ANB por `Unit c/ST: R$ 15,34`; a Profarma respondeu `Preço Final: R$ 15,10`, mas sem estoque; a DM Paraná confirmou grade vazia. O atualizador da Santa Cruz respondeu `503 Service Unavailable` e depois não expôs o campo de pesquisa, portanto a fonte foi corretamente bloqueada como falha técnica, sem reaproveitar o preço de 04/08/2026.
+- **Cobertura:** adicionados testes para busca exata de resultado único, conflito/ambiguidade de EAN, corroboração segura entre fontes, fallback por identidade completa e rejeição de linha corrompida da Santa Cruz.
+
 ## [1.8.7] - 2026-08-03
 
 ### Recuperação do atualizador e retenção de diagnósticos

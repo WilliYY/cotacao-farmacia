@@ -1448,6 +1448,20 @@ function Parse-DoubleSafe {
     return 0
 }
 
+function Test-SantaCruzRowIntegrity {
+    param(
+        [string]$Ean,
+        [string]$Name,
+        [string]$PriceNfRaw,
+        [double]$PriceNf
+    )
+    if ($Ean -notmatch '^\d{13}$') { return $false }
+    if (-not $Name -or $Name -eq $Ean -or $Name -notmatch '[A-Za-z]') { return $false }
+    if (-not $PriceNfRaw -or $PriceNf -le 0) { return $false }
+    if ($PriceNf -ge 1000000) { return $false }
+    return $true
+}
+
 function ConvertTo-SantaCruzHeaderKey {
     param([string]$Value)
     return ((ConvertTo-NormalizedText $Value) -replace '[^a-z0-9]+', ' ').Trim()
@@ -1701,6 +1715,10 @@ function Read-SantaCruzRows {
 
             $priceNf = Parse-DoubleSafe $priceNfRaw
             if ($priceNf -le 0) { continue }
+            $rowIntegrityValid = Test-SantaCruzRowIntegrity $ean $name $priceNfRaw $priceNf
+            if (-not $rowIntegrityValid) {
+                Write-SantaCruzTrace "invalid grid row rejected ean='$ean' name='$name' priceNfRaw='$priceNfRaw'"
+            }
 
             $normalizedAvailability = ConvertTo-NormalizedText $availabilityEvidence
             $stock = if ($pixelAvailability) {
@@ -1734,6 +1752,7 @@ function Read-SantaCruzRows {
                 quantityBox = $qBox
                 category = $cat
                 listType = $listType
+                rowIntegrityValid = $rowIntegrityValid
             }
             [void]$output.Add($item)
         }
@@ -1916,6 +1935,8 @@ if ($SelfTestOnly) {
         dosage125Matches = Test-SantaCruzSearchRow `
             ([PSCustomObject]@{ ean = "7897595901446"; name = "PURAN T4 125MCG C/30 COMPRIMIDOS" }) `
             "t4" $t4Token $false $requestedDosages
+        foreignBarcodePriceRejected = -not (Test-SantaCruzRowIntegrity `
+            "7897595901316" "PURAN T4 50MCG C/30 COMPRIMIDOS" "7897595901446" ([double]7897595901446))
     }
 }
 if (-not $DiscoveryOnly -and -not $StatusOnly -and -not (Enter-SantaCruzAutomationMutex)) {

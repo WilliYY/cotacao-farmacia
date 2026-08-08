@@ -10,7 +10,7 @@ import XLSX from 'xlsx';
 import { parseSearchQuery, levenshteinDistance, fuzzyMatch } from '../src/lib/parser.js';
 import { analyzeQuoteBatch, deriveApprovedCorrection, INPUT_STATUS } from '../src/lib/search-intelligence.js';
 import { isValidST, getVisualStatusLabel, getSTPriority } from '../src/lib/st-rules.js';
-import { callConnectorWithRecovery, callConnectorWithTimeout, callWithEanFallback, callWithRetry, getConnectorTimeoutMs, getQuoteTimeoutMs, isFreshLiveCapture, isTimeoutFailure, matchesSupplierProduct, processQuoteQuery, shouldRetryLiveResults } from '../src/lib/recommendation.js';
+import { callConnectorWithRecovery, callConnectorWithTimeout, callWithEanFallback, callWithRetry, corroborateEanSupplierResponses, getConnectorTimeoutMs, getQuoteTimeoutMs, isFreshLiveCapture, isTimeoutFailure, matchesSupplierProduct, processQuoteQuery, shouldRetryLiveResults } from '../src/lib/recommendation.js';
 import {
   createClassifiedLiveUnavailableResult,
   createLiveUnavailableResult,
@@ -23,7 +23,7 @@ import {
   isSupplierPermanentlyBlocked,
   recordSupplierFailure
 } from '../src/lib/resilience.js';
-import { AUDIT_STATUS, auditQuoteResult } from '../src/lib/quote-auditor.js';
+import { AUDIT_STATUS, auditQuoteResult, productIdentityMatches } from '../src/lib/quote-auditor.js';
 import {
   createSantaCruzProcessEnvironment,
   enqueueSantaCruzGuiCommand,
@@ -32,8 +32,10 @@ import {
   getSantaCruzRetryTerm,
   getSantaCruzSearchTerms,
   getSantaCruzStStatus,
+  isCredibleSantaCruzRawProduct,
   normalizeSantaCruzGuiPayload,
   normalizeSantaCruzProductResult,
+  runSantaCruzGuiWithIntegrityRetry,
   resolveSantaCruzScriptPath
 } from '../src/connectors/real/santacruz-real.js';
 import { getProfarmaRetryTerm, normalizeProfarmaUrl } from '../src/connectors/real/profarma-real.js';
@@ -1025,6 +1027,91 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.strictEqual(getSantaCruzFinalPrice({ priceNf: 0, unitCostWithSt: 71.13 }), 0);
   });
 
+  await t.test('rejects a transient Santa Cruz grid row that repeats the EAN as product and price', () => {
+    assert.strictEqual(isCredibleSantaCruzRawProduct({
+      ean: '7897595901316',
+      name: 'PURAN T4 50MCG C/30 COMPRIMIDOS',
+      laboratory: 'SANOFI PURAN',
+      priceNf: 15.71,
+      stRaw: 'R$ 2,33',
+      stock: 'Disponivel'
+    }), true);
+
+    assert.strictEqual(isCredibleSantaCruzRawProduct({
+      ean: '7897595901316',
+      name: '7897595901316',
+      laboratory: '7897595901316',
+      priceNf: 7897595901316,
+      stRaw: '7897595901316',
+      stock: 'sem estoque'
+    }), false);
+
+    assert.strictEqual(isCredibleSantaCruzRawProduct({
+      ean: '7897595901316',
+      name: 'PURAN T4 50MCG C/30 COMPRIMIDOS',
+      priceNf: 7897595901446,
+      stRaw: 'R$ 2,33',
+      stock: 'Disponivel'
+    }), false);
+
+    assert.strictEqual(isCredibleSantaCruzRawProduct({
+      ean: '7897595901316',
+      name: 'PURAN T4 50MCG C/30 COMPRIMIDOS',
+      priceNf: 0,
+      stRaw: 'R$ 2,33',
+      stock: 'Disponivel'
+    }), false);
+  });
+
+  await t.test('retries one corrupted Santa Cruz grid and fails closed after two corrupted captures', async () => {
+    const malformed = {
+      status: 'ok',
+      results: [{
+        ean: '7897595901316',
+        name: '7897595901316',
+        priceNf: 7897595901316,
+        stRaw: '7897595901316',
+        stock: 'sem estoque'
+      }]
+    };
+    const valid = {
+      status: 'ok',
+      results: [{
+        ean: '7897595901316',
+        name: 'PURAN T4 50MCG C/30 COMPRIMIDOS',
+        priceNf: 15.71,
+        stRaw: 'R$ 2,33',
+        stock: 'Disponivel'
+      }]
+    };
+
+    let recoveredCalls = 0;
+    const recovered = await runSantaCruzGuiWithIntegrityRetry(async () => {
+      recoveredCalls++;
+      return recoveredCalls === 1 ? malformed : valid;
+    });
+    assert.strictEqual(recoveredCalls, 2);
+    assert.strictEqual(recovered.integrityFailed, false);
+    assert.strictEqual(recovered.rawResults[0].name, valid.results[0].name);
+
+    let blockedCalls = 0;
+    const blocked = await runSantaCruzGuiWithIntegrityRetry(async () => {
+      blockedCalls++;
+      return malformed;
+    });
+    assert.strictEqual(blockedCalls, 2);
+    assert.strictEqual(blocked.integrityFailed, true);
+    assert.deepStrictEqual(blocked.rawResults, []);
+
+    let boundedCalls = 0;
+    const bounded = await runSantaCruzGuiWithIntegrityRetry(async () => {
+      boundedCalls++;
+      return malformed;
+    }, { maxAttempts: 99 });
+    assert.strictEqual(boundedCalls, 2);
+    assert.strictEqual(bounded.integrityFailed, true);
+  });
+
   await t.test('derives Santa Cruz identity from the returned supplier row', () => {
     const returned = normalizeSantaCruzProductResult({
       ean: '7890000000001',
@@ -1160,6 +1247,7 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.strictEqual(payload.t4QueryToken, 't4');
     assert.strictEqual(payload.dosage25Matches, true);
     assert.strictEqual(payload.dosage125Matches, false);
+    assert.strictEqual(payload.foreignBarcodePriceRejected, true);
   });
 
   await t.test('preserves portable readiness evidence from the GUI probe', () => {
@@ -1205,6 +1293,8 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.match(script, /PriceNf = "preco nf"/);
     assert.match(script, /\$priceNfRaw = \[string\]\(Get-GridCellText \$grid \$row \$Columns\.PriceNf\)/);
     assert.match(script, /\$priceNf = Parse-DoubleSafe \$priceNfRaw/);
+    assert.match(script, /function Test-SantaCruzRowIntegrity/);
+    assert.match(script, /Test-SantaCruzRowIntegrity \$ean \$name \$priceNfRaw \$priceNf/);
     assert.doesNotMatch(script, /\$priceNf -le 0\) \{ \$priceNf = Parse-DoubleSafe/);
     assert.doesNotMatch(script, /Get-GridCellText \$grid \$row 13/);
     assert.doesNotMatch(script, /if \(\$results\.Count -eq 0 -and -not \$isEanSearch/);
@@ -1307,13 +1397,15 @@ test('Santa Cruz Portable Automation', async (t) => {
     const connector = fs.readFileSync(new URL('../src/connectors/real/santacruz-real.js', import.meta.url), 'utf8');
     const statusCheck = connector.indexOf('const currentStatus = await getSantaCruzStatus()');
     const unavailableResult = connector.indexOf('const statusReason = describeGuiFailure(currentStatus)');
-    const guiSearch = connector.indexOf('const guiPayload = await runSantaCruzGuiCommand');
+    const guiSearch = connector.indexOf('const integrityResult = await runSantaCruzGuiWithIntegrityRetry');
     assert.ok(statusCheck > 0);
     assert.ok(unavailableResult > statusCheck);
     assert.ok(guiSearch > unavailableResult);
     assert.match(connector, /currentStatus\.ready/);
     assert.match(connector, /currentStatus\.status === 'not-responding'/);
     assert.match(connector, /'stock-unresolved'/);
+    assert.match(connector, /integrityAttempt <= maxAttempts/);
+    assert.match(connector, /isCredibleSantaCruzRawProduct/);
     assert.match(connector, /await triggerSantaCruzCleanup\(scriptPath, credentials\)/);
   });
 
@@ -1721,36 +1813,123 @@ test('ANB product grid contract', async (t) => {
     assert.strictEqual(isRetryableAnbError(new Error('Supplier commercial condition selector did not open.')), false);
   });
 
-  await t.test('requires explicit portal EAN evidence without inventing a returned barcode', () => {
+  await t.test('accepts one exact ANB EAN search result while rejecting ambiguous or conflicting rows', () => {
     const missingBarcode = applyAnbEanEvidence([
-      { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: null }
+      {
+        supplierProductName: 'GLIFAGE XR 500MG 30CPR',
+        ean: null,
+        price: 19.45,
+        priceSourceLabel: 'Unit c/ST',
+        availability: 'disponivel'
+      }
     ], '7891721201806');
-    assert.strictEqual(missingBarcode[0].ean, null);
-    assert.strictEqual(missingBarcode[0].eanEvidence, undefined);
+    assert.strictEqual(missingBarcode[0].ean, '7891721201806');
+    assert.strictEqual(missingBarcode[0].eanEvidence, 'EXACT_EAN_SEARCH_SINGLE_RESULT');
 
     const exactSearch = applyAnbEanEvidence([
-      { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: '7891721201806' }
+      {
+        supplierProductName: 'GLIFAGE XR 500MG 30CPR',
+        ean: '7891721201806',
+        price: 19.45,
+        priceSourceLabel: 'Unit c/ST',
+        availability: 'disponivel'
+      }
     ], '7891721201806');
     assert.strictEqual(exactSearch[0].ean, '7891721201806');
     assert.strictEqual(exactSearch[0].eanEvidence, 'PORTAL_ROW');
 
+    const corruptedColumns = [...columns];
+    corruptedColumns[1] = '7891721201806';
+    corruptedColumns[7] = '7897595901446';
+    const corruptedPortalRow = parseAnbTableRow(headers, corruptedColumns);
+    const corruptedEvidence = applyAnbEanEvidence([corruptedPortalRow], '7891721201806');
+    assert.deepStrictEqual(corruptedEvidence, []);
+
     const conflicting = applyAnbEanEvidence([
       { supplierProductName: 'OUTRO PRODUTO', ean: '7890000000000' }
     ], '7891721201806');
-    assert.strictEqual(conflicting[0].ean, '7890000000000');
-    assert.strictEqual(conflicting[0].eanEvidence, undefined);
+    assert.deepStrictEqual(conflicting, []);
+
+    const incompleteRow = applyAnbEanEvidence([
+      { supplierProductName: '7891721201806', ean: null, price: 7891721201806 }
+    ], '7891721201806');
+    assert.deepStrictEqual(incompleteRow, []);
+
+    const foreignBarcodePrice = applyAnbEanEvidence([
+      {
+        supplierProductName: 'GLIFAGE XR 500MG 30CPR',
+        ean: null,
+        price: 7897595901446,
+        priceSourceLabel: 'Unit c/ST',
+        availability: 'disponivel'
+      }
+    ], '7891721201806');
+    assert.deepStrictEqual(foreignBarcodePrice, []);
 
     const ambiguous = applyAnbEanEvidence([
       { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: null },
       { supplierProductName: 'OUTRO PRODUTO 500MG 30CPR', ean: null }
     ], '7891721201806');
-    assert.strictEqual(ambiguous[0].ean, null);
-    assert.strictEqual(ambiguous[1].ean, null);
+    assert.deepStrictEqual(ambiguous, []);
+
+    const mixedBatch = applyAnbEanEvidence([
+      {
+        supplierProductName: 'GLIFAGE XR 500MG 30CPR',
+        ean: '7891721201806',
+        price: 19.45,
+        priceSourceLabel: 'Unit c/ST',
+        availability: 'disponivel'
+      },
+      {
+        supplierProductName: 'GLIFAGE XR 500MG 30CPR',
+        ean: '7891721201806',
+        price: 7897595901446,
+        priceSourceLabel: 'Unit c/ST',
+        availability: 'disponivel'
+      }
+    ], '7891721201806');
+    assert.strictEqual(mixedBatch.length, 1);
+    assert.strictEqual(mixedBatch[0].price, 19.45);
+
+    const duplicateEvidence = applyAnbEanEvidence([
+      {
+        supplierProductName: 'GLIFAGE XR 500MG 30CPR',
+        ean: '7891721201806',
+        price: 19.45,
+        priceSourceLabel: 'Unit c/ST',
+        availability: 'disponivel'
+      },
+      {
+        supplierProductName: 'GLIFAGE XR 500MG 30CPR',
+        ean: '7891721201806',
+        price: 19.4,
+        priceSourceLabel: 'Unit c/ST',
+        availability: 'disponivel'
+      }
+    ], '7891721201806');
+    assert.deepStrictEqual(duplicateEvidence, []);
 
     const nameSearch = applyAnbEanEvidence([
-      { supplierProductName: 'GLIFAGE XR 500MG 30CPR', ean: null }
+      {
+        supplierProductName: 'GLIFAGE XR 500MG 30CPR',
+        ean: null,
+        price: 19.45,
+        priceSourceLabel: 'Unit c/ST',
+        availability: 'disponivel'
+      }
     ], 'metformina 500mg');
     assert.strictEqual(nameSearch[0].ean, null);
+
+    const corruptedNameSearch = applyAnbEanEvidence([
+      {
+        supplierProductName: 'GLIFAGE XR 500MG 30CPR',
+        ean: '7891721201806',
+        price: 7897595901446,
+        priceSourceLabel: 'Unit c/ST',
+        availability: 'disponivel'
+      }
+    ], 'glifage xr 500mg 30cpr');
+    assert.deepStrictEqual(corruptedNameSearch, []);
   });
 });
 
@@ -2140,6 +2319,181 @@ test('Live Quote Source Safety', async (t) => {
     const results = await callWithEanFallback(connector, parsed, { retries: 0 });
     assert.strictEqual(callCount, 1);
     assert.strictEqual(results[0].liveFailureReason, 'sem internet');
+  });
+
+  await t.test('corroborates a missing portal barcode only with an exact peer EAN and matching product', () => {
+    const parsed = parseSearchQuery('7897595901316');
+    const responses = corroborateEanSupplierResponses(parsed, [
+      {
+        supplier: 'ANB',
+        results: [{
+          source: 'ANB',
+          supplierProductName: 'PURAN T4 50MCG 30CPR - LEVOTIROXINA',
+          ean: null
+        }]
+      },
+      {
+        supplier: 'Profarma',
+        results: [{
+          source: 'Profarma',
+          supplierProductName: 'PURAN T4 50MCG 30CPR',
+          ean: '7897595901316',
+          availability: 'sem estoque'
+        }]
+      },
+      {
+        supplier: 'Santa Cruz',
+        results: [{
+          source: 'Santa Cruz',
+          supplierProductName: 'PURAN T4 25MCG 30CPR',
+          ean: null
+        }]
+      }
+    ]);
+
+    assert.strictEqual(responses[0].results[0].ean, '7897595901316');
+    assert.strictEqual(responses[0].results[0].searchFallback, 'EAN_CONFIRMADO_ENTRE_DISTRIBUIDORAS');
+    assert.match(responses[0].results[0].eanEvidenceNote, /Profarma/);
+    assert.strictEqual(responses[2].results[0].ean, null);
+  });
+
+  await t.test('requires complete structured identity and package quantity for EAN corroboration', () => {
+    const packageReference = parseSearchQuery('PURAN T4 50MCG 30CPR');
+    assert.strictEqual(productIdentityMatches(packageReference, {
+      supplierProductName: 'PURAN T4 50MCG',
+      dosage: '50mcg',
+      presentation: 'comprimido'
+    }), false);
+
+    const responses = corroborateEanSupplierResponses(parseSearchQuery('7896004723655'), [
+      {
+        supplier: 'Profarma',
+        results: [{
+          source: 'Profarma',
+          supplierProductName: 'LOSARTANA',
+          ean: '7896004723655',
+          dosage: '50mg',
+          presentation: 'comprimido',
+          quantity: 30,
+          packaging: '30 comprimido'
+        }]
+      },
+      {
+        supplier: 'Santa Cruz',
+        results: [{
+          source: 'Santa Cruz',
+          supplierProductName: 'LOSARTANA 25MG 30CPR',
+          ean: null,
+          dosage: '25mg',
+          presentation: 'comprimido',
+          quantity: 30
+        }]
+      }
+    ]);
+
+    assert.strictEqual(responses[1].results[0].ean, null);
+
+    const incompleteReference = corroborateEanSupplierResponses(parseSearchQuery('7896004723655'), [
+      {
+        supplier: 'ANB',
+        results: [{
+          source: 'ANB',
+          supplierProductName: 'LOSARTANA 50MG COMPRIMIDO',
+          ean: '7896004723655',
+          dosage: '50mg',
+          presentation: 'comprimido',
+          quantity: 1,
+          packaging: 'LOSARTANA 50MG COMPRIMIDO'
+        }]
+      },
+      {
+        supplier: 'Santa Cruz',
+        results: [{
+          source: 'Santa Cruz',
+          supplierProductName: 'LOSARTANA 50MG 60CPR',
+          ean: null,
+          dosage: '50mg',
+          presentation: 'comprimido',
+          quantity: 60
+        }]
+      }
+    ]);
+    assert.strictEqual(incompleteReference[1].results[0].ean, null);
+  });
+
+  await t.test('retries an empty EAN supplier by a peer-confirmed name and keeps only the exact product', async () => {
+    const calls = [];
+    const capturedAt = new Date().toISOString();
+    const connectors = [
+      {
+        supplierName: 'Profarma',
+        searchProduct: async parsed => [{
+          source: 'Profarma',
+          supplierProductName: 'PURAN T4 50MCG 30CPR',
+          ean: parsed.ean,
+          price: 15.1,
+          priceSourceLabel: 'Preço Final',
+          availability: 'sem estoque',
+          stStatus: 'COM_ST',
+          dosage: '50mcg',
+          presentation: 'comprimido',
+          quantity: 30,
+          capturedAt
+        }]
+      },
+      {
+        supplierName: 'Santa Cruz',
+        searchProduct: async parsed => {
+          calls.push({ ean: parsed.ean, name: parsed.name, dosage: parsed.dosage });
+          if (parsed.ean) return [];
+          return [
+            {
+              source: 'Santa Cruz',
+              supplierProductName: 'PURAN T4 25MCG 30CPR',
+              ean: '7897595901316',
+              price: 13.92,
+              priceSourceLabel: 'Preço NF',
+              availability: 'disponivel',
+              stStatus: 'COM_ST',
+              dosage: '25mcg',
+              presentation: 'comprimido',
+              quantity: 30,
+              capturedAt
+            },
+            {
+              source: 'Santa Cruz',
+              supplierProductName: 'PURAN T4 50MCG 30CPR',
+              ean: '7897595901316',
+              price: 15.34,
+              priceSourceLabel: 'Preço NF',
+              availability: 'disponivel',
+              stStatus: 'COM_ST',
+              dosage: '50mcg',
+              presentation: 'comprimido',
+              quantity: 30,
+              capturedAt
+            }
+          ];
+        }
+      }
+    ];
+
+    const quote = await processQuoteQuery(
+      '7897595901316',
+      ['Profarma', 'Santa Cruz'],
+      { connectors, connectorTimeoutMs: { Profarma: 5000, 'Santa Cruz': 5000 } }
+    );
+
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls[0].ean, '7897595901316');
+    assert.strictEqual(calls[1].ean, '');
+    assert.match(calls[1].name, /puran t4/i);
+    assert.strictEqual(calls[1].dosage, '50mcg');
+    const santaResults = quote.results.filter(result => result.source === 'Santa Cruz');
+    assert.strictEqual(santaResults.length, 1);
+    assert.strictEqual(santaResults[0].ean, '7897595901316');
+    assert.strictEqual(santaResults[0].isValidOption, true);
+    assert.strictEqual(santaResults[0].searchFallback, 'EAN_RESOLVIDO_POR_OUTRA_DISTRIBUIDORA');
   });
 });
 

@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { parseSearchQuery } from './parser.js';
 import { presentationsMatch, getFarmaciaPopularInfo } from './pharmaceutical-context.js';
 import { isValidST, getSTPriority } from './st-rules.js';
-import { AUDIT_STATUS, applyPriceOutlierAudit, auditQuoteResult, getDosageNumber } from './quote-auditor.js';
+import { AUDIT_STATUS, applyPriceOutlierAudit, auditQuoteResult, getDosageNumber, productIdentityMatches } from './quote-auditor.js';
 import { getActiveConnectors, getConnectorMode } from '../connectors/connector-registry.js';
 import {
   createClassifiedLiveUnavailableResult,
@@ -237,6 +237,140 @@ export async function callWithEanFallback(connector, parsedQuery, options = {}) 
   }));
 }
 
+function getExactEanReferenceContext(parsedQuery, supplierResponses = []) {
+  const targetEan = String(parsedQuery?.ean || '').trim();
+  if (!/^\d{13}$/.test(targetEan)) return null;
+
+  const references = supplierResponses.flatMap(response =>
+    (response.results || [])
+      .filter(result =>
+        !result?.liveFailureReason &&
+        String(result?.ean || '') === targetEan &&
+        String(result?.supplierProductName || result?.name || '').trim()
+      )
+      .map(result => ({ ...result, referenceSupplier: response.supplier }))
+  );
+  if (references.length === 0) return null;
+
+  const primary = references[0];
+  const referenceName = String(primary.supplierProductName || primary.name || '').trim();
+  const referenceTerms = [
+    referenceName,
+    primary.dosage,
+    primary.presentation,
+    primary.packageSize,
+    primary.packaging,
+    Number(primary.quantity) > 1 ? `${primary.quantity} unidades` : ''
+  ].filter(Boolean).join(' ');
+  const parsedIdentity = parseSearchQuery(referenceTerms);
+  const identity = {
+    ...parsedIdentity,
+    dosage: primary.dosage || parsedIdentity.dosage,
+    presentation: primary.presentation || parsedIdentity.presentation,
+    packageSize: primary.packageSize || parsedIdentity.packageSize,
+    quantity: Number(primary.quantity) > 1 ? Number(primary.quantity) : parsedIdentity.quantity,
+    originalTerms: referenceTerms
+  };
+  const hasCompleteStructuredIdentity = Boolean(
+    identity.dosage &&
+    identity.presentation &&
+    (identity.packageSize || Number(identity.quantity) > 1)
+  );
+  if (!identity.name || !hasCompleteStructuredIdentity || references.some(reference => !productIdentityMatches(identity, reference))) {
+    logger.warn(`Conflicting product identities returned for EAN ${targetEan}; cross-supplier fallback was blocked.`);
+    return null;
+  }
+
+  return {
+    targetEan,
+    primary,
+    identity,
+    suppliers: [...new Set(references.map(reference => reference.referenceSupplier))]
+  };
+}
+
+function applyEanReferenceToResult(result, referenceContext, fallbackCode) {
+  if (result?.liveFailureReason || result?.failureCode) return result;
+  const returnedEan = String(result?.ean || '').trim();
+  if (returnedEan && returnedEan !== referenceContext.targetEan) return null;
+  if (!productIdentityMatches(referenceContext.identity, result)) return null;
+
+  const supplierLabel = referenceContext.suppliers.join(', ');
+  return {
+    ...result,
+    ean: referenceContext.targetEan,
+    searchFallback: result.searchFallback || fallbackCode,
+    eanEvidenceNote: `EAN ${referenceContext.targetEan} confirmado pelo produto exato retornado por ${supplierLabel}`
+  };
+}
+
+export function corroborateEanSupplierResponses(parsedQuery, supplierResponses = []) {
+  const referenceContext = getExactEanReferenceContext(parsedQuery, supplierResponses);
+  if (!referenceContext) return supplierResponses;
+
+  return supplierResponses.map(response => ({
+    ...response,
+    results: (response.results || []).map(result => {
+      if (result?.ean || result?.liveFailureReason || result?.failureCode) return result;
+      return applyEanReferenceToResult(
+        result,
+        referenceContext,
+        'EAN_CONFIRMADO_ENTRE_DISTRIBUIDORAS'
+      ) || result;
+    })
+  }));
+}
+
+async function retryEmptyEanSuppliers(
+  parsedQuery,
+  supplierResponses,
+  activeConnectors,
+  supplierIncidents,
+  options = {}
+) {
+  if (!parsedQuery.ean || String(parsedQuery.name || '').trim()) return supplierResponses;
+  const referenceContext = getExactEanReferenceContext(parsedQuery, supplierResponses);
+  if (!referenceContext) return supplierResponses;
+
+  const fallbackQuery = {
+    ...referenceContext.identity,
+    ean: '',
+    originalTerms: referenceContext.primary.supplierProductName || referenceContext.primary.name
+  };
+
+  return Promise.all(supplierResponses.map(async response => {
+    if ((response.results || []).length > 0) return response;
+    const connector = activeConnectors.find(item => item.supplierName === response.supplier);
+    if (!connector) return response;
+
+    logger.info(`EAN ${parsedQuery.ean} resolved as "${fallbackQuery.originalTerms}" by ${referenceContext.suppliers.join(', ')}; retrying ${response.supplier} by name.`);
+    notifyProgress(options.onProgress, {
+      phase: 'supplier_started',
+      supplier: response.supplier,
+      message: `EAN confirmado por outra distribuidora; tentando ${response.supplier} pelo nome exato.`
+    });
+    const fallbackResults = await callConnectorWithRecovery(
+      connector,
+      fallbackQuery,
+      supplierIncidents[response.supplier],
+      {
+        signal: options.signal,
+        timeoutMs: options.connectorTimeoutMs?.[response.supplier],
+        totalTimeoutReason: options.totalTimeoutReason,
+        onProgress: options.onProgress
+      }
+    );
+    const confirmedResults = fallbackResults
+      .map(result => applyEanReferenceToResult(
+        result,
+        referenceContext,
+        'EAN_RESOLVIDO_POR_OUTRA_DISTRIBUIDORA'
+      ))
+      .filter(Boolean);
+    return { ...response, results: confirmedResults };
+  }));
+}
+
 export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
   const timeoutMs = getConnectorTimeoutMs(connector.supplierName, options);
   const abortSettleGraceMs = getConnectorAbortSettleGraceMs(connector.supplierName, options);
@@ -449,7 +583,16 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
         supplierIncidentSkipped: true
       };
     });
-  const supplierResponses = await Promise.all(searchPromises);
+  let supplierResponses = await Promise.all(searchPromises);
+  supplierResponses = corroborateEanSupplierResponses(parsed, supplierResponses);
+  supplierResponses = await retryEmptyEanSuppliers(
+    parsed,
+    supplierResponses,
+    activeConnectors,
+    supplierIncidents,
+    options
+  );
+  supplierResponses = corroborateEanSupplierResponses(parsed, supplierResponses);
   const rawResults = [
     ...supplierResponses.flatMap(response => response.results),
     ...blockedResults
@@ -555,7 +698,10 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       ignoreReason: ignoreReason,
       recommendationStatus: recStatus,
       reviewStatus: 'PENDENTE',
-      notes: res.commercialCondition ? `Condicao comercial: ${res.commercialCondition}` : '',
+      notes: [
+        res.commercialCondition ? `Condicao comercial: ${res.commercialCondition}` : '',
+        res.eanEvidenceNote || ''
+      ].filter(Boolean).join('; '),
       confidence: res.confidence ?? parsed.confidence,
       capturedAt: res.capturedAt || new Date().toISOString(),
       source: res.source,

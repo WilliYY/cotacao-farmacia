@@ -26,9 +26,11 @@ Cada computador descobre sua própria instalação da Santa Cruz; não copie o a
 
 Na Santa Cruz, o sistema tenta uma sequência ordenada: nome + dose + unidade, nome + dose sem a unidade e, somente após vazio confirmado, apenas o nome ou princípio ativo. Todas as variantes seguintes usam `Enter`, preservam a dose original como filtro obrigatório e limpam o campo entre tentativas. Exemplo: `losartana 50mg` tenta `losartana 50mg`, `losartana 50` e `losartana`, mas somente itens com dose exata de 50mg concorrem ao menor `Preço NF`; `25mcg` nunca pode aceitar `125mcg`.
 
+Se a grade transitória da Santa Cruz repetir o texto pesquisado em colunas incompatíveis, como usar um EAN como descrição ou `Preço NF`, a captura inteira é descartada e repetida uma vez. Preços com escala incompatível com moeda também são rejeitados. Persistindo a inconsistência, a distribuidora fica sinalizada para revisão; esse conteúdo nunca entra como preço, estoque ou recomendação.
+
 As ações da Santa Cruz são executadas em fila e protegidas por uma trava global do Windows: nem outra cotação nem um diagnóstico iniciado em outro processo pode controlar a mesma janela ao mesmo tempo. Uma nova pesquisa só começa depois que a anterior encerra e confirma a tentativa de limpeza. Timeout ou cancelamento interrompe o auxiliar de automação, preserva o aplicativo da distribuidora e mostra a etapa **Encerrando** enquanto a limpeza limitada termina.
 
-Os únicos contratos de preço aceitos são: ANB `Unit c/ST`, Profarma `Preço Final`, Santa Cruz `Preço NF` e DM Paraná `Preço final: R$`. Captura antiga, cabeçalho diferente, preço zero, falta de estoque ou falha técnica são bloqueados; o histórico nunca substitui uma consulta ao vivo.
+Os únicos contratos de preço aceitos são: ANB `Unit c/ST`, Profarma `Preço Final`, Santa Cruz `Preço NF` e DM Paraná `Preço final: R$`. Captura antiga, cabeçalho diferente, preço zero ou com aparência de código de barras, falta de estoque ou falha técnica são bloqueados; o histórico nunca substitui uma consulta ao vivo.
 
 Use estes diagnósticos não destrutivos no computador novo:
 ```bash
@@ -132,6 +134,7 @@ Antes de abrir cada fornecedor, a descricao recebe uma normalizacao compartilhad
 - Erros inequivocos e prefixos unicos, como `dapaglifozina` ou `dapagli`, sao corrigidos para `dapagliflozina` antes de abrir os portais, e a alteracao fica visivel na tela.
 - Termos ambiguos ou sem informacao suficiente ficam vermelhos e nao abrem os fornecedores ate receberem complemento.
 - Quando a linha contem EAN e nome, o sistema tenta o EAN primeiro. Somente um retorno realmente vazio permite nova busca pelo nome; falha de portal nunca e mascarada pelo fallback.
+- Quando a linha contem somente EAN, uma distribuidora que devolveu o codigo exato pode confirmar o nome para as demais. A nova busca pelo nome so e aceita se associacao, dose, apresentacao e embalagem tambem conferirem com o produto do EAN; resultado parecido ou dose diferente continua bloqueado.
 - Um EAN-13 invalido fica bloqueado para correcao. Mesmo com EAN valido, uma descricao conflitante na mesma linha impede a recomendacao automatica.
 - Marcas conhecidas sao comparadas com o principio ativo sem alterar o texto enviado ao portal. Exemplo: `clenil 250`, `clenil 250 mcg` e `clenil 250 inalador` reconhecem beclometasona 250mcg em spray.
 - A dose confere valor e unidade; `250mcg` nao pode ser aceito como `250mg`. Associacoes compactas como `20/12,5mg` exigem as duas concentracoes no produto retornado.
