@@ -2889,6 +2889,70 @@ test('Recommendation Engine - Pharmacy Safety Rules', async (t) => {
     assert.strictEqual(bestRecommended.supplierProductName, 'Gen Hidroclorotiazida 25mg 30cpr');
   });
 
+  await t.test('accepts an exact supplier barcode as the identity of an EAN-only search', async () => {
+    const connector = {
+      supplierName: 'Santa Cruz',
+      searchProduct: async () => [{
+        supplierProductName: 'GLIFAGE XR 500MG C/30 COMPRIMIDOS',
+        dosage: '500mg',
+        presentation: 'liberacao prolongada',
+        price: 7.25,
+        priceSourceLabel: 'Preço NF',
+        stStatus: 'COM_ST',
+        availability: 'Disponivel',
+        source: 'Santa Cruz',
+        ean: '7891721201806',
+        packaging: '30 comprimidos',
+        quantity: 30,
+        capturedAt: new Date().toISOString()
+      }]
+    };
+
+    const quote = await processQuoteQuery(
+      '7891721201806',
+      ['Santa Cruz'],
+      { connectors: [connector] }
+    );
+    const result = quote.results[0];
+
+    assert.strictEqual(result.ean, '7891721201806');
+    assert.strictEqual(result.auditStatus, AUDIT_STATUS.OK);
+    assert.strictEqual(result.isValidOption, true);
+    assert.strictEqual(result.recommendationStatus, 'Melhor preço com ST');
+  });
+
+  await t.test('keeps a conflicting description blocked even when the supplier barcode matches', async () => {
+    const connector = {
+      supplierName: 'Santa Cruz',
+      searchProduct: async () => [{
+        supplierProductName: 'GLIFAGE XR 500MG C/30 COMPRIMIDOS',
+        dosage: '500mg',
+        presentation: 'liberacao prolongada',
+        price: 7.25,
+        priceSourceLabel: 'Preço NF',
+        stStatus: 'COM_ST',
+        availability: 'Disponivel',
+        source: 'Santa Cruz',
+        ean: '7891721201806',
+        packaging: '30 comprimidos',
+        quantity: 30,
+        capturedAt: new Date().toISOString()
+      }]
+    };
+
+    const quote = await processQuoteQuery(
+      '7891721201806 losartana 50mg',
+      ['Santa Cruz'],
+      { connectors: [connector] }
+    );
+    const result = quote.results[0];
+
+    assert.strictEqual(result.ean, '7891721201806');
+    assert.strictEqual(result.auditStatus, AUDIT_STATUS.BLOCKED);
+    assert.strictEqual(result.isValidOption, false);
+    assert.match(result.auditSummary, /Produto encontrado nao confere/);
+  });
+
   await t.test('Returns a structured unavailable row when no supplier has the product', async () => {
     const quote = await processQuoteQuery('produto inexistente teste 123mg comp');
 

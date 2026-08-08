@@ -28,6 +28,8 @@ Na Santa Cruz, o sistema tenta uma sequência ordenada: nome + dose + unidade, n
 
 Se a grade transitória da Santa Cruz repetir o texto pesquisado em colunas incompatíveis, como usar um EAN como descrição ou `Preço NF`, a captura inteira é descartada e repetida uma vez. Preços com escala incompatível com moeda também são rejeitados. Persistindo a inconsistência, a distribuidora fica sinalizada para revisão; esse conteúdo nunca entra como preço, estoque ou recomendação.
 
+Em uma busca contendo somente um EAN-13 válido, uma linha com o mesmo EAN retornado pelo fornecedor é tratada como identidade exata e não depende de nome, dose ou apresentação digitados. Se o operador escrever EAN e descrição na mesma linha, todos os dados informados continuam obrigatórios e qualquer conflito bloqueia a oferta.
+
 As ações da Santa Cruz são executadas em fila e protegidas por uma trava global do Windows: nem outra cotação nem um diagnóstico iniciado em outro processo pode controlar a mesma janela ao mesmo tempo. Uma nova pesquisa só começa depois que a anterior encerra e confirma a tentativa de limpeza. Timeout ou cancelamento interrompe o auxiliar de automação, preserva o aplicativo da distribuidora e mostra a etapa **Encerrando** enquanto a limpeza limitada termina.
 
 Os únicos contratos de preço aceitos são: ANB `Unit c/ST`, Profarma `Preço Final`, Santa Cruz `Preço NF` e DM Paraná `Preço final: R$`. Captura antiga, cabeçalho diferente, preço zero ou com aparência de código de barras, falta de estoque ou falha técnica são bloqueados; o histórico nunca substitui uma consulta ao vivo.

@@ -2,6 +2,15 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.10] - 2026-08-08
+
+### EAN puro e auditoria real da Santa Cruz
+- **Falso bloqueio corrigido:** uma busca contendo somente EAN agora aceita a identidade exata devolvida pelo fornecedor sem exigir apresentação ausente na consulta. EAN acompanhado de descrição conflitante continua bloqueado pela auditoria final.
+- **EAN validado ao vivo:** `7891721201806` retornou `GLIFAGE XR 500MG C/30 COMPRIMIDOS`, `Preço NF: R$ 7,25`, EAN idêntico, estoque disponível, `COM_ST` e auditoria `OK`. `7897595901316` confirmou `PURAN T4 50MCG C/30 COMPRIMIDOS`, `Preço NF: R$ 15,71`.
+- **Contexto e fallback validados:** `puran 50`, `hidrocloro 25`, `clenil 250` e `olmesartana hidrocloro 20/12,5mg 30 comp` encontraram opções válidas com dose correta. A associação rejeitou 15 linhas incompatíveis antes de aprovar somente as combinações completas.
+- **Grade completa e limpeza:** uma busca ampla por `losartana` validou dinamicamente a coluna `Preço NF`, percorreu `47/47` linhas, confirmou a atualização da grade e terminou com `searchCleared: true`. A Santa Cruz permaneceu aberta e responsiva.
+- **Regressão:** testes de recomendação cobrem EAN puro exato e EAN exato acompanhado de descrição conflitante, além das proteções anteriores de preço, estoque, ST, dose, apresentação, associação, timeout e portabilidade.
+
 ## [1.8.9] - 2026-08-08
 
 ### Lotes reais e fallback seguro de associações

@@ -647,8 +647,14 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       }
     }
     
-    // Confidence overrides
-    const isSimilar = !(presentationMatchesResult && dosageMatches);
+    // An exact barcode is the complete identity for an EAN-only request. If the
+    // operator also supplied a description, the final auditor still checks it.
+    const exactEanMatch = Boolean(
+      parsed.ean &&
+      res.ean &&
+      String(parsed.ean) === String(res.ean)
+    );
+    const isSimilar = !exactEanMatch && !(presentationMatchesResult && dosageMatches);
     const freshCapture = connectorMode !== 'real' || isFreshLiveCapture(res);
 
     if (!freshCapture) {
