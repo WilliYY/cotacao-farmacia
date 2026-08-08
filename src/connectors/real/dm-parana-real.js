@@ -2,6 +2,7 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials, getSupplierIdByName } from '../../lib/database.js';
 import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
+import { getCombinationSearchFallback } from '../../lib/pharmaceutical-context.js';
 import {
   createClassifiedLiveUnavailableResult,
   createLiveUnavailableResult,
@@ -47,18 +48,30 @@ export class DmParanaRealConnector extends SupplierConnector {
     logger.info('Initiating autonomous portal search on DM Parana for: "' + searchTerm + '"');
 
     try {
-      const results = await scrapePortal(
+      const portalUrl = normalizeDmParanaUrl(credentials.url);
+      const runSearch = term => scrapePortal(
         4,
-        normalizeDmParanaUrl(credentials.url),
+        portalUrl,
         credentials.username,
         credentials.password,
         credentials.clientCode,
-        searchTerm,
+        term,
         { signal: options.signal }
       );
+      let results = await runSearch(searchTerm);
+      const combinationFallback = !parsedQuery.ean && results.length === 0
+        ? getCombinationSearchFallback(parsedQuery)
+        : '';
+      if (combinationFallback && combinationFallback !== searchTerm) {
+        logger.info('DM returned no products for the association; retrying by active ingredient: "' + combinationFallback + '"');
+        results = await runSearch(combinationFallback);
+      }
 
       return results.map(result => ({
         ...result,
+        searchFallback: combinationFallback
+          ? (result.searchFallback || 'ASSOCIACAO_POR_PRINCIPIO_ATIVO')
+          : result.searchFallback,
         source: 'DM Paraná',
         capturedAt: new Date().toISOString()
       }));

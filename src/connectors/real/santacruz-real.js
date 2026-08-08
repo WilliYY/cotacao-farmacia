@@ -7,6 +7,7 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
 import { logger } from '../../lib/logger.js';
 import { parseSearchQuery } from '../../lib/parser.js';
+import { getCombinationSearchFallback } from '../../lib/pharmaceutical-context.js';
 import { FAILURE_CODES } from '../../lib/resilience.js';
 import { createLiveUnavailableResult } from './live-result.js';
 
@@ -186,7 +187,7 @@ export function normalizeSantaCruzProductResult(result = {}) {
   };
 }
 
-export function getSantaCruzSearchTerms(searchTerm = '', productName = '') {
+export function getSantaCruzSearchTerms(searchTerm = '', productName = '', combinationFallback = '') {
   const original = String(searchTerm || '').replace(/\s+/g, ' ').trim();
   if (!original) return [];
   if (/^\d{13}$/.test(original)) return [original];
@@ -220,6 +221,7 @@ export function getSantaCruzSearchTerms(searchTerm = '', productName = '') {
     .trim();
   if (activeIngredient && /\d/.test(original)) appendUnique(broadTerm);
   else if (broadTerm !== original) appendUnique(broadTerm);
+  appendUnique(combinationFallback);
   return terms;
 }
 
@@ -457,7 +459,11 @@ export class SantaCruzRealConnector extends SupplierConnector {
     logger.info(`Searching Santa Cruz for: "${searchTerm}"...`);
     logger.info('Locating the Santa Cruz installation and starting autonomous GUI search...');
 
-    const searchTerms = getSantaCruzSearchTerms(searchTerm, parsedQuery.name);
+    const searchTerms = getSantaCruzSearchTerms(
+      searchTerm,
+      parsedQuery.name,
+      getCombinationSearchFallback(parsedQuery)
+    );
     const retryTerm = searchTerms.length > 1 ? searchTerms.at(-1) : '';
     if (searchTerms.length > 1) {
       logger.info(`Santa Cruz fallback sequence: ${searchTerms.map(term => `"${term}"`).join(' -> ')}.`);

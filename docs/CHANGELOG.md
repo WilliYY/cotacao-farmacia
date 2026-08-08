@@ -2,6 +2,16 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.8.9] - 2026-08-08
+
+### Lotes reais e fallback seguro de associações
+- **Associação com busca ampla controlada:** quando uma associação explícita não retorna linhas pelo nome completo, ANB, Profarma, Santa Cruz e DM Paraná tentam um único princípio ativo na ordem escrita. Os resultados continuam obrigados a conter todos os princípios, todas as doses, apresentação, estoque, ST e o campo oficial de preço; produtos simples permanecem bloqueados.
+- **Catálogo canônico auditado:** todos os princípios ativos cadastrados e as 38 marcas de referência são verificados por teste. `amlodipino` permanece aceito como alias de `anlodipino`, sem duplicar o princípio ativo canônico.
+- **Prazo visível corrigido:** o andamento agora mostra o limite total recebido do backend. A configuração atual limita portais web a 5 minutos, Santa Cruz a 10 minutos e a cotação completa a 10 minutos; resultados concluídos são preservados quando o limite encerra fontes pendentes.
+- **Teste real com vários itens:** a Santa Cruz reutilizou a janela aberta em cinco pesquisas sequenciais, permaneceu aberta e pronta ao final e retornou `Preço NF` válido para losartana 50mg (`R$ 2,82`) e hidroclorotiazida 25mg (`R$ 1,97`). Metformina 500mg e Puran T4 50mcg foram encontrados, mas corretamente excluídos por estoque indisponível.
+- **Teste real dos portais:** a ANB confirmou `Unit c/ST` de losartana 50mg (`R$ 2,80`), hidroclorotiazida 25mg (`R$ 1,55`) e metformina 500mg (`R$ 3,92`). No reteste da associação olmesartana + hidroclorotiazida 20/12,5mg, a busca segura passou a encontrar opções válidas na ANB (`R$ 14,76`), Profarma (`R$ 25,53`) e Santa Cruz (`R$ 22,74`); a DM retornou somente olmesartana simples e foi recusada.
+- **Cobertura:** a suíte passou a ter 171 testes para nomes canônicos, marcas de referência, fallback de associação e prazo exibido, além das proteções anteriores de EAN, ST, estoque, timeout, cancelamento e recuperação de fornecedores.
+
 ## [1.8.8] - 2026-08-08
 
 ### EAN exato e integridade da grade da Santa Cruz

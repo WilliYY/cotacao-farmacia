@@ -45,7 +45,9 @@ import {
   FARMACIA_POPULAR_CATALOG,
   FARMACIA_POPULAR_PROGRAM,
   REFERENCE_BRAND_NAMES,
+  canonicalizeMedicationName,
   extractActiveIngredients,
+  getCombinationSearchFallback,
   getFarmaciaPopularInfo,
   resolveReferenceBrandName
 } from '../src/lib/pharmaceutical-context.js';
@@ -199,6 +201,12 @@ test('PostgreSQL rows - restores application camelCase fields', () => {
 });
 
 test('Quote progress - exposes real item and supplier states', async (t) => {
+  await t.test('shows the backend quote limit instead of a stale per-item promise', () => {
+    const appSource = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
+    assert.doesNotMatch(appSource, /Limite m.ximo de 2 min por item/);
+    assert.match(appSource, /Limite total de \{formatElapsedTime\(timeoutSeconds\)\}/);
+  });
+
   await t.test('calculates progress from terminal supplier events and resets each item', () => {
     let progress = createInitialQuoteProgress(2, ['ANB', 'Profarma']);
     progress = reduceQuoteProgress(progress, {
@@ -1156,12 +1164,14 @@ test('Santa Cruz Portable Automation', async (t) => {
     assert.deepStrictEqual(
       getSantaCruzSearchTerms(
         'olmesartana 40 mg + hidroclorotiazida 25mg',
-        'olmesartana + hidroclorotiazida'
+        'olmesartana + hidroclorotiazida',
+        'olmesartana'
       ),
       [
         'olmesartana 40 mg + hidroclorotiazida 25mg',
         'olmesartana 40 + hidroclorotiazida 25',
-        'olmesartana + hidroclorotiazida'
+        'olmesartana + hidroclorotiazida',
+        'olmesartana'
       ]
     );
     assert.deepStrictEqual(getSantaCruzSearchTerms('7896004719016', 'losartana'), ['7896004719016']);
@@ -1750,6 +1760,31 @@ test('Farmacia Popular & Reference Brand Intelligence', async (t) => {
     ]);
     const missingIngredients = [...knownIngredients].filter(ingredient => !catalog.has(ingredient)).sort();
     assert.deepStrictEqual(missingIngredients, []);
+  });
+
+  await t.test('keeps active ingredients canonical and every reference brand resolvable', () => {
+    const canonicalIngredients = ACTIVE_INGREDIENTS.map(canonicalizeMedicationName);
+    assert.strictEqual(new Set(canonicalIngredients).size, canonicalIngredients.length);
+
+    for (const ingredient of ACTIVE_INGREDIENTS) {
+      const plan = analyzeQuoteBatch([`${ingredient} 10mg`])[0];
+      assert.strictEqual(plan.parsed.name, ingredient, ingredient);
+      assert.ok(plan.parsed.activeIngredients.includes(ingredient), ingredient);
+    }
+
+    for (const [brand, ingredient] of REFERENCE_BRAND_NAMES) {
+      assert.strictEqual(resolveReferenceBrandName(brand), ingredient, brand);
+    }
+  });
+
+  await t.test('uses one ingredient only as a safe portal fallback for explicit associations', () => {
+    const forward = parseSearchQuery('olmesartana hidrocloro 20/12,5mg 30 comp');
+    const reversed = parseSearchQuery('hidrocloro olmesartana 12,5/20mg 30 comp');
+    const single = parseSearchQuery('hidrocloro 25mg 30 comp');
+
+    assert.strictEqual(getCombinationSearchFallback(forward), 'olmesartana');
+    assert.strictEqual(getCombinationSearchFallback(reversed), 'hidroclorotiazida');
+    assert.strictEqual(getCombinationSearchFallback(single), '');
   });
 });
 

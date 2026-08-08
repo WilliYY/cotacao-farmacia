@@ -2,6 +2,7 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
 import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
+import { getCombinationSearchFallback } from '../../lib/pharmaceutical-context.js';
 import {
   createClassifiedLiveUnavailableResult,
   createLiveUnavailableResult,
@@ -82,9 +83,19 @@ export class ProfarmaRealConnector extends SupplierConnector {
         logger.info(`Profarma returned no products; retrying once without the mg suffix: "${retryTerm}"`);
         results = await runSearch(retryTerm);
       }
+      const combinationFallback = !parsedQuery.ean && results.length === 0
+        ? getCombinationSearchFallback(parsedQuery)
+        : '';
+      if (combinationFallback && ![searchTerm, retryTerm].includes(combinationFallback)) {
+        logger.info(`Profarma returned no products for the association; retrying by active ingredient: "${combinationFallback}"`);
+        results = await runSearch(combinationFallback);
+      }
       
       return results.map(res => ({
         ...res,
+        searchFallback: combinationFallback
+          ? (res.searchFallback || 'ASSOCIACAO_POR_PRINCIPIO_ATIVO')
+          : res.searchFallback,
         source: 'Profarma',
         capturedAt: new Date().toISOString()
       }));

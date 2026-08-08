@@ -2,6 +2,7 @@ import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials } from '../../lib/database.js';
 import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
+import { getCombinationSearchFallback } from '../../lib/pharmaceutical-context.js';
 import {
   createClassifiedLiveUnavailableResult,
   createLiveUnavailableResult,
@@ -98,15 +99,24 @@ export class ANBRealConnector extends SupplierConnector {
     logger.info(`Initiating autonomous portal search on ANB Farma for: "${searchTerm}"`);
 
     try {
-      const results = await scrapePortal(
-        1, 
-        normalizeAnbUrl(creds.url),
+      const portalUrl = normalizeAnbUrl(creds.url);
+      const runSearch = term => scrapePortal(
+        1,
+        portalUrl,
         creds.username, 
         creds.password, 
         creds.clientCode, 
-        searchTerm,
+        term,
         { signal: options.signal }
       );
+      let results = await runSearch(searchTerm);
+      const combinationFallback = !parsedQuery.ean && results.length === 0
+        ? getCombinationSearchFallback(parsedQuery)
+        : '';
+      if (combinationFallback && combinationFallback !== searchTerm) {
+        logger.info(`ANB returned no products for the association; retrying by active ingredient: "${combinationFallback}"`);
+        results = await runSearch(combinationFallback);
+      }
       
       const evidencedResults = applyAnbEanEvidence(results, searchTerm);
       if (parsedQuery.ean && !evidencedResults.some(result =>
@@ -118,6 +128,9 @@ export class ANBRealConnector extends SupplierConnector {
 
       return evidencedResults.map(res => ({
         ...res,
+        searchFallback: combinationFallback
+          ? (res.searchFallback || 'ASSOCIACAO_POR_PRINCIPIO_ATIVO')
+          : res.searchFallback,
         source: 'ANB',
         capturedAt: new Date().toISOString()
       }));

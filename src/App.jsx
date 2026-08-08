@@ -601,7 +601,7 @@ function QuoteProgressOverlay({ progress, elapsedSeconds, onCancelQuote }) {
   const supplierOrder = progress?.supplierOrder || [];
   const currentItem = progress?.currentItem || 0;
   const totalItems = progress?.totalItems || 0;
-  const timeoutSeconds = (progress?.timeoutMinutes || (totalItems > 0 ? totalItems * 2 : 2)) * 60;
+  const timeoutSeconds = (progress?.timeoutMinutes || 10) * 60;
 
   return (
     <div className="loading-overlay" role="status" aria-live="polite">
@@ -659,7 +659,7 @@ function QuoteProgressOverlay({ progress, elapsedSeconds, onCancelQuote }) {
         </div>
 
         <footer className="quote-progress-footer">
-          <span>Limite máximo de 2 min por item (ou encerra a distribuidora).</span>
+          <span>Limite total de {formatElapsedTime(timeoutSeconds)}; consultas pendentes são encerradas com segurança.</span>
           {onCancelQuote && (
             <button
               type="button"

@@ -140,6 +140,7 @@ Extracts structured terms from unstructured text lines using regular expressions
 - Extracts known active ingredients and compares combinations as order-independent sets, so `hidrocloro olmesartana` matches `olmesartana + hidroclorotiazida` without relying on the plus sign.
 - When every ingredient has an explicit strength, the dose stays bound to that ingredient. A swapped association such as olmesartana 12.5mg + hydrochlorothiazide 20mg cannot satisfy a 20mg + 12.5mg request.
 - Keeps the single-ingredient safety gate: a supplier combination is blocked unless the query requests the complete association.
+- When an explicit association returns an empty supplier grid, connectors may retry once with the first active ingredient written by the operator. This broadens portal recall only; the final auditor still requires every requested ingredient and ingredient-bound strength before recommendation.
 - Treats `xarope` and `suspensao oral` as equivalent while excluding ophthalmic, injectable, nasal, otologic, and other non-oral solutions.
 - The same helpers are used by the parser, recommendation pre-check, and final quote auditor to prevent contradictory decisions.
 - Reference brands are mapped to their active ingredient for matching without replacing the term sent to suppliers. For example, `clenil 250` remains a brand search while supplier rows containing beclometasona 250mcg are recognized.

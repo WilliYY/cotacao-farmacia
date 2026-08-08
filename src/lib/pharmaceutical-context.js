@@ -6,7 +6,6 @@ export const ACTIVE_INGREDIENTS = [
   'aciclovir',
   'alendronato',
   'amitriptilina',
-  'amlodipino',
   'amoxicilina',
   'ambroxol',
   'anlodipino',
@@ -187,6 +186,28 @@ export function canonicalizeMedicationName(value) {
 export function extractActiveIngredients(value) {
   const normalized = ` ${canonicalizeMedicationName(value)} `;
   return ACTIVE_INGREDIENTS.filter(ingredient => normalized.includes(` ${ingredient} `));
+}
+
+export function getCombinationSearchFallback(parsedQuery = {}) {
+  if (!parsedQuery?.isCombination) return '';
+
+  const referenceIngredients = resolveReferenceBrandName(parsedQuery.name);
+  const ingredients = [...new Set([
+    ...(Array.isArray(parsedQuery.activeIngredients) ? parsedQuery.activeIngredients : []),
+    ...extractActiveIngredients(referenceIngredients || parsedQuery.name || parsedQuery.originalTerms)
+  ])];
+  if (ingredients.length < 2) return '';
+
+  const sourceText = canonicalizeMedicationName(
+    parsedQuery.originalTerms || parsedQuery.name || referenceIngredients
+  );
+  return [...ingredients]
+    .sort((left, right) => {
+      const leftIndex = sourceText.indexOf(left);
+      const rightIndex = sourceText.indexOf(right);
+      return (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) -
+        (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex);
+    })[0] || '';
 }
 
 function hasExplicitCombination(value) {
