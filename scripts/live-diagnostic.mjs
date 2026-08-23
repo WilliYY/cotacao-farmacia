@@ -73,6 +73,8 @@ function sanitizeResult(result) {
     recommendationStatus: result.recommendationStatus,
     isValidOption: result.isValidOption,
     capturedAt: result.capturedAt,
+    browserEngine: result.browserEngine,
+    browserEngineFallback: result.browserEngineFallback,
     debugColumns: result.debugColumns
   };
 }

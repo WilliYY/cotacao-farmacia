@@ -19,7 +19,11 @@ export function createLiveUnavailableResult(supplierName, parsedQuery, reason, o
     blocksQuote: typeof options.blocksQuote === 'boolean' ? options.blocksQuote : null,
     failureCode: options.failureCode || null,
     operatorAction: options.operatorAction || null,
-    timedOut: options.timedOut === true
+    timedOut: options.timedOut === true,
+    ...(options.browserEngine ? { browserEngine: options.browserEngine } : {}),
+    ...(options.browserEngineFallback
+      ? { browserEngineFallback: options.browserEngineFallback }
+      : {})
   };
 }
 
@@ -38,7 +42,10 @@ export function createClassifiedLiveUnavailableResult(
       failureCode: failure.failureCode,
       operatorAction: failure.operatorAction,
       retryable: failure.retryable,
-      blocksQuote: failure.blocksQuote
+      blocksQuote: failure.blocksQuote,
+      timedOut: overrides.timedOut ?? ['SUPPLIER_TIMEOUT', 'QUOTE_TIMEOUT'].includes(failure.failureCode),
+      browserEngine: overrides.browserEngine || error?.browserEngine || '',
+      browserEngineFallback: overrides.browserEngineFallback || error?.browserEngineFallback || ''
     }
   );
 }

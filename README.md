@@ -174,6 +174,8 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - **Automação discreta:** `SHOW_SCRAPER_WINDOW=false` mantém ANB, Profarma e DM ocultas e fora da barra de tarefas. A Santa Cruz tenta escrever pelo controle de acessibilidade e restaura o foco anterior; por ser um aplicativo Java local, uma sessão Windows/VM dedicada é a única garantia de interferência visual zero.
 - **Privacidade Local:** O sistema grava histórico local em banco SQLite (`cotador-st.db`) na pasta de dados do usuário e gera logs limpos em `logs/app.log` sem armazenar dados de cookies, senhas, tokens ou contas de acesso.
 - **Retenção de diagnóstico:** `SystemLog` é limitado aos 5.000 registros mais recentes. Essa limpeza não remove cotações, ofertas, aprendizado linguístico nem credenciais.
+- **DM com Playwright opt-in:** `DM_BROWSER_ENGINE=electron` permanece o padrão seguro durante o piloto. `playwright` usa `playwright-core` com o Microsoft Edge instalado no Windows. `auto` só retorna ao Electron se o pacote ou o navegador não puder iniciar, antes de login ou pesquisa. Senha recusada, CAPTCHA, rede, layout e grade antiga falham fechados e não abrem um segundo navegador.
+- **Diagnóstico da DM:** `DM_PLAYWRIGHT_TRACE=on-failure` registra um arquivo em `logs/scraper-debug` somente depois do login. A senha não entra no trace, mas o conteúdo autenticado pode conter dados da conta; os dez traces mais recentes ficam locais e fora do Git.
 
 ### 5. Regra de preço da DM Paraná
 
@@ -181,8 +183,9 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - O único valor aceito é o texto literal **`Preço final: R$`**, que já representa o custo final exibido pelo portal.
 - O preço grande em negrito (`R$ .../cada`) é preço cru e nunca participa do ranking.
 - Itens sem botão **Comprar** ativo, com `Sem estoque`, `Indisponível` ou `Avise-me`, são ignorados.
-- A paginação avança pelo botão **Próximo** enquanto estiver habilitado, com limite defensivo de dez páginas.
+- A paginação avança pelo botão **Próximo** somente depois de a nova grade ficar preenchida e estável. O limite padrão é de 50 páginas (`DM_PLAYWRIGHT_MAX_PAGES`) e, se ainda houver páginas, a consulta falha de forma auditável em vez de truncar resultados.
 - Medicamentos combinados são bloqueados quando a busca pede apenas um princípio ativo.
+- O Playwright usa seletores estruturados e só aceita uma grade quando o campo contém a busca enviada e a assinatura dos cartões mudou ou a API confirmou uma resposta que contém o termo pesquisado. Respostas paralelas de carrinho e sessão não validam a grade. Estado vazio precisa permanecer estável; falha de rede da própria pesquisa posterior ao Enter bloqueia a consulta. Cada linha, inclusive falhas, informa internamente o motor usado.
 
 ### 6. Interface e conferência do preço
 

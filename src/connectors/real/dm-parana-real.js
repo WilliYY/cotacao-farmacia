@@ -1,6 +1,6 @@
 import { SupplierConnector } from '../supplier-connector.js';
 import { getSupplierCredentials, getSupplierIdByName } from '../../lib/database.js';
-import { scrapePortal } from '../../lib/electron-scraper.js';
+import { scrapeDmPortal } from '../../lib/dm-browser-engine.js';
 import { logger } from '../../lib/logger.js';
 import { getCombinationSearchFallback } from '../../lib/pharmaceutical-context.js';
 import {
@@ -49,15 +49,13 @@ export class DmParanaRealConnector extends SupplierConnector {
 
     try {
       const portalUrl = normalizeDmParanaUrl(credentials.url);
-      const runSearch = term => scrapePortal(
-        4,
-        portalUrl,
-        credentials.username,
-        credentials.password,
-        credentials.clientCode,
-        term,
-        { signal: options.signal }
-      );
+      const runSearch = term => scrapeDmPortal({
+        loginUrl: portalUrl,
+        username: credentials.username,
+        password: credentials.password,
+        clientCode: credentials.clientCode,
+        searchTerm: term
+      }, { signal: options.signal });
       let results = await runSearch(searchTerm);
       const combinationFallback = !parsedQuery.ean && results.length === 0
         ? getCombinationSearchFallback(parsedQuery)

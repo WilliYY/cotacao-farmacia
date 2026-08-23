@@ -720,6 +720,8 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       failureCode: res.failureCode || null,
       timedOut: res.timedOut === true,
       searchFallback: res.searchFallback || null,
+      browserEngine: res.browserEngine || null,
+      browserEngineFallback: res.browserEngineFallback || null,
       debugColumns: res.debugColumns,
       farmaciaPopular: fpInfo?.isFarmaciaPopular === true,
       farmaciaPopularCategory: fpInfo?.category || null,

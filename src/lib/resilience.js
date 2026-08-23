@@ -147,12 +147,14 @@ export function classifyPortalFailure(value, overrides = {}) {
       code = FAILURE_CODES.CREDENTIALS_MISSING;
     } else if (/captcha|recaptcha|verificacao manual|challenge/.test(text)) {
       code = FAILURE_CODES.CAPTCHA_REQUIRED;
-    } else if (/login.*(rejeitad|inval|expir)|unauthori[sz]ed|forbidden|\b401\b|\b403\b/.test(text)) {
+    } else if (/playwright_auth_rejected|login.*(rejeitad|inval|expir)|unauthori[sz]ed|forbidden|\b401\b|\b403\b/.test(text)) {
       code = FAILURE_CODES.AUTH_REQUIRED;
     } else if (/nao (foi )?localizad|not installed|not-installed|aplicativo.*ausente/.test(text)) {
       code = FAILURE_CODES.APP_NOT_INSTALLED;
-    } else if (/sem janela|not ready|nao esta pronto|login pendente|app_not_ready|atualizacao.*pendente/.test(text)) {
+    } else if (/playwright_unavailable|sem janela|not ready|nao esta pronto|login pendente|app_not_ready|atualizacao.*pendente/.test(text)) {
       code = FAILURE_CODES.APP_NOT_READY;
+    } else if (/playwright_network/.test(text)) {
+      code = FAILURE_CODES.CONNECTION_FAILURE;
     } else if (/err_internet_disconnected|enetunreach|network is unreachable|sem internet|offline/.test(text)) {
       code = FAILURE_CODES.NETWORK_OFFLINE;
     } else if (/err_name_not_resolved|enotfound|eai_again|dns/.test(text)) {
@@ -163,7 +165,7 @@ export function classifyPortalFailure(value, overrides = {}) {
       code = FAILURE_CODES.SERVICE_UNAVAILABLE;
     } else if (/err_connection|econnreset|econnrefused|connection reset|connection refused|socket hang up|conexao.*(interromp|recus)/.test(text)) {
       code = FAILURE_CODES.CONNECTION_FAILURE;
-    } else if (/selector|campo de pesquisa nao encontrado|grade.*nao encontrada|layout|commercial condition.*did not open|stale-results/.test(text)) {
+    } else if (/playwright_layout_changed|playwright_stale_grid|playwright_pagination_limit|selector|campo de pesquisa nao encontrado|grade.*nao encontrada|layout|commercial condition.*did not open|stale[-_ ](?:results|grid)/.test(text)) {
       code = FAILURE_CODES.PORTAL_LAYOUT_CHANGED;
     } else if (/timeout|timed out|tempo limite|excedido/.test(text)) {
       code = FAILURE_CODES.SUPPLIER_TIMEOUT;

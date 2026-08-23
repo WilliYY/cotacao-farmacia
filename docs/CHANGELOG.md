@@ -2,6 +2,20 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.9.0] - 2026-08-23
+
+### Playwright incremental na DM Paraná
+- **Motor estruturado:** a DM agora tenta `playwright-core` com o Microsoft Edge instalado, usa seletores com espera real, perfil local persistente, paginação limitada e o mesmo contrato literal `Preço final: R$`.
+- **Piloto opt-in e reversão segura:** `electron` permanece o padrão. `playwright` habilita o piloto; `auto` retorna ao BrowserWindow somente quando Playwright/Edge não inicia antes de qualquer interação. Layout, grade antiga, autenticação, CAPTCHA, rede, timeout e cancelamento nunca duplicam a tentativa em outro navegador.
+- **Grade fresca obrigatória:** a busca registra a assinatura anterior, confirma o valor do campo e exige troca dos cartões ou uma resposta nova do próprio portal. Vazio precisa estabilizar e falha de rede posterior ao Enter bloqueia a fonte.
+- **Rastreio sem senha:** traces começam depois do login e são gravados localmente apenas em falha por padrão. O conteúdo autenticado é tratado como sensível e limitado aos dez arquivos mais recentes. Cada oferta recebe evidência do motor usado e do eventual fallback.
+- **Teste real do motor:** o smoke local iniciou o Edge via Playwright, extraiu preço final com ST, rejeitou o valor cru sem `Preço final: R$` e marcou corretamente o botão `Comprar` desabilitado como sem estoque.
+- **Frescor correlacionado:** somente a resposta da API de produtos que contém o termo enviado pode confirmar uma grade sem alteração visual; tráfego paralelo de carrinho e sessão é ignorado.
+- **Login e paginação resilientes:** campos renderizados com atraso são aguardados, páginas intermediárias vazias não são extraídas e o limite configurável falha de forma auditável em vez de truncar ofertas.
+- **Evidência de falha:** timeout e motor usado (`playwright`/`electron`) também permanecem no histórico quando a distribuidora não responde.
+- **Validação ao vivo em 23/08/2026:** `losartana 50mg` concluiu `1/1` diagnóstico na DM. Cinco cartões foram capturados; a linha de 100 mg foi bloqueada e quatro apresentações de 50 mg ficaram válidas. O menor `Preço final: R$` elegível foi `R$ 2,75`, EAN `7896112114185`, com estoque e `COM_ST`.
+- **Regressão:** 185 testes cobrem seleção de motor, grade fresca, vazio estável, rede posterior ao Enter, fallback estreito, classificação de falhas, persistência do motor e extração real do DOM, além dos contratos anteriores.
+
 ## [1.8.10] - 2026-08-08
 
 ### EAN puro e auditoria real da Santa Cruz
