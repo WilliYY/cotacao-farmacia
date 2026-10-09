@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { runInNewContext } from 'node:vm';
 import {
   assertTrustedIpcSender,
   createTrustedIpcHandler,
@@ -9,6 +12,43 @@ import {
   validateSupplierCredentials
 } from '../src/lib/ipc-security.js';
 import { buildQuoteSummary } from '../src/lib/quote-summary.js';
+
+test('Closing the main window routes active manual or site quotes through application shutdown', () => {
+  const source = readFileSync(new URL('../main.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function createWindow()');
+  const end = source.indexOf('function sendQuoteProgress', start);
+  assert.ok(start >= 0 && end > start, 'Main window factory must be available');
+  for (const [manualActive, siteActive] of [[true, false], [false, true], [true, true], [false, false]]) {
+    let prevented = 0;
+    let quitCalls = 0;
+    class FakeBrowserWindow {
+      handlers = new Map();
+      webContents = { on() {}, setWindowOpenHandler() {} };
+      once() {}
+      on(name, handler) { this.handlers.set(name, handler); }
+      loadURL() {}
+      close() {
+        this.handlers.get('close')?.({ preventDefault() { prevented++; } });
+        if (!prevented) this.handlers.get('closed')?.();
+      }
+    }
+    const context = {
+      BrowserWindow: FakeBrowserWindow, path, __dirname: 'C:/Cotacao',
+      fs: { existsSync: () => false }, process: { env: {} },
+      mainWindow: null, mainWindowSourceUrl: '',
+      quoteRunCoordinator: { hasActiveQuote: () => manualActive },
+      siteQuoteController: siteActive ? new AbortController() : null,
+      app: { quit() { quitCalls++; } },
+    };
+    runInNewContext(`${source.slice(start, end)}\ncreateWindow();`, context);
+    const window = context.mainWindow;
+    window.close();
+    const active = manualActive || siteActive;
+    assert.equal(prevented, active ? 1 : 0, `Close prevention for manual=${manualActive}, site=${siteActive}`);
+    assert.equal(quitCalls, active ? 1 : 0, 'Active work must enter the existing cancellation and cleanup shutdown flow');
+    assert.equal(context.mainWindow, active ? window : null, 'Main window survives until active work is cleaned up');
+  }
+});
 
 function trustedContext() {
   const allowedUrl = 'file:///C:/Cotacao/dist/index.html';

@@ -82,7 +82,7 @@ function normalizePackageMeasurement(value) {
   };
 }
 
-function packageSizeMatches(queryPackageSize, resultPackaging = '', resultText = '') {
+export function packageSizeMatches(queryPackageSize, resultPackaging = '', resultText = '') {
   if (!queryPackageSize) return true;
   const queryMeasurement = normalizePackageMeasurement(queryPackageSize);
   if (!queryMeasurement) return true;

@@ -2,6 +2,15 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.9.4] - 2026-10-09
+
+- Preenchimento no site rejeita divergências explícitas entre a consulta, a descrição e os metadados: dose, apresentação, via, liberação, volume e quantidade da embalagem. EAN idêntico não encobre contradições; concentração equivalente e abreviação genérica `CPR` continuam aceitas quando compatíveis.
+- Após consultar os fornecedores, a planilha é relida antes de comparar ou preencher. Mudanças no UUID, identidade, versão, cotação ou vínculo das colunas interrompem a execução; reordenação visual continua permitida.
+- Cancelamento e interrupção listam todos os fornecedores ainda não concluídos, inclusive de linhas não iniciadas. Falhas de consulta identificam os fornecedores afetados.
+- Fechar a janela principal durante uma cotação aciona o encerramento coordenado, mesmo com a janela do site aberta. Uma gravação já enviada é reconciliada antes de sair.
+- Testes do cliente executam o JavaScript real de leitura/gravação em ambiente isolado, cobrindo CSRF, autenticação, conflitos, falhas antes/depois do PATCH, cancelamento e ausência de repetição automática. Nenhuma mudança no servidor ou dependência nova.
+- Validação: 255/255 testes, build aprovado e lint com zero erros. Banco principal preservado por hash; nova comparação real no Electron concluiu uma linha sem sobrescrever o valor existente.
+
 ## [1.9.3] - 2026-10-09
 
 - Integração da planilha Wimifarma inteiramente no Electron, sem mudanças no servidor: login próprio, leitura, vínculo por chave, seleção de linhas e comparação de valores existentes.

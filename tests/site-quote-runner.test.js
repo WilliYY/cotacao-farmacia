@@ -103,6 +103,71 @@ test('Site quotes only requested suppliers and compares existing prices without 
   assert.match(report.rows[0].suppliers[0].reason, /coincide/);
 });
 
+test('Site rechecks the current row, quotation and column before comparisons as well as writes', async () => {
+  for (const change of [
+    snapshot => { snapshot.rows[0].values.produto = 'LOSARTANA 100MG 30CPR'; snapshot.rows[0].version++; },
+    snapshot => { snapshot.rows[0].values.anb = '7,00'; snapshot.rows[0].version++; },
+    snapshot => { snapshot.columns[0].label = 'Outra distribuidora'; },
+    snapshot => { snapshot.quote.id = 'another-quote'; },
+    snapshot => { snapshot.rows = []; }
+  ]) {
+    const snapshot = fixture({ anb: '3,50' });
+    let writes = 0;
+    const report = await runSiteQuotation({ request, client: {
+      readSnapshot: async () => structuredClone(snapshot), writeCell: async () => { writes++; }
+    }, quote: async () => { change(snapshot); return { id: 20, items: [{ results: [offer()] }] }; } });
+    assert.equal(writes, 0);
+    assert.equal(report.rows[0].suppliers[0].status, 'revisar');
+    assert.match(report.stoppedReason, /relida/);
+  }
+});
+
+test('Lost site session after supplier lookup stops without claiming a comparison or attempting writes', async () => {
+  let reads = 0;
+  let writes = 0;
+  const report = await runSiteQuotation({ request, client: {
+    readSnapshot: async () => { if (++reads > 1) throw new Error('HTTP 401'); return fixture({ anb: '3,50' }); },
+    writeCell: async () => { writes++; }
+  }, quote: async () => ({ id: 21, items: [{ results: [offer()] }] }) });
+  assert.equal(writes, 0);
+  assert.equal(report.rows[0].suppliers[0].status, 'revisar');
+  assert.match(report.stoppedReason, /HTTP 401/);
+});
+
+test('Cancelled and interrupted batches account for every selected row and supplier in the report', async () => {
+  for (const cancel of [true, false]) {
+    const controller = new AbortController();
+    const secondId = 'b141db91-cc33-4c27-a9bd-43b0e92bc833';
+    const snapshot = fixture();
+    snapshot.rows.push({ ...snapshot.rows[0], id: secondId, position: 2 });
+    let writes = 0;
+    const report = await runSiteQuotation({
+      request: { rowIds: [rowId, secondId], supplierColumns: { ANB: 'anb', Profarma: 'profarma' } },
+      signal: controller.signal, client: { readSnapshot: async () => snapshot,
+        writeCell: async () => { writes++; return { status: 'uncertain', reason: 'Sem confirmacao' }; } },
+      quote: async () => { if (cancel) controller.abort(); return { id: 22, items: [{ results: [offer(), offer('Profarma')] }] }; }
+    });
+    assert.equal(writes, cancel ? 0 : 1);
+    assert.equal(report.rows.length, 2);
+    assert.ok(report.rows.every(row => row.suppliers.length === 2));
+    assert.equal(report.pending, cancel ? 4 : 3);
+    assert.equal(report.rows[1].suppliers[0].status, cancel ? 'cancelled' : 'nao_processado');
+  }
+});
+
+test('Reordered rows and columns retain UUID and supplier key without blocking a valid write', async () => {
+  const snapshot = fixture();
+  let writes = 0;
+  const report = await runSiteQuotation({ request, client: { readSnapshot: async () => structuredClone(snapshot),
+    writeCell: async (entry, target) => { writes++; assert.equal(entry.rowId, rowId); assert.equal(target.columnKey, 'anb'); return { status: 'written', version: 2 }; }
+  }, quote: async () => {
+    snapshot.columns.reverse(); snapshot.rows[0].position = 15;
+    return { id: 23, items: [{ results: [offer()] }] };
+  } });
+  assert.equal(writes, 1);
+  assert.equal(report.written, 1);
+});
+
 test('SQLite integer flags from persisted quotation details remain eligible', async () => {
   let writtenValue;
   const report = await runSiteQuotation({ request, client: {

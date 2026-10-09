@@ -1,5 +1,6 @@
 import { isValidEAN13, parseSearchQuery } from './parser.js';
-import { AUDIT_STATUS, auditQuoteResult, dosageMatches, productIdentityMatches } from './quote-auditor.js';
+import { AUDIT_STATUS, auditQuoteResult, dosageMatches, packageSizeMatches, productIdentityMatches } from './quote-auditor.js';
+import { presentationsMatch } from './pharmaceutical-context.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BASE_FIELDS = new Set(['ean', 'produto', 'quantidade', 'categoria', 'ganhador', 'quemganhou']);
@@ -108,6 +109,8 @@ export function createSiteQuotePlan(snapshot, { supplierColumns = {}, rowIds = [
       continue;
     }
     entries.push({ rowId: row.id, rowVersion: Number(row.version), rowPosition: row.position, identity,
+      supplierBindings: Object.fromEntries(Object.entries(mapping).map(([supplier, key]) =>
+        [supplier, columnBinding(columns.find(column => column.key === key))])),
       query: [ean, product].filter(Boolean).join(' '), targets, existingCells, supplierColumns: { mapping: { ...mapping } } });
   }
   return { entries, skipped };
@@ -129,6 +132,31 @@ function isFreshCapture(offer, startedAt) {
     (startedAt === null || capturedAt >= startedAt);
 }
 
+function explicitOfferEvidenceMatches(parsed, offer) {
+  const description = text(offer.supplierProductName || offer.name);
+  const described = parseSearchQuery(description);
+  const doses = [parsed.isCombination ? parsed.originalTerms : parsed.dosage,
+    described.isCombination ? description : described.dosage, offer.dosage].filter(Boolean);
+  if (doses.some(dose => !dosageMatches(doses[0], dose) || !dosageMatches(dose, doses[0]))) return false;
+  const forms = [
+    { presentation: parsed.presentation, context: parsed.originalTerms },
+    { presentation: described.presentation, context: description },
+    { presentation: offer.presentation, context: offer.presentation }
+  ].filter(evidence => evidence.presentation);
+  if (forms.some(form => !presentationsMatch(forms[0].presentation, form.presentation, {
+    queryText: forms[0].context, resultText: form.context
+  }))) return false;
+  const packaged = parseSearchQuery(offer.packaging || '');
+  // A count of 1 is also the parser/connector default for unknown packaging.
+  const counts = [parsed.quantity, described.quantity, packaged.quantity, offer.quantity]
+    .map(Number).filter(count => count > 1);
+  if (counts.some(count => count !== counts[0])) return false;
+  const sizes = [parsed.packageSize, described.packageSize,
+    packaged.packageSize || (/\b\d+(?:[.,]\d+)?\s*(?:g|ml)\b/i.test(offer.packaging || '') ? offer.packaging : '')
+  ].filter(Boolean);
+  return sizes.every(size => packageSizeMatches(sizes[0], size));
+}
+
 export function selectSiteQuotePrice(entry, supplierName, quoteData = {}) {
   const supplier = canonicalSupplier(supplierName);
   if (!supplier) return { reason: 'Fornecedor nao reconhecido.' };
@@ -145,7 +173,7 @@ export function selectSiteQuotePrice(entry, supplierName, quoteData = {}) {
     const audit = auditQuoteResult(parsed, offer);
     if (audit.status !== AUDIT_STATUS.OK && !(missingEanOnly && audit.blocks.length === 0 &&
         audit.warnings.length === 1 && audit.warnings[0] === MISSING_EAN_WARNING)) return false;
-    if (parsed.dosage && offer.dosage && !dosageMatches(parsed.dosage, offer.dosage, '')) return false;
+    if (!explicitOfferEvidenceMatches(parsed, offer)) return false;
     return parsed.ean ? text(offer.ean) === parsed.ean : productIdentityMatches(parsed, offer);
   });
   if (!offers.length) return { reason: 'Nenhuma oferta atual, auditada e compativel com preco final comprovado.' };
@@ -160,13 +188,30 @@ export function selectSiteQuotePrice(entry, supplierName, quoteData = {}) {
   return { value: Number(offer.price).toFixed(2).replace('.', ','), offer };
 }
 
-export function validateSiteWrite(entry, target, currentSnapshot) {
+export function validateSiteRow(entry, currentSnapshot) {
+  if (entry.quoteId !== undefined && currentSnapshot?.quote?.id !== entry.quoteId) {
+    return { ok: false, reason: 'A cotacao do site mudou.' };
+  }
   const rows = (currentSnapshot?.rows || []).filter(row => row.id === entry.rowId);
   if (rows.length !== 1 || !UUID.test(text(entry.rowId))) return { ok: false, reason: 'Linha removida ou duplicada.' };
   const row = rows[0];
   if (Number(row.version) !== entry.rowVersion || JSON.stringify(rowIdentity(row)) !== JSON.stringify(entry.identity)) {
     return { ok: false, reason: 'Produto, EAN, quantidade ou versao da linha mudou.' };
   }
+  for (const binding of Object.values(entry.supplierBindings || {})) {
+    const columns = (currentSnapshot.columns || []).filter(column => column.key === binding.key);
+    if (columns.length !== 1 || !editableSupplierColumn(columns[0]) ||
+        JSON.stringify(columnBinding(columns[0])) !== JSON.stringify(binding)) {
+      return { ok: false, reason: 'Coluna de fornecedor mudou.' };
+    }
+  }
+  return { ok: true };
+}
+
+export function validateSiteWrite(entry, target, currentSnapshot) {
+  const guard = validateSiteRow(entry, currentSnapshot);
+  if (!guard.ok) return guard;
+  const row = currentSnapshot.rows.find(row => row.id === entry.rowId);
   if (!entry.targets?.some(t => t.columnKey === target.columnKey && t.supplierName === target.supplierName) ||
     entry.targets.filter(t => t.columnKey === target.columnKey).length !== 1) return { ok: false, reason: 'Vinculo de fornecedor ausente ou colidindo.' };
   const columns = (currentSnapshot.columns || []).filter(column => column.key === target.columnKey);

@@ -253,6 +253,12 @@ function createWindow() {
     setTimeout(checkGitUpdates, 5000);
   });
 
+  mainWindow.on('close', event => {
+    if (!quoteRunCoordinator.hasActiveQuote() && !siteQuoteController) return;
+    event.preventDefault();
+    app.quit();
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });

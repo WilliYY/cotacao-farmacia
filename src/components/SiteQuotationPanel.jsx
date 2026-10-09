@@ -16,6 +16,7 @@ const STATUS_LABELS = {
   gravado: 'Preenchido', comparado: 'Comparação', revisar: 'Revisar', falhou: 'Erro',
   written: 'Preenchido', comparison: 'Comparação', compared: 'Comparação', review: 'Revisar',
   skipped: 'Ignorado', cancelled: 'Cancelado', error: 'Erro', preserved: 'Preservado',
+  nao_processado: 'Não concluído',
 };
 
 function initialMapping(columns, suggested = {}) {
@@ -236,6 +237,7 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
           {report && <section className="site-quote-report" aria-labelledby="site-quote-report-title">
             <h3 id="site-quote-report-title">Relatório da cotação</h3>
             <div className="site-quote-stats">{[['Processadas', report.processed], ['Preenchidas', report.written], ['Revisar', report.review], ['Ignoradas', report.skipped]].map(([label, value]) => <div key={label}><strong>{value ?? 0}</strong><span>{label}</span></div>)}</div>
+            {report.pending > 0 && <p className="site-quote-warning">{report.pending} consulta(s) de fornecedor não foram concluídas. Confira as linhas indicadas no relatório.</p>}
             <div className="site-quote-table-scroll" tabIndex={0} role="region" aria-label="Relatório de valores anteriores e consultados">
               <table className="site-quote-table"><thead><tr><th scope="col">Produto</th><th scope="col">Fornecedor</th><th scope="col">Valor existente</th><th scope="col">Valor consultado</th><th scope="col">Resultado</th><th scope="col">Motivo / revisão</th></tr></thead><tbody>
                 {report.rows.flatMap(row => (row.suppliers || []).map((supplier, index) => <tr key={`${row.rowId}-${supplier.supplierName}-${index}`}>

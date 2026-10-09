@@ -1,4 +1,4 @@
-import { createSiteQuotePlan, resolveSiteSupplierColumns, selectSiteQuotePrice } from './site-quotation.js';
+import { createSiteQuotePlan, resolveSiteSupplierColumns, selectSiteQuotePrice, validateSiteRow } from './site-quotation.js';
 
 const SUPPLIERS = new Set(['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -33,10 +33,11 @@ export async function runSiteQuotation({ client, request, quote, signal, onProgr
   }
   if (rowIds.some(id => !snapshot.rows.some(row => row.id === id))) throw new Error('Uma linha selecionada foi removida. Leia a planilha novamente.');
   const plan = createSiteQuotePlan(snapshot, { rowIds, supplierColumns });
-  const report = { rows: [], processed: 0, written: 0, review: 0, skipped: plan.skipped.length, quoteIds: [], cancelled: false };
+  const report = { rows: [], processed: 0, written: 0, review: 0, skipped: plan.skipped.length, pending: 0, quoteIds: [], cancelled: false };
   for (const item of plan.skipped) {
     report.rows.push({ rowId: item.rowId, product: snapshot.rows.find(row => row.id === item.rowId)?.values?.produto || '',
       suppliers: [{ status: 'revisar', reason: item.reason }] });
+    report.review++;
   }
   let stopWrites = false;
   let completedItems = 0;
@@ -56,8 +57,8 @@ export async function runSiteQuotation({ client, request, quote, signal, onProgr
         ...detail, ...progress, completedItems, written: report.written
       }));
     } catch (error) {
-      rowReport.suppliers.push({ status: 'falhou', reason: error.message });
-      report.review++;
+      rowReport.suppliers.push(...suppliers.map(supplierName => ({ supplierName, status: 'falhou', reason: error.message })));
+      report.review += suppliers.length;
       report.processed++;
       if (signal?.aborted) break;
       completedItems++;
@@ -70,12 +71,25 @@ export async function runSiteQuotation({ client, request, quote, signal, onProgr
       report.cancelled = true;
       break;
     }
+    let currentSnapshot;
+    try {
+      currentSnapshot = await client.readSnapshot();
+      const guard = validateSiteRow(entry, currentSnapshot);
+      if (!guard.ok) throw new Error(guard.reason);
+    } catch (error) {
+      stopWrites = true;
+      report.stoppedReason = `A planilha precisa ser relida: ${error?.message || String(error)}`;
+      rowReport.suppliers.push(...suppliers.map(supplierName => ({ supplierName, status: 'revisar', reason: report.stoppedReason })));
+      report.review += suppliers.length;
+      report.processed++;
+      break;
+    }
     // One local quote per site row preserves its UUID even if the parser consolidates searches.
     const results = details?.items?.flatMap(item => item.results || []) || [];
     for (const supplierName of suppliers) {
       if (signal?.aborted || stopWrites) break;
       const columnKey = resolved.mapping[supplierName];
-      const originalRow = snapshot.rows.find(row => row.id === entry.rowId);
+      const originalRow = currentSnapshot.rows.find(row => row.id === entry.rowId);
       const existingValue = String(originalRow.values?.[columnKey] ?? '');
       const selected = selectSiteQuotePrice(entry, supplierName, { results });
       const outcome = { supplierName, existingValue, status: 'revisar', reason: selected.reason };
@@ -119,6 +133,20 @@ export async function runSiteQuotation({ client, request, quote, signal, onProgr
     }
   }
   report.cancelled = report.cancelled || Boolean(signal?.aborted);
+  for (const entry of plan.entries) {
+    let rowReport = report.rows.find(row => row.rowId === entry.rowId);
+    if (!rowReport) {
+      rowReport = { rowId: entry.rowId, product: entry.identity.produto || entry.identity.ean, suppliers: [] };
+      report.rows.push(rowReport);
+    }
+    for (const supplierName of Object.keys(resolved.mapping)) {
+      if (rowReport.suppliers.some(outcome => outcome.supplierName === supplierName)) continue;
+      rowReport.suppliers.push({ supplierName, status: report.cancelled ? 'cancelled' : 'nao_processado',
+        reason: report.cancelled ? 'Cotacao cancelada antes de concluir este fornecedor.' :
+          report.stoppedReason || 'Fornecedor nao processado.' });
+      report.pending++;
+    }
+  }
   onProgress({ ...currentProgress, completedItems, phase: 'finished', cancelled: report.cancelled,
     stoppedReason: report.stoppedReason, written: report.written, message: report.cancelled ? 'Cotacao cancelada.' :
     report.stoppedReason || 'Cotacao e comparacao concluidas.' });

@@ -24,6 +24,54 @@ const offer = (overrides, query = 'LOSARTANA 50MG 30CPR') => {
   return { ...result, isValidOption: audit.status === 'OK', auditStatus: audit.status };
 };
 
+test('Site selection checks explicit description and metadata independently', async () => {
+  const h = await helpers();
+  const cases = [
+    ['LOSARTANA 50MG 30CPR', { supplierProductName: 'LOSARTANA 100MG 30CPR' }],
+    ['LOSARTANA 50MG 30CPR', { dosage: '100mg' }],
+    ['LOSARTANA 50MG 30CPR', { supplierProductName: 'LOSARTANA 50MG 30 CAPSULAS' }],
+    ['LOSARTANA 50MG 30CPR', { presentation: 'capsula' }],
+    ['DIPIRONA 500MG/ML GOTAS 15ML', { supplierProductName: 'DIPIRONA 500MG/ML GOTAS 30ML', dosage: '500mg/ml', presentation: 'gotas', quantity: 1, packaging: '15ml' }],
+    ['DIPIRONA 500MG/ML GOTAS 15ML', { supplierProductName: 'DIPIRONA 500MG/ML GOTAS 15ML', dosage: '500mg/ml', presentation: 'gotas', quantity: 1, packaging: '30ml' }],
+    ['DIPIRONA 500MG/ML GOTAS 15ML', { supplierProductName: 'DIPIRONA 250MG/ML GOTAS 15ML', dosage: '500mg/ml', presentation: 'gotas', quantity: 1, packaging: '15ml' }],
+    ['DIPIRONA 500MG/ML GOTAS 15ML', { supplierProductName: 'DIPIRONA 500MG/ML GOTAS 15ML', dosage: '250mg/ml', presentation: 'gotas', quantity: 1, packaging: '15ml' }],
+    ['LOSARTANA 50MG + HIDROCLOROTIAZIDA 12.5MG 30CPR', { supplierProductName: 'LOSARTANA 100MG + HIDROCLOROTIAZIDA 12.5MG 30CPR', dosage: '50mg + 12.5mg' }],
+    ['LOSARTANA 50MG + HIDROCLOROTIAZIDA 12.5MG 30CPR', { supplierProductName: 'LOSARTANA 50MG + HIDROCLOROTIAZIDA 12.5MG 30CPR', dosage: '100mg + 12.5mg' }],
+    ['LOSARTANA 50MG + HIDROCLOROTIAZIDA 12.5MG 30CPR', { supplierProductName: 'LOSARTANA 12.5MG + HIDROCLOROTIAZIDA 50MG 30CPR', dosage: '50mg + 12.5mg' }],
+    ['LOSARTANA 50MG 30CPR', { supplierProductName: 'LOSARTANA 50MG 30CPR XR' }],
+    ['LOSARTANA 50MG 30CPR', { presentation: 'liberacao prolongada' }],
+    ['DIPIRONA 500MG/ML SOLUCAO ORAL 15ML', { supplierProductName: 'DIPIRONA 500MG/ML SOLUCAO NASAL 15ML', dosage: '500mg/ml', presentation: 'solucao oral', quantity: 1, packaging: '15ml' }],
+    ['DIPIRONA 500MG/ML SOLUCAO ORAL 15ML', { supplierProductName: 'DIPIRONA 500MG/ML SOLUCAO ORAL 15ML', dosage: '500mg/ml', presentation: 'solucao nasal', quantity: 1, packaging: '15ml' }]
+  ];
+  for (const [query, changes] of cases) {
+    const candidate = { ...offer(changes, query), auditStatus: 'OK', isValidOption: true };
+    assert.ok(h.selectSiteQuotePrice({ query }, 'Profarma', { results: [candidate] }).reason, JSON.stringify(changes));
+    assert.ok(h.selectSiteQuotePrice({ query: `7896181915638 ${query}` }, 'Profarma', { results: [candidate] }).reason,
+      `Exact EAN must not mask contradictory evidence: ${JSON.stringify(changes)}`);
+  }
+  for (const [query, changes] of [
+    ['LACTO PURGA 5MG CX 12 COMP REV', { supplierProductName: 'LACTO PURGA 5MG 12CPR', dosage: '5mg', presentation: 'comprimido', quantity: 12 }],
+    ['DIPIRONA 500MG/ML GOTAS 15ML', { supplierProductName: 'DIPIRONA 500MG/ML GOTAS 15ML', dosage: '500mg/ml', presentation: 'gotas', quantity: 1, packaging: '15ml' }],
+    ['DIPIRONA 500MG/ML GOTAS 15ML', { supplierProductName: 'DIPIRONA 1000MG/2ML GOTAS 15ML', dosage: '500mg/ml', presentation: 'gotas', quantity: 1, packaging: '15ml' }],
+    ['LOSARTANA 50MG + HIDROCLOROTIAZIDA 12.5MG 30CPR', { supplierProductName: 'LOSARTANA 50MG + HIDROCLOROTIAZIDA 12.5MG 30CPR', dosage: '50mg + 12.5mg' }]
+  ]) assert.equal(h.selectSiteQuotePrice({ query }, 'Profarma', { results: [offer(changes, query)] }).value, '2,70', query);
+});
+
+test('Exact EAN cannot mask contradictory package counts in description or metadata', async () => {
+  const h = await helpers();
+  for (const [query, changes] of [
+    ['7896181915638 LOSARTANA 50MG 30CPR', { supplierProductName: 'LOSARTANA 50MG 60CPR' }],
+    ['7896181915638 LOSARTANA 50MG 30CPR', { packaging: 'CX 60 CPR' }],
+    ['7896181915638', { supplierProductName: 'LOSARTANA 50MG 60CPR' }],
+  ]) {
+    const candidate = { ...offer(changes, query), isValidOption: true, auditStatus: 'OK' };
+    assert.ok(h.selectSiteQuotePrice({ query }, 'Profarma', { results: [candidate] }).reason, query);
+  }
+  assert.equal(h.selectSiteQuotePrice({ query: '7896181915638 LOSARTANA 50MG 30CPR' }, 'Profarma', {
+    results: [offer({ quantity: 1 }, '7896181915638 LOSARTANA 50MG 30CPR')]
+  }).value, '2,70', 'Default unknown count must not contradict explicit matching description');
+});
+
 test('Site mapping follows aliases despite reorder and identifies user-confirmed DM labels', async () => {
   const h = await helpers();
   const data = [...columns].reverse().concat([{ key: 'dm', label: 'Distribuidora de Medicamentos' }, { key: 'aline', label: 'DM Aline' }]);
