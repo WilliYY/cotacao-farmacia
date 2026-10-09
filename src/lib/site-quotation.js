@@ -1,12 +1,11 @@
 import { isValidEAN13, parseSearchQuery } from './parser.js';
-import { AUDIT_STATUS, auditQuoteResult, dosageMatches, packageSizeMatches, productIdentityMatches } from './quote-auditor.js';
-import { presentationsMatch } from './pharmaceutical-context.js';
+import { AUDIT_STATUS, auditQuoteResult, explicitProductEvidenceMatches, productIdentityMatches } from './quote-auditor.js';
+import { analyzeSiteRow, isSiteMissingPrice, matchesSiteQualifiers } from './site-search-intelligence.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BASE_FIELDS = new Set(['ean', 'produto', 'quantidade', 'categoria', 'ganhador', 'quemganhou']);
 const normalize = value => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const text = value => String(value ?? '');
-const blank = value => text(value).trim() === '';
 
 function canonicalSupplier(value) {
   if (/^dm(?:\s|[-_]|$)/i.test(String(value ?? '').trim())) return 'DM Paraná';
@@ -77,7 +76,7 @@ function rowIdentity(row) {
   return { ean: text(row.values?.ean), produto: text(row.values?.produto), quantidade: text(row.values?.quantidade) };
 }
 
-export function createSiteQuotePlan(snapshot, { supplierColumns = {}, rowIds = [] } = {}) {
+export function createSiteQuotePlan(snapshot, { supplierColumns = {}, rowIds = [], queryOverrides = {}, learnedAliases = [] } = {}) {
   const entries = [];
   const skipped = [];
   const selected = new Set(rowIds);
@@ -93,15 +92,20 @@ export function createSiteQuotePlan(snapshot, { supplierColumns = {}, rowIds = [
     const product = identity.produto.trim();
     const invalid = !UUID.test(text(row.id)) || rows.filter(other => other.id === row.id).length !== 1 ||
       !Number.isSafeInteger(Number(row.version)) || Number(row.version) < 0 ||
-      (ean && !isValidEAN13(ean)) || (!ean && !/[a-z\u00c0-\u024f]/i.test(product));
+      (ean && !isValidEAN13(ean)) || (!ean && !isValidEAN13(product) && !/[a-z\u00c0-\u024f]/i.test(product));
     if (invalid) {
       skipped.push({ rowId: row.id, reason: 'Identidade, EAN ou versao da linha invalida.' });
       continue;
     }
-    const targets = Object.entries(mapping).filter(([, key]) => blank(row.values?.[key])).map(([supplierName, columnKey]) => ({
-      supplierName, columnKey, expectedValue: '', binding: columnBinding(columns.find(column => column.key === columnKey))
+    const analysis = analyzeSiteRow(row, { learnedAliases, refinement: queryOverrides[row.id] });
+    if (!analysis.canSearch) {
+      skipped.push({ rowId: row.id, reason: analysis.reason });
+      continue;
+    }
+    const targets = Object.entries(mapping).filter(([, key]) => isSiteMissingPrice(row.values?.[key])).map(([supplierName, columnKey]) => ({
+      supplierName, columnKey, expectedValue: text(row.values?.[columnKey]), binding: columnBinding(columns.find(column => column.key === columnKey))
     }));
-    const existingCells = Object.entries(mapping).filter(([, key]) => !blank(row.values?.[key])).map(([supplierName, columnKey]) => ({
+    const existingCells = Object.entries(mapping).filter(([, key]) => !isSiteMissingPrice(row.values?.[key])).map(([supplierName, columnKey]) => ({
       supplierName, columnKey, value: text(row.values[columnKey])
     }));
     if (!Object.keys(mapping).length) {
@@ -111,7 +115,7 @@ export function createSiteQuotePlan(snapshot, { supplierColumns = {}, rowIds = [
     entries.push({ rowId: row.id, rowVersion: Number(row.version), rowPosition: row.position, identity,
       supplierBindings: Object.fromEntries(Object.entries(mapping).map(([supplier, key]) =>
         [supplier, columnBinding(columns.find(column => column.key === key))])),
-      query: [ean, product].filter(Boolean).join(' '), targets, existingCells, supplierColumns: { mapping: { ...mapping } } });
+      query: analysis.query, interpretation: analysis.correction, targets, existingCells, supplierColumns: { mapping: { ...mapping } } });
   }
   return { entries, skipped };
 }
@@ -132,38 +136,14 @@ function isFreshCapture(offer, startedAt) {
     (startedAt === null || capturedAt >= startedAt);
 }
 
-function explicitOfferEvidenceMatches(parsed, offer) {
-  const description = text(offer.supplierProductName || offer.name);
-  const described = parseSearchQuery(description);
-  const doses = [parsed.isCombination ? parsed.originalTerms : parsed.dosage,
-    described.isCombination ? description : described.dosage, offer.dosage].filter(Boolean);
-  if (doses.some(dose => !dosageMatches(doses[0], dose) || !dosageMatches(dose, doses[0]))) return false;
-  const forms = [
-    { presentation: parsed.presentation, context: parsed.originalTerms },
-    { presentation: described.presentation, context: description },
-    { presentation: offer.presentation, context: offer.presentation }
-  ].filter(evidence => evidence.presentation);
-  if (forms.some(form => !presentationsMatch(forms[0].presentation, form.presentation, {
-    queryText: forms[0].context, resultText: form.context
-  }))) return false;
-  const packaged = parseSearchQuery(offer.packaging || '');
-  // A count of 1 is also the parser/connector default for unknown packaging.
-  const counts = [parsed.quantity, described.quantity, packaged.quantity, offer.quantity]
-    .map(Number).filter(count => count > 1);
-  if (counts.some(count => count !== counts[0])) return false;
-  const sizes = [parsed.packageSize, described.packageSize,
-    packaged.packageSize || (/\b\d+(?:[.,]\d+)?\s*(?:g|ml)\b/i.test(offer.packaging || '') ? offer.packaging : '')
-  ].filter(Boolean);
-  return sizes.every(size => packageSizeMatches(sizes[0], size));
-}
-
 export function selectSiteQuotePrice(entry, supplierName, quoteData = {}) {
   const supplier = canonicalSupplier(supplierName);
   if (!supplier) return { reason: 'Fornecedor nao reconhecido.' };
   const parsed = parseSearchQuery(entry.query);
   const startedAt = entry.startedAt ? Date.parse(entry.startedAt) : null;
   if (entry.startedAt && !Number.isFinite(startedAt)) return { reason: 'Inicio da consulta invalido.' };
-  const offers = (Array.isArray(quoteData.results) ? quoteData.results : []).filter(offer => {
+  const results = Array.isArray(quoteData.results) ? quoteData.results : [];
+  const offers = results.filter(offer => {
     const missingEanOnly = !parsed.ean && offer.auditStatus === AUDIT_STATUS.WARNING && offer.auditSummary === MISSING_EAN_WARNING;
     if (canonicalSupplier(offer.source) !== supplier || ![true, 1].includes(offer.isValidOption) ||
       (offer.auditStatus !== AUDIT_STATUS.OK && !missingEanOnly) ||
@@ -173,16 +153,30 @@ export function selectSiteQuotePrice(entry, supplierName, quoteData = {}) {
     const audit = auditQuoteResult(parsed, offer);
     if (audit.status !== AUDIT_STATUS.OK && !(missingEanOnly && audit.blocks.length === 0 &&
         audit.warnings.length === 1 && audit.warnings[0] === MISSING_EAN_WARNING)) return false;
-    if (!explicitOfferEvidenceMatches(parsed, offer)) return false;
+    if (!explicitProductEvidenceMatches(parsed, offer) || !matchesSiteQualifiers(entry.query, offer)) return false;
     return parsed.ean ? text(offer.ean) === parsed.ean : productIdentityMatches(parsed, offer);
   });
-  if (!offers.length) return { reason: 'Nenhuma oferta atual, auditada e compativel com preco final comprovado.' };
+  if (!offers.length) {
+    const blocks = [...new Set(results.filter(offer => canonicalSupplier(offer.source) === supplier &&
+      !offer.failureCode && !offer.liveFailureReason && !offer.timedOut && isFreshCapture(offer, startedAt) &&
+      explicitProductEvidenceMatches(parsed, offer) && matchesSiteQualifiers(entry.query, offer) &&
+      (parsed.ean ? text(offer.ean) === parsed.ean : productIdentityMatches(parsed, offer)))
+      .flatMap(offer => auditQuoteResult(parsed, offer).blocks))];
+    return { reason: blocks.length ? `Produto encontrado, mas bloqueado: ${blocks.slice(0, 4).join('; ')}.` :
+      'Nenhuma oferta atual, auditada e compativel com preco final comprovado.' };
+  }
+  const candidates = [...new Map(offers.map(offer => {
+    const name = text(offer.supplierProductName || offer.name);
+    const key = `${name}|${text(offer.ean)}`;
+    return [key, { name, ean: text(offer.ean), dosage: text(offer.dosage), quantity: Number(offer.quantity),
+      packaging: text(offer.packaging), value: Number(offer.price).toFixed(2).replace('.', ',') }];
+  })).values()].slice(0, 12);
   if (!parsed.ean && (!parsed.presentation || !(parsed.quantity > 1 || parsed.packageSize) ||
       (!parsed.dosage && offers.some(offer => Boolean(offer.dosage || parseSearchQuery(offer.supplierProductName || '').dosage))))) {
-    return { reason: 'Confirme o EAN ou informe dose, apresentacao e tamanho da embalagem antes de preencher.' };
+    return { reason: 'Confirme o EAN ou informe dose, apresentacao e tamanho da embalagem antes de preencher.', candidates };
   }
   if (!parsed.ean && new Set(offers.map(packageIdentity)).size !== 1) {
-    return { reason: 'Ofertas com embalagens, doses ou apresentacoes diferentes; confirme o EAN.' };
+    return { reason: 'Ofertas com embalagens, doses ou apresentacoes diferentes; confirme o EAN.', candidates };
   }
   const offer = [...offers].sort((a, b) => Number(a.price) - Number(b.price))[0];
   return { value: Number(offer.price).toFixed(2).replace('.', ','), offer };
@@ -217,6 +211,8 @@ export function validateSiteWrite(entry, target, currentSnapshot) {
   const columns = (currentSnapshot.columns || []).filter(column => column.key === target.columnKey);
   if (columns.length !== 1 || !editableSupplierColumn(columns[0]) || !target.binding ||
     JSON.stringify(columnBinding(columns[0])) !== JSON.stringify(target.binding)) return { ok: false, reason: 'Coluna de fornecedor mudou.' };
-  if (!blank(row.values?.[target.columnKey]) || target.expectedValue !== '') return { ok: false, reason: 'Celula deixou de estar vazia.' };
+  if (!isSiteMissingPrice(target.expectedValue) || text(row.values?.[target.columnKey]) !== target.expectedValue) {
+    return { ok: false, reason: 'Celula deixou de estar vazia ou o marcador mudou.' };
+  }
   return { ok: true };
 }

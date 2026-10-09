@@ -1,4 +1,6 @@
 import { validateSiteWrite } from './site-quotation.js';
+import { isDeepStrictEqual } from 'node:util';
+import { validateEmptySiteRow } from './site-sheet-organization.js';
 
 export const SITE_SHEET_URL = 'https://wimifarma.com/cotacao/';
 
@@ -44,7 +46,7 @@ export function createSiteSheetClient(BrowserWindow) {
     if (!isAllowedSiteUrl(window.webContents.getURL())) throw new Error('Pagina da planilha invalida.');
   }
 
-  async function request(endpoint, body, signal) {
+  async function request(endpoint, body, signal, method = body ? 'PATCH' : 'GET') {
     assertWindow();
     if (!window.webContents.getURL().startsWith(SITE_SHEET_URL)) {
       const awaitingLogin = await window.webContents.executeJavaScript('Boolean(document.querySelector(\'input[type="password"]\'))');
@@ -64,7 +66,7 @@ export function createSiteSheetClient(BrowserWindow) {
       const timer = setTimeout(() => controller.abort(), 20000);
       try {
         const response = await fetch(${JSON.stringify(`/cotacao/api/${endpoint}`)}, {
-          method: body ? 'PATCH' : 'GET', credentials: 'same-origin', redirect: 'error',
+          method: ${JSON.stringify(method)}, credentials: 'same-origin', redirect: 'error',
           headers: body ? { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf } : {},
           ...(body ? {body: JSON.stringify(body)} : {}), signal: controller.signal
         });
@@ -118,5 +120,38 @@ export function createSiteSheetClient(BrowserWindow) {
     } finally { writing = false; }
   }
 
-  return { open, readSnapshot, writeCell };
+  async function deleteEmptyRow(target, signal) {
+    if (signal?.aborted) return { status: 'cancelled', reason: 'Cancelamento confirmado antes da exclusao.' };
+    if (writing) return { status: 'conflict', reason: 'Uma gravacao na planilha ainda esta em andamento.' };
+    writing = true;
+    try {
+      let before;
+      try { before = await readSnapshot(); }
+      catch (error) { return { status: 'conflict', reason: error.message || 'Falha ao reler a planilha antes da exclusao.' }; }
+      if (signal?.aborted) return { status: 'cancelled', reason: 'Cancelamento confirmado antes da exclusao.' };
+      const guard = validateEmptySiteRow(target, before);
+      if (!guard.ok) return { status: 'conflict', reason: guard.reason };
+      // DELETE has no atomic version/empty-value guard on the existing server.
+      // A concurrent edit between this read and DELETE cannot be prevented here.
+      let response;
+      try {
+        response = await request(`rows/${target.rowId}`, { clientId: 'wimifarma-cotador-local' }, signal, 'DELETE');
+      } catch {
+        return { status: 'uncertain', reason: 'Exclusao sem confirmacao. Confira o site; nenhuma tentativa sera repetida.' };
+      }
+      if (response.rowId !== target.rowId || !Number.isSafeInteger(Number(response.eventId)) || Number(response.eventId) <= 0) {
+        return { status: 'uncertain', reason: 'Resposta inesperada da exclusao. Confira a planilha e o historico.' };
+      }
+      // Cancellation after dispatch does not skip reconciliation of this DELETE.
+      const after = await readSnapshot().catch(() => null);
+      const preserved = after?.quote?.id === before.quote.id &&
+        isDeepStrictEqual(after.rows, before.rows.filter(row => row.id !== target.rowId)) &&
+        isDeepStrictEqual(after.columns, before.columns) && isDeepStrictEqual(after.styles, before.styles) &&
+        isDeepStrictEqual(after.rules, before.rules);
+      if (!preserved) return { status: 'uncertain', reason: 'Nao foi possivel confirmar a exclusao e a preservacao dos demais dados e estilos. Confira o site.' };
+      return { status: 'deleted', rowId: target.rowId, atomicDelete: false };
+    } finally { writing = false; }
+  }
+
+  return { open, readSnapshot, writeCell, deleteEmptyRow };
 }

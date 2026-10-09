@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   openSiteSheet: () => ipcRenderer.invoke('open-site-sheet'),
   readSiteSheet: () => ipcRenderer.invoke('read-site-sheet'),
   runSiteQuote: (request) => ipcRenderer.invoke('run-site-quote', request),
+  organizeSiteRows: (request) => ipcRenderer.invoke('organize-site-rows', request),
   cancelSiteQuote: () => ipcRenderer.invoke('cancel-site-quote'),
   onSiteQuoteProgress: (callback) => {
     const listener = (event, data) => callback(data);

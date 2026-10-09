@@ -98,14 +98,14 @@ test('Site mapping rejects ambiguous aliases, shared keys, fixed and computed fi
   assert.deepEqual(h.resolveSiteSupplierColumns([{ key: 'a', label: 'Pedido Profarma extra' }]).mapping, {});
 });
 
-test('Site plan targets only empty prices, preserves requested quantity, and binds UUID identity', async () => {
+test('Site plan targets empty prices and missing markers, preserves requested quantity, and binds UUID identity', async () => {
   const h = await helpers();
   const result = await plan({ x: '9,99', y: '**', z: '' });
   assert.equal(result.entries.length, 1);
-  assert.deepEqual(result.entries[0].targets.map(t => t.columnKey), ['z']);
+  assert.deepEqual(result.entries[0].targets.map(t => t.columnKey), ['y', 'z']);
   assert.equal(result.entries[0].identity.quantidade, '7');
   assert.equal(result.entries[0].query, 'LOSARTANA 50MG 30CPR');
-  assert.deepEqual(result.entries[0].existingCells, [{ supplierName: 'Profarma', columnKey: 'x', value: '9,99' }, { supplierName: 'ANB', columnKey: 'y', value: '**' }]);
+  assert.deepEqual(result.entries[0].existingCells, [{ supplierName: 'Profarma', columnKey: 'x', value: '9,99' }]);
   const filled = (await plan({ x: '9,99', y: '10,50', z: '11,00' })).entries[0];
   assert.deepEqual(filled.targets, []);
   assert.equal(filled.existingCells.length, 3);

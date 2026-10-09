@@ -16,7 +16,7 @@
     "diagnose:santacruz:discover": "powershell -NoProfile -ExecutionPolicy Bypass -File src/lib/santacruz-search.ps1 --discover-only",
     "diagnose:santacruz:status": "powershell -NoProfile -ExecutionPolicy Bypass -File src/lib/santacruz-search.ps1 --status-only",
     "package": "electron-builder",
-    "test": "node --test --test-concurrency=1 tests/all.test.js tests/dm-browser-engine.test.js tests/backend-data-regressions.test.js tests/connector-regressions.test.js tests/ipc-regressions.test.js tests/site-quotation.test.js tests/site-quote-runner.test.js tests/site-sheet-client.test.js",
+    "test": "node --test --test-concurrency=1 tests/all.test.js tests/dm-browser-engine.test.js tests/backend-data-regressions.test.js tests/connector-regressions.test.js tests/ipc-regressions.test.js tests/site-quotation.test.js tests/site-quote-runner.test.js tests/site-sheet-client.test.js tests/search-intelligence-regressions.test.js tests/site-intelligence.test.js tests/site-sheet-organization.test.js",
     "lint": "oxlint",
     "preview": "vite preview"
   },

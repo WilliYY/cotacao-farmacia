@@ -36,6 +36,8 @@ import { createQuoteRunCoordinator } from './src/lib/quote-run-coordinator.js';
 import { createSiteSheetClient } from './src/lib/site-sheet-client.js';
 import { runSiteQuotation, validateSiteQuoteRequest } from './src/lib/site-quote-runner.js';
 import { resolveSiteSupplierColumns } from './src/lib/site-quotation.js';
+import { analyzeSiteRows } from './src/lib/site-search-intelligence.js';
+import { analyzeSiteSheetOrganization, runSiteOrganization } from './src/lib/site-sheet-organization.js';
 import {
   createTrustedIpcHandler,
   isAllowedApplicationUrl,
@@ -637,7 +639,9 @@ handleIpc('open-site-sheet', () => siteSheetClient.open());
 handleIpc('read-site-sheet', async () => {
   const snapshot = await siteSheetClient.readSnapshot();
   return { columns: snapshot.columns, rows: snapshot.rows,
-    supplierMapping: resolveSiteSupplierColumns(snapshot.columns) };
+    supplierMapping: resolveSiteSupplierColumns(snapshot.columns),
+    rowAnalysis: analyzeSiteRows(snapshot, { learnedAliases: await getLearnedCorrections() }),
+    organization: analyzeSiteSheetOrganization(snapshot) };
 });
 handleIpc('run-site-quote', async (event, payload) => {
   const request = validateSiteQuoteRequest(payload);
@@ -648,9 +652,40 @@ handleIpc('run-site-quote', async (event, payload) => {
   siteQuoteController = controller;
   try {
     return await runSiteQuotation({ client: siteSheetClient, request, signal: controller.signal,
+      learnedAliases: await getLearnedCorrections(),
       quote: (query, suppliers, onQuoteProgress) => executeLocalQuote({ sender: event.sender, onQuoteProgress }, [query], suppliers),
       onProgress: progress => {
         if (!event.sender.isDestroyed()) event.sender.send('site-quote-progress', progress);
+      }
+    });
+  } finally {
+    siteQuoteController = null;
+    if (quittingAfterQuote && !quoteRunCoordinator.hasActiveQuote()) app.quit();
+  }
+});
+handleIpc('organize-site-rows', async (event, request) => {
+  if (!request || !Array.isArray(request.targets) || request.targets.length > 1000) {
+    throw new Error('Leia e revise o plano de organizacao antes de aplicar.');
+  }
+  if (siteQuoteController || quoteRunCoordinator.hasActiveQuote()) {
+    throw new Error('Outra operacao esta em andamento. Aguarde seu encerramento.');
+  }
+  const controller = new AbortController();
+  siteQuoteController = controller;
+  try {
+    return await runSiteOrganization({ client: siteSheetClient, request, signal: controller.signal,
+      persistBackup: async backup => {
+        const folder = path.join(app.isPackaged ? app.getPath('userData') : path.join(__dirname, 'data'), 'backups');
+        fs.mkdirSync(folder, { recursive: true });
+        const filename = `planilha-site-organizacao-${Date.now()}.json`;
+        const target = path.join(folder, filename);
+        fs.writeFileSync(target, JSON.stringify(backup, null, 2), { encoding: 'utf8', flag: 'wx' });
+        return target;
+      },
+      onProgress: progress => {
+        if (!event.sender.isDestroyed()) event.sender.send('site-quote-progress', {
+          ...progress, completedItems: progress.deleted, totalItems: progress.total
+        });
       }
     });
   } finally {

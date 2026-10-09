@@ -5,6 +5,7 @@ const SUPPLIERS = ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'];
 const normalize = value => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const display = value => String(value ?? '').trim() || '—';
 const hasProduct = row => Boolean(String(row.values?.ean ?? '').trim() || String(row.values?.produto ?? '').trim());
+const hasContent = row => Object.values(row.values || {}).some(value => String(value ?? '').trim());
 const BASE_COLUMNS = new Set(['ean', 'produto', 'quantidade', 'categoria', 'ganhador', 'quemganhou']);
 const ALIASES = {
   ANB: ['anb'],
@@ -40,13 +41,19 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
   const [report, setReport] = useState(null);
   const [needsRead, setNeedsRead] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [queryOverrides, setQueryOverrides] = useState({});
+  const [showOrganization, setShowOrganization] = useState(false);
+  const [organizationResult, setOrganizationResult] = useState(null);
   const dialogRef = useRef(null);
   const busyRef = useRef('');
   const mountedRef = useRef(true);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  const running = busy === 'quote';
-  const rows = useMemo(() => sheet?.rows?.filter(hasProduct) ?? [], [sheet]);
+  const running = busy === 'quote' || busy === 'organize';
+  const rows = useMemo(() => sheet?.rows?.filter(hasContent) ?? [], [sheet]);
+  const productRows = rows.filter(hasProduct);
+  const rowAnalysis = useMemo(() => new Map((sheet?.rowAnalysis || []).map(row => [row.rowId, row])), [sheet]);
+  const rowNumbers = useMemo(() => new Map((sheet?.rows || []).map((row, index) => [row.id, index + 1])), [sheet]);
   const columns = useMemo(() => (sheet?.columns ?? []).filter(column => column.key &&
     !BASE_COLUMNS.has(normalize(column.key)) && !BASE_COLUMNS.has(normalize(column.label)) &&
     !column.locked && !column.options?.fixed && !column.options?.computed && !column.options?.hidden && column.type !== 'computed'), [sheet]);
@@ -90,7 +97,7 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
   useEffect(() => {
     if (typeof api?.onSiteQuoteProgress !== 'function') return;
     const unsubscribe = api.onSiteQuoteProgress(event => {
-      if (mountedRef.current && busyRef.current === 'quote') setProgress(event);
+      if (mountedRef.current && ['quote', 'organize'].includes(busyRef.current)) setProgress(event);
     });
     return () => { if (typeof unsubscribe === 'function') unsubscribe(); };
   }, [api]);
@@ -121,10 +128,20 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
       setSheet(snapshot);
       setMapping(initialMapping(editable, snapshot.supplierMapping?.mapping));
       setSelected(new Set(snapshot.rows.filter(hasProduct).slice(0, 3).map(row => row.id)));
+      const retainedOverrides = Object.fromEntries(Object.entries(queryOverrides).filter(([id]) => {
+        const previous = sheet?.rows?.find(row => row.id === id);
+        const current = snapshot.rows.find(row => row.id === id);
+        return previous && current && previous.version === current.version &&
+          ['ean', 'produto', 'quantidade'].every(key => String(previous.values?.[key] ?? '') === String(current.values?.[key] ?? ''));
+      }));
+      setQueryOverrides(retainedOverrides);
+      setShowOrganization(false);
+      setOrganizationResult(null);
       setNeedsRead(false);
       setReport(null);
       setProgress(null);
-      setNotice('Planilha lida. As primeiras três linhas com produto ou EAN foram selecionadas para teste.');
+      setNotice('Planilha lida. As primeiras três linhas com produto ou EAN foram selecionadas para teste.' +
+        (Object.keys(retainedOverrides).length < Object.keys(queryOverrides).length ? ' Ajustes de linhas alteradas foram limpos para revisão.' : ''));
     });
   }
 
@@ -135,7 +152,10 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
       setProgress({ currentItem: 0, completedItems: 0, totalItems: selectedCount, message: 'Iniciando consulta dos fornecedores…' });
       // A releitura também é necessária após falha: pode ter havido preenchimento parcial.
       setNeedsRead(true);
-      const result = await api.runSiteQuote({ rowIds: rows.filter(row => selected.has(row.id)).map(row => row.id), supplierColumns: activeMapping });
+      const rowIds = rows.filter(row => selected.has(row.id)).map(row => row.id);
+      const refinements = Object.fromEntries(Object.entries(queryOverrides).filter(([id, query]) => rowIds.includes(id) && query.trim()));
+      const result = await api.runSiteQuote({ rowIds, supplierColumns: activeMapping,
+        ...(Object.keys(refinements).length ? { queryOverrides: refinements } : {}) });
       if (!result || !Array.isArray(result.rows)) throw new Error('A cotação não retornou um relatório válido. Releia a planilha antes de tentar novamente.');
       if (!mountedRef.current) return;
       setReport(result);
@@ -154,6 +174,24 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
       setNotice('Consulta encerrada. Confira o relatório e releia a planilha antes de uma nova cotação.');
       const lastQuoteId = result.quoteIds?.at(-1);
       if (lastQuoteId != null) onQuoteCreated?.(lastQuoteId);
+    });
+  }
+
+  function organizeRows() {
+    if (!sheet?.organization?.removableCount || needsRead || typeof api.organizeSiteRows !== 'function') return;
+    return perform('organize', async () => {
+      setNeedsRead(true);
+      setReport(null);
+      setOrganizationResult(null);
+      setProgress({ currentItem: 0, completedItems: 0, totalItems: sheet.organization.removableCount,
+        message: 'Conferindo o plano e salvando backup antes de organizar…' });
+      const result = await api.organizeSiteRows(sheet.organization);
+      if (!mountedRef.current) return;
+      setOrganizationResult(result);
+      setProgress(previous => ({ ...previous, completedItems: result.deleted?.length || 0, phase: 'finished',
+        cancelled: result.cancelled, stoppedReason: result.status === 'completed' ? '' : result.reason,
+        message: result.reason }));
+      setNotice('Organização encerrada. Confira o resultado e releia a planilha.');
     });
   }
 
@@ -187,7 +225,7 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
           <button type="button" className="site-quote-close" onClick={onClose} disabled={Boolean(busy)} aria-label="Fechar painel">×</button>
         </header>
         <div className="site-quote-content">
-          <p id="site-quote-description" className="site-quote-safety">Células preenchidas serão apenas comparadas. O cotador confere as células vazias antes e depois de gravar e interrompe ao detectar conflito. Evite editar as linhas selecionadas durante a execução: o site não bloqueia edições simultâneas. Resultados incertos ficam para revisão.</p>
+          <p id="site-quote-description" className="site-quote-safety">Preços existentes serão apenas comparados. Células vazias e marcadores como * ou ** podem receber preço final confirmado. Dose e embalagem incompletas ficam para definição. Evite editar as linhas selecionadas durante a execução: o site não bloqueia edições simultâneas. Resultados incertos ficam para revisão.</p>
           {!available && <p className="site-quote-error" role="alert">A integração está disponível no aplicativo Electron. Esta sessão não possui a API necessária.</p>}
           <div className="site-quote-actions">
             <button type="button" className="site-quote-button" disabled={!available || Boolean(busy)} onClick={() => perform('open', async () => {
@@ -200,6 +238,25 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
           {error && <p role="alert" className="site-quote-error">{error}</p>}
           {notice && <p role="status" className="site-quote-notice">{notice}</p>}
           {sheet && <>
+            {rows.some(row => rowAnalysis.get(row.id)?.status === 'suspeita') && <p className="site-quote-warning">Há linhas com texto solto ou dados sem produto/EAN. Elas foram sinalizadas para conferência e serão preservadas.</p>}
+            <section className="site-quote-organization" aria-label="Organização das linhas">
+              <button type="button" className="site-quote-button" disabled={Boolean(busy) || needsRead || !api.organizeSiteRows}
+                onClick={() => setShowOrganization(value => !value)}>Revisar organização das linhas</button>
+              {showOrganization && <div className="site-quote-warning">
+                <p>{sheet.organization?.blocked ? sheet.organization.reason :
+                  `${sheet.organization?.removableCount || 0} lacunas totalmente vazias podem ser removidas para aproximar os itens. Linhas com dados, cores e espaços finais para novas entradas serão preservados.`}</p>
+                {sheet.organization?.removableCount > 0 && <>
+                  <p>Linhas atuais: {sheet.organization.targets.slice(0, 30).map(target => rowNumbers.get(target.rowId)).join(', ')}{sheet.organization.targets.length > 30 ? '…' : ''}.</p>
+                  <p>Será salvo um backup local antes da remoção. O site não impede edição simultânea durante a exclusão; aplique sem outras pessoas editando a planilha.</p>
+                  <button type="button" className="site-quote-button" disabled={Boolean(busy) || needsRead || sheet.organization.blocked}
+                    onClick={organizeRows}>Remover {sheet.organization.removableCount} lacunas vazias e organizar</button>
+                </>}
+              </div>}
+              {organizationResult && <p className={organizationResult.status === 'completed' ? 'site-quote-notice' : 'site-quote-warning'}>
+                {organizationResult.deleted?.length || 0} linhas removidas; {organizationResult.pending?.length || 0} pendentes. {organizationResult.reason}
+                {organizationResult.backupPath && <span className="site-quote-backup"> Backup local: {organizationResult.backupPath}</span>}
+              </p>}
+            </section>
             <fieldset className="site-quote-mapping" disabled={Boolean(busy)}>
               <legend>Colunas de preço por fornecedor</legend>
               <div className="site-quote-mapping-grid">{SUPPLIERS.map(supplier => <label key={supplier}>{supplier}
@@ -213,15 +270,20 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
               {sheet.supplierMapping?.issues?.map((issue, index) => <p key={index} className="site-quote-warning">{typeof issue === 'string' ? issue : `${issue.supplierName || 'Coluna'}: ${issue.reason || 'Revise o mapeamento.'}`}</p>)}
             </fieldset>
             <div className="site-quote-selection">
-              <label><input type="checkbox" disabled={Boolean(busy) || !rows.length} checked={rows.length > 0 && selectedCount === rows.length} ref={element => { if (element) element.indeterminate = selectedCount > 0 && selectedCount < rows.length; }} onChange={event => setSelected(new Set(event.target.checked ? rows.map(row => row.id) : []))} /> Selecionar todas</label>
-              <span>{selectedCount} de {rows.length} linhas selecionadas</span>
-              <button type="button" className="site-quote-button" disabled={Boolean(busy) || !rows.length} onClick={() => setSelected(new Set(rows.slice(0, 3).map(row => row.id)))}>Testar primeiras 3</button>
+              <label><input type="checkbox" disabled={Boolean(busy) || !productRows.length} checked={productRows.length > 0 && selectedCount === productRows.length} ref={element => { if (element) element.indeterminate = selectedCount > 0 && selectedCount < productRows.length; }} onChange={event => setSelected(new Set(event.target.checked ? productRows.map(row => row.id) : []))} /> Selecionar todas</label>
+              <span>{selectedCount} de {productRows.length} linhas com produto selecionadas</span>
+              <button type="button" className="site-quote-button" disabled={Boolean(busy) || !productRows.length} onClick={() => setSelected(new Set(productRows.slice(0, 3).map(row => row.id)))}>Testar primeiras 3</button>
             </div>
             <div className="site-quote-table-scroll" tabIndex={0} role="region" aria-label="Linhas e preços atuais da planilha">
-              <table className="site-quote-table"><thead><tr><th scope="col">Selecionar</th><th scope="col">Linha</th><th scope="col">EAN</th><th scope="col">Produto</th><th scope="col">Quantidade</th>{columns.map(column => <th scope="col" key={column.key}>{column.label || column.key}</th>)}</tr></thead>
+              <table className="site-quote-table"><thead><tr><th scope="col">Selecionar</th><th scope="col">Linha</th><th scope="col">EAN</th><th scope="col">Produto / análise</th><th scope="col">Ajustar pesquisa</th><th scope="col">Quantidade</th>{columns.map(column => <th scope="col" key={column.key}>{column.label || column.key}</th>)}</tr></thead>
                 <tbody>{rows.map(row => <tr key={row.id} className={selected.has(row.id) ? 'is-selected' : ''}>
-                  <td><input type="checkbox" aria-label={`Selecionar ${row.values?.produto || row.values?.ean || 'linha'}`} checked={selected.has(row.id)} disabled={Boolean(busy)} onChange={() => toggleRow(row.id)} /></td>
-                  <td>{display(row.position)}</td><td className="site-quote-ean">{display(row.values?.ean)}</td><td className="site-quote-product">{display(row.values?.produto)}</td><td>{display(row.values?.quantidade)}</td>
+                  <td><input type="checkbox" aria-label={`Selecionar ${row.values?.produto || row.values?.ean || 'linha'}`} checked={selected.has(row.id)} disabled={Boolean(busy) || !hasProduct(row)} onChange={() => toggleRow(row.id)} /></td>
+                  <td>{display(rowNumbers.get(row.id))}</td><td className="site-quote-ean">{display(row.values?.ean)}</td>
+                  <td className="site-quote-product">{display(row.values?.produto)}<small className="site-quote-analysis">{rowAnalysis.get(row.id)?.reason}</small></td>
+                  <td className="site-quote-refinement"><input type="text" maxLength={1000} aria-label={`Ajustar pesquisa da linha ${rowNumbers.get(row.id)}`}
+                    placeholder="EAN ou nome com dose e embalagem" disabled={Boolean(busy) || !hasProduct(row)} value={queryOverrides[row.id] || ''}
+                    onChange={event => setQueryOverrides(previous => ({ ...previous, [row.id]: event.target.value }))} />
+                    <small>Opcional; não altera o nome na planilha.</small></td><td>{display(row.values?.quantidade)}</td>
                   {columns.map(column => <td key={column.key} className={String(row.values?.[column.key] ?? '').trim() ? '' : 'site-quote-empty'}>{display(row.values?.[column.key])}</td>)}
                 </tr>)}</tbody>
               </table>
@@ -229,7 +291,7 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
             </div>
           </>}
           {(running || progress) && <div className="site-quote-progress" aria-live="polite">
-            <div><strong>{running ? 'Cotação em andamento' : progress?.cancelled ? 'Cotação cancelada' : progress?.stoppedReason ? 'Cotação interrompida' : 'Consulta encerrada'}</strong><span>{completed} / {total} concluídas</span></div>
+            <div><strong>{busy === 'organize' ? 'Organização em andamento' : running ? 'Cotação em andamento' : progress?.cancelled ? 'Operação cancelada' : progress?.stoppedReason ? 'Operação interrompida' : 'Operação encerrada'}</strong><span>{completed} / {total} concluídas</span></div>
             <progress value={percent} max={100} aria-label="Progresso da cotação" />
             <p>{running && progress?.currentItem > 0 ? `Linha ${progress.currentItem} de ${total} · ` : ''}{progress?.message || progress?.phase || 'Consultando fornecedores…'}{progress?.supplier ? ` · ${progress.supplier}` : ''}{progress?.product ? ` · ${progress.product}` : ''}</p>
             {running && <button type="button" className="site-quote-button" disabled={cancelling} onClick={cancelQuote}>{cancelling ? 'Aguardando cancelamento…' : 'Cancelar cotação'}</button>}
@@ -241,14 +303,18 @@ export default function SiteQuotationPanel({ api, onClose, onQuoteCreated }) {
             <div className="site-quote-table-scroll" tabIndex={0} role="region" aria-label="Relatório de valores anteriores e consultados">
               <table className="site-quote-table"><thead><tr><th scope="col">Produto</th><th scope="col">Fornecedor</th><th scope="col">Valor existente</th><th scope="col">Valor consultado</th><th scope="col">Resultado</th><th scope="col">Motivo / revisão</th></tr></thead><tbody>
                 {report.rows.flatMap(row => (row.suppliers || []).map((supplier, index) => <tr key={`${row.rowId}-${supplier.supplierName}-${index}`}>
-                  <td className="site-quote-product">{display(row.product)}</td><td>{display(supplier.supplierName)}</td><td>{display(supplier.existingValue)}</td><td>{display(supplier.newValue)}</td>
-                  <td><span className="site-quote-status">{STATUS_LABELS[String(supplier.status).toLowerCase()] || display(supplier.status)}</span></td><td className="site-quote-reason">{display(supplier.reason)}</td>
+                  <td className="site-quote-product">{display(row.product)}{row.interpretation && <small className="site-quote-analysis">{row.interpretation} Consulta: {row.query}</small>}</td><td>{display(supplier.supplierName)}</td><td>{display(supplier.existingValue)}</td><td>{display(supplier.newValue)}</td>
+                  <td><span className="site-quote-status">{STATUS_LABELS[String(supplier.status).toLowerCase()] || display(supplier.status)}</span></td><td className="site-quote-reason">{display(supplier.reason)}
+                    {supplier.candidates?.length > 0 && <details className="site-quote-candidates"><summary>{supplier.candidates.length} apresentações encontradas — defina a correta</summary>
+                      <ul>{supplier.candidates.map((candidate, candidateIndex) => <li key={candidateIndex}>{candidate.name} · EAN {candidate.ean || 'não informado'} · R$ {candidate.value}</li>)}</ul>
+                    </details>}
+                  </td>
                 </tr>))}
               </tbody></table>
             </div>
           </section>}
         </div>
-        <footer className="site-quote-footer"><p>{needsRead ? 'Releia a planilha para conferir os valores atuais.' : 'Confira as linhas e as colunas antes de iniciar.'}</p><button type="button" className="site-quote-button site-quote-primary" disabled={!canRun} onClick={runQuote}>{running ? 'Cotando…' : '3. Cotar, comparar e preencher vazias'}</button></footer>
+        <footer className="site-quote-footer"><p>{needsRead ? 'Releia a planilha para conferir os valores atuais.' : 'Confira as linhas, ajustes e colunas antes de iniciar.'}</p><button type="button" className="site-quote-button site-quote-primary" disabled={!canRun} onClick={runQuote}>{running ? 'Processando…' : '3. Cotar, comparar e preencher vazias / *'}</button></footer>
       </section>
     </div>
   );

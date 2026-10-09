@@ -1,6 +1,7 @@
 import { levenshteinDistance, parseSearchQuery } from './parser.js';
 import {
   ACTIVE_INGREDIENTS,
+  REFERENCE_BRAND_NAMES,
   extractActiveIngredients,
   normalizePharmaceuticalText,
   resolveReferenceBrandName
@@ -45,6 +46,7 @@ const COMMON_STRENGTHS_MG = new Map([
 function extractRawName(value) {
   return normalizePharmaceuticalText(value)
     .replace(/\b\d{13}\b/g, ' ')
+    .replace(/\b\d{1,3}\s*(?:capsulas?|caps?|comprimidos?|comp|cp|cpr|cps|un|und|unidades?)\b/g, ' ')
     .replace(/\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|ui|%)(?:\s*\/\s*(?:(?:\d+(?:\.\d+)?)\s*)?(?:ml|dose))?\b/g, ' ')
     .replace(/\b\d+(?:\.\d+)?\b/g, ' ')
     .split(/\s+/)
@@ -94,7 +96,7 @@ function findUniqueTypoCorrection(rawName) {
   if (!rawName || rawName.includes(' ') || rawName.length < 6) return '';
 
   const maximumDistance = rawName.length >= 10 ? 2 : 1;
-  const ranked = ACTIVE_INGREDIENTS
+  const ranked = [...new Set([...ACTIVE_INGREDIENTS, ...REFERENCE_BRAND_NAMES.keys()])]
     .filter(name => !name.includes(' '))
     .map(name => ({ name, distance: levenshteinDistance(rawName, name) }))
     .filter(candidate => candidate.distance <= maximumDistance)
@@ -114,6 +116,14 @@ function resolveName(rawText, previousMedication, learnedAliases) {
   const learned = learnedAliases.get(rawName);
   if (learned) {
     return { rawName, canonicalName: learned, correctionType: 'LEARNED_ALIAS' };
+  }
+
+  if (ACTIVE_INGREDIENTS.includes(rawName)) {
+    return { rawName, canonicalName: rawName };
+  }
+
+  if (REFERENCE_BRAND_NAMES.has(rawName)) {
+    return { rawName, canonicalName: parsedName };
   }
 
   if (
@@ -154,6 +164,8 @@ function resolveName(rawText, previousMedication, learnedAliases) {
 
 function getCompactStrengths(rawText, canonicalName, activeIngredientCount) {
   if (activeIngredientCount > 1 || !COMMON_STRENGTHS_MG.has(canonicalName)) return [];
+  // An EAN identifies one product; expanding would discard its identity or validation error.
+  if (/\b\d{13}\b/.test(rawText)) return [];
   const normalized = normalizePharmaceuticalText(rawText).replace(/\b\d{13}\b/g, ' ');
   if (/\d\s*(?:mg|mcg|g|ml|ui|%)/.test(normalized)) return [];
   if (/\b\d+\s*(?:comp|comprimidos?|caps|capsulas?|cp|cpr|cps|un|und|unidades?)\b/.test(normalized)) return [];
@@ -162,6 +174,14 @@ function getCompactStrengths(rawText, canonicalName, activeIngredientCount) {
   if (values.length < 2) return [];
   const allowed = COMMON_STRENGTHS_MG.get(canonicalName);
   return values.every(value => allowed.has(value)) ? [...new Set(values)] : [];
+}
+
+function getConfirmedCombinationText(canonicalText) {
+  // Only this unitless shorthand was explicitly confirmed by the user.
+  // Biolab is the qualifier observed on the confirmed input; preserve it verbatim.
+  const match = canonicalText.match(/^((?:\d{13}\s+)?)losartana(?:\s+100\s+25|10025)((?:\s+biolab)?(?:\s+\d{1,3}\s*(?:capsulas?|caps?|comprimidos?|comp|cp|cpr|cps|un|und|unidades?))?(?:\s+biolab)?)(\s+\d{13})?$/);
+  if (!match) return '';
+  return `${match[1]}losartana + hidroclorotiazida 100mg + 25mg${match[2]}${match[3] || ''}`;
 }
 
 function replaceNameAndStrength(rawText, rawName, canonicalName, strength = '') {
@@ -184,7 +204,9 @@ function buildPlan(originalText, searchText, resolution, extra = {}) {
   const textChanged = normalizePharmaceuticalText(originalText) !==
     normalizePharmaceuticalText(searchText);
   const corrected = Boolean(extra.expandedFrom || (resolution.correctionType && textChanged));
-  const correctionMessage = extra.expandedFrom
+  const correctionMessage = resolution.correctionType === 'CONFIRMED_COMBINATION'
+    ? 'Abreviacao confirmada: losartana 100mg + hidroclorotiazida 25mg.'
+    : extra.expandedFrom
     ? `Linha expandida em ${extra.expandedCount} dosagens; esta pesquisa usa ${parsed.dosage}.`
     : corrected
       ? `Pesquisado de "${resolution.rawName}" para "${resolution.canonicalName}".`
@@ -233,11 +255,17 @@ export function analyzeQuoteBatch(rawTextList, options = {}) {
       continue;
     }
 
-    const canonicalText = replaceNameAndStrength(
+    let canonicalText = replaceNameAndStrength(
       originalText,
       resolution.rawName,
       resolution.canonicalName
     );
+    const combinationText = getConfirmedCombinationText(canonicalText);
+    if (combinationText) {
+      canonicalText = combinationText;
+      resolution.canonicalName = 'losartana + hidroclorotiazida';
+      resolution.correctionType = 'CONFIRMED_COMBINATION';
+    }
     const canonicalParsed = parseSearchQuery(canonicalText);
     const strengths = getCompactStrengths(
       originalText,
@@ -245,7 +273,17 @@ export function analyzeQuoteBatch(rawTextList, options = {}) {
       canonicalParsed.activeIngredients.length
     );
 
-    if (strengths.length > 1) {
+    if (strengths.length > 1 && options.expandMultiStrengths === false) {
+      const plan = buildPlan(originalText, canonicalText, resolution);
+      const suggestion = 'Ha mais de uma dosagem nesta linha. Informe uma unica dose ou descreva os principios ativos da associacao.';
+      plan.status = INPUT_STATUS.NEEDS_INFO;
+      plan.correctionType = 'AMBIGUOUS_STRENGTHS';
+      plan.correctionMessage = suggestion;
+      plan.parsed.confidence = 0;
+      plan.parsed.confidenceStatus = 'DESCRICAO_INSUFICIENTE';
+      plan.parsed.refinementSuggestion = suggestion;
+      plans.push(plan);
+    } else if (strengths.length > 1) {
       for (const strength of strengths) {
         plans.push(buildPlan(
           originalText,

@@ -3,6 +3,7 @@ import { getSupplierCredentials } from '../../lib/database.js';
 import { scrapePortal } from '../../lib/electron-scraper.js';
 import { logger } from '../../lib/logger.js';
 import { getCombinationSearchFallback } from '../../lib/pharmaceutical-context.js';
+import { shouldRetryProductName } from '../../lib/quote-auditor.js';
 import {
   createClassifiedLiveUnavailableResult,
   createLiveUnavailableResult,
@@ -117,10 +118,10 @@ export class ANBRealConnector extends SupplierConnector {
         logger.info(`ANB returned no products for the association; retrying by active ingredient: "${combinationFallback}"`);
         results = await runSearch(combinationFallback);
       }
-      const nameFallback = !parsedQuery.ean && results.length === 0 && parsedQuery.name &&
+      const nameFallback = shouldRetryProductName(parsedQuery, results) && parsedQuery.name &&
         ![searchTerm, combinationFallback].includes(parsedQuery.name) ? parsedQuery.name : '';
       if (nameFallback) {
-        logger.info(`ANB returned no products for the full description; retrying by name: "${nameFallback}"`);
+        logger.info(`ANB returned no compatible products for the full description; retrying by name: "${nameFallback}"`);
         results = await runSearch(nameFallback);
       }
       

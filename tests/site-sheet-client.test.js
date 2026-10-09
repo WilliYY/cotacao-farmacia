@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { createSiteSheetClient } from '../src/lib/site-sheet-client.js';
 import { createSiteQuotePlan } from '../src/lib/site-quotation.js';
+import { analyzeSiteSheetOrganization } from '../src/lib/site-sheet-organization.js';
 
 const rowId = 'a141db91-cc33-4c27-a9bd-43b0e92bc833';
 const snapshot = () => ({ ok: true, quote: { id: 'quote' },
@@ -81,6 +82,16 @@ test('Site client rejects changed or occupied targets before dispatching a PATCH
   }
 });
 
+test('Site client replaces only the exact missing marker confirmed by the existing write contract', async () => {
+  const before = snapshot(); before.rows[0].values.anb = '**';
+  const response = confirmation(); response.cells[0].previousValue = '**';
+  const { client, requests } = await harness([before, response, afterWrite()]);
+  const entry = createSiteQuotePlan(before, { supplierColumns: { ANB: 'anb' } }).entries[0];
+  entry.quoteId = before.quote.id;
+  assert.equal((await client.writeCell(entry, entry.targets[0], '3,50')).status, 'written');
+  assert.equal(requests[1].body.changes[0].expectedValue, '**');
+});
+
 test('Site client never retries network failure, denial or an invalid write acknowledgment', async () => {
   const replies = [new Error('Disconnected'), { ok: false, http: 403 },
     { ok: false, error: 'Permission denied' }, { ok: true, cells: [] },
@@ -129,4 +140,74 @@ test('Expired authentication, missing CSRF and malformed bootstrap never send ce
   const { client, entry, target, requests } = await harness([snapshot()], { csrf: false });
   assert.equal((await client.writeCell(entry, target, '3,50')).status, 'uncertain');
   assert.equal(requests.length, 1);
+});
+
+const emptyRowId = 'a141db91-cc33-4c27-a9bd-43b0e92bc834';
+const deletionSnapshot = () => ({ ...snapshot(), styles: [{ scope: 'cell', rowId, columnKey: 'anb', color: '#fff' }],
+  rows: [{ id: emptyRowId, position: 1, version: 1, values: {} }, { ...snapshot().rows[0], position: 10 }] });
+const deleteConfirmation = () => ({ ok: true, rowId: emptyRowId, eventId: 8 });
+const afterDelete = () => { const data = deletionSnapshot(); data.rows.shift(); return data; };
+const deleteTarget = () => analyzeSiteSheetOrganization(deletionSnapshot()).targets[0];
+
+test('Empty row deletion uses authenticated DELETE and confirms UUIDs, prices and styles are preserved', async () => {
+  const { client, requests } = await harness([deletionSnapshot(), deleteConfirmation(), afterDelete()]);
+  assert.equal((await client.deleteEmptyRow(deleteTarget())).status, 'deleted');
+  assert.deepEqual(requests.map(request => request.method), ['GET', 'DELETE', 'GET']);
+  assert.equal(requests[1].url, `/cotacao/api/rows/${emptyRowId}`);
+  assert.deepEqual(requests[1].body, { clientId: 'wimifarma-cotador-local' });
+  assert.equal(requests[1].headers['X-CSRF-Token'], 'test-csrf');
+  assert.equal(requests[1].credentials, 'same-origin');
+});
+
+test('Empty row deletion rejects changed content, styles, identity and cancellation before sending', async () => {
+  for (const mutate of [data => { data.rows[0].values.hidden = 0; }, data => { data.rows[0].version++; },
+    data => { data.quote.id = 'other'; }, data => { data.styles.push({ scope: 'row', rowId: emptyRowId }); },
+    data => { delete data.styles; }]) {
+    const data = deletionSnapshot(); mutate(data);
+    const { client, requests } = await harness([data]);
+    assert.equal((await client.deleteEmptyRow(deleteTarget())).status, 'conflict');
+    assert.equal(requests.length, 1);
+  }
+  const controller = new AbortController(); controller.abort();
+  const { client, requests } = await harness([]);
+  assert.equal((await client.deleteEmptyRow(deleteTarget(), controller.signal)).status, 'cancelled');
+  assert.equal(requests.length, 0);
+});
+
+test('Empty row deletion never retries lost responses, authentication/CSRF failures or invalid acknowledgments', async () => {
+  for (const reply of [new Error('response lost'), { http: 401 }, { http: 403 },
+    { ok: true, rowId: rowId, eventId: 8 }, { ok: true, rowId: emptyRowId }, { ok: false, error: 'denied' }]) {
+    const { client, requests } = await harness([deletionSnapshot(), reply]);
+    assert.equal((await client.deleteEmptyRow(deleteTarget())).status, 'uncertain');
+    assert.equal(requests.length, 2);
+  }
+  const { client, requests } = await harness([deletionSnapshot()], { csrf: false });
+  assert.equal((await client.deleteEmptyRow(deleteTarget())).status, 'uncertain');
+  assert.equal(requests.length, 1);
+});
+
+test('Empty row deletion stops when postread fails or any remaining row, price, quote or style changes', async () => {
+  const changedPrice = afterDelete(); changedPrice.rows[0].values.anb = '9,00';
+  const changedStyle = afterDelete(); changedStyle.styles = [];
+  for (const after of [new Error('postread failed'), deletionSnapshot(), changedPrice, changedStyle,
+    { ...afterDelete(), quote: { id: 'other' } }, { ...afterDelete(), rows: [] }]) {
+    const { client, requests } = await harness([deletionSnapshot(), deleteConfirmation(), after]);
+    assert.equal((await client.deleteEmptyRow(deleteTarget())).status, 'uncertain');
+    assert.equal(requests.length, 3);
+  }
+});
+
+test('Empty row deletion reconciles dispatched requests after cancellation and prevents closing until postread', async () => {
+  const controller = new AbortController(); let prevented = 0;
+  const duringDelete = window => {
+    window.events.get('close')({ preventDefault: () => { prevented++; } });
+    controller.abort(); return deleteConfirmation();
+  };
+  const duringRead = window => {
+    window.events.get('close')({ preventDefault: () => { prevented++; } }); return afterDelete();
+  };
+  const { client, requests, window } = await harness([deletionSnapshot(), duringDelete, duringRead]);
+  assert.equal((await client.deleteEmptyRow(deleteTarget(), controller.signal)).status, 'deleted');
+  assert.equal(requests.length, 3); assert.equal(prevented, 2);
+  window.events.get('close')({ preventDefault: () => { prevented++; } }); assert.equal(prevented, 2);
 });

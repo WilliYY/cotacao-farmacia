@@ -89,6 +89,14 @@
 .site-quote-ean { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .site-quote-product { min-width: 180px; max-width: 320px; overflow-wrap: anywhere; }
 .site-quote-reason { min-width: 180px; max-width: 360px; overflow-wrap: anywhere; }
+.site-quote-analysis, .site-quote-refinement small { display: block; color: var(--text-muted, #64727d); font-size: 11px; margin-top: 6px; }
+.site-quote-refinement { min-width: 240px; }
+.site-quote-refinement input { width: 100%; padding: 8px; border: 1px solid var(--border-strong, #c3cfd5); border-radius: 6px; background: var(--surface, #fff); color: inherit; }
+.site-quote-candidates { margin-top: 8px; min-width: 240px; }
+.site-quote-candidates summary { cursor: pointer; font-weight: 600; }
+.site-quote-candidates ul { padding-left: 18px; }
+.site-quote-candidates li { margin-top: 6px; }
+.site-quote-backup { display: block; overflow-wrap: anywhere; }
 .site-quote-empty { color: var(--text-soft, #84919a); }
 .site-quote-placeholder { padding: 22px; color: var(--text-muted, #64727d); text-align: center; font-size: 13px; }
 .site-quote-progress { margin-top: 18px; padding: 14px 16px; border: 1px solid var(--border, #d9e1e5); border-radius: 12px; background: var(--surface-subtle, #f7f9fa); }

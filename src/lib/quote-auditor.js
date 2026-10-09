@@ -167,6 +167,37 @@ export function productIdentityMatches(parsed, result = {}) {
   return true;
 }
 
+export function explicitProductEvidenceMatches(parsed, offer) {
+  const description = String(offer.supplierProductName || offer.name || '');
+  const described = parseSearchQuery(description);
+  const doses = [parsed.isCombination ? parsed.originalTerms : parsed.dosage,
+    described.isCombination ? description : described.dosage, offer.dosage].filter(Boolean);
+  if (doses.some(dose => !dosageMatches(doses[0], dose) || !dosageMatches(dose, doses[0]))) return false;
+  const forms = [
+    { presentation: parsed.presentation, context: parsed.originalTerms },
+    { presentation: described.presentation, context: description },
+    { presentation: offer.presentation, context: offer.presentation }
+  ].filter(evidence => evidence.presentation);
+  if (forms.some(form => !presentationsMatch(forms[0].presentation, form.presentation, {
+    queryText: forms[0].context, resultText: form.context
+  }))) return false;
+  const packaged = parseSearchQuery(offer.packaging || '');
+  // A count of 1 is also the parser/connector default for unknown packaging.
+  const counts = [parsed.quantity, described.quantity, packaged.quantity, offer.quantity]
+    .map(Number).filter(count => count > 1);
+  if (counts.some(count => count !== counts[0])) return false;
+  const sizes = [parsed.packageSize, described.packageSize,
+    packaged.packageSize || (/\b\d+(?:[.,]\d+)?\s*(?:g|ml)\b/i.test(offer.packaging || '') ? offer.packaging : '')
+  ].filter(Boolean);
+  return sizes.every(size => packageSizeMatches(sizes[0], size));
+}
+
+export function shouldRetryProductName(parsed, results) {
+  return !parsed?.ean && Boolean(parsed?.name) && Array.isArray(results) &&
+    !results.some(result => result.liveFailureReason || result.failureCode || result.timedOut) &&
+    !results.some(result => productIdentityMatches(parsed, result) && explicitProductEvidenceMatches(parsed, result));
+}
+
 export function auditQuoteResult(parsed, result) {
   const blocks = [];
   const warnings = [];

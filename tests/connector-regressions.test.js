@@ -8,6 +8,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as electron from '../src/lib/electron-scraper.js';
 import * as dm from '../src/lib/dm-playwright.js';
+import * as auditor from '../src/lib/quote-auditor.js';
 
 const row = ['Pex', '7896181915638', 'LOSARTANA 50MG 30CPR', '0', '2,70', '76.6%', '8,11', '-', '0,96'];
 const headers = ['Pex', 'EAN', 'Produto', 'Quantidade', 'Preço Final', 'Desconto', 'Preço', 'ST %', 'ST'];
@@ -20,6 +21,7 @@ test('Name-only acquisition retries empty descriptions without changing the audi
       SupplierConnector: class {}, getSupplierCredentials: async () => ({ username: 'test', password: 'test' }),
       normalizeAnbUrl: value => value, normalizeProfarmaUrl: value => value,
       getCombinationSearchFallback: () => '', getProfarmaRetryTerm: () => '',
+      shouldRetryProductName: (parsed, results) => auditor.shouldRetryProductName(parsed, results),
       applyAnbEanEvidence: values => values, Date,
       logger: { info() {}, warn() {}, error() {} },
       scrapePortal: async (...args) => { calls.push(args[5]); return args[5] === 'lacto purga' ? [{ name: 'LACTO PURGA 5MG 12CPR', price: 3.5 }] : []; }
@@ -39,6 +41,15 @@ test('Name-only acquisition retries empty descriptions without changing the audi
     context.scrapePortal = async (...args) => { calls.push(args[5]); return [{ liveFailureReason: 'login failed' }]; };
     await context.connector.searchProduct(parsed);
     assert.equal(calls.length, 1);
+    calls.length = 0;
+    context.scrapePortal = async (...args) => {
+      calls.push(args[5]);
+      return [{ supplierProductName: args[5] === 'lacto purga' ? 'LACTO PURGA 5MG 12CPR' : 'LACTO PURGA 5MG 16CPR',
+        quantity: args[5] === 'lacto purga' ? 12 : 16, dosage: '5mg', presentation: 'comprimido', price: 3.5 }];
+    };
+    const mismatched = await context.connector.searchProduct(parsed);
+    assert.deepEqual(calls, ['lacto purga 5mg comprimido revestido', 'lacto purga']);
+    assert.equal(mismatched[0].quantity, 12);
   }
 });
 

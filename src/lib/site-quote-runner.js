@@ -1,4 +1,5 @@
 import { createSiteQuotePlan, resolveSiteSupplierColumns, selectSiteQuotePrice, validateSiteRow } from './site-quotation.js';
+import { isSiteMissingPrice } from './site-search-intelligence.js';
 
 const SUPPLIERS = new Set(['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -14,7 +15,13 @@ export function validateSiteQuoteRequest(payload) {
   if (!columns.length || columns.some(([supplier, key]) => !SUPPLIERS.has(supplier) || typeof key !== 'string' || !key || key.length > 100)) {
     throw new Error('Vinculo de fornecedor invalido.');
   }
-  return { rowIds: [...payload.rowIds], supplierColumns: { ...payload.supplierColumns } };
+  if (payload.queryOverrides !== undefined && (!payload.queryOverrides || typeof payload.queryOverrides !== 'object' ||
+    Array.isArray(payload.queryOverrides) || Object.entries(payload.queryOverrides).some(([id, query]) =>
+      !payload.rowIds.includes(id) || typeof query !== 'string' || query.length > 1000))) {
+    throw new Error('Ajuste de pesquisa invalido ou fora das linhas selecionadas.');
+  }
+  return { rowIds: [...payload.rowIds], supplierColumns: { ...payload.supplierColumns },
+    ...(payload.queryOverrides ? { queryOverrides: { ...payload.queryOverrides } } : {}) };
 }
 
 function numericPrice(value) {
@@ -23,8 +30,8 @@ function numericPrice(value) {
   return Number(raw.replace(/^R\$\s*/, '').replace(',', '.'));
 }
 
-export async function runSiteQuotation({ client, request, quote, signal, onProgress = () => {} }) {
-  const { rowIds, supplierColumns } = validateSiteQuoteRequest(request);
+export async function runSiteQuotation({ client, request, quote, signal, learnedAliases = [], onProgress = () => {} }) {
+  const { rowIds, supplierColumns, queryOverrides } = validateSiteQuoteRequest(request);
   const snapshot = await client.readSnapshot();
   const resolved = resolveSiteSupplierColumns(snapshot.columns, supplierColumns);
   resolved.mapping = Object.fromEntries(Object.entries(resolved.mapping).filter(([name]) => Object.hasOwn(supplierColumns, name)));
@@ -32,7 +39,7 @@ export async function runSiteQuotation({ client, request, quote, signal, onProgr
     throw new Error('Os vinculos das colunas precisam ser revisados antes de cotar.');
   }
   if (rowIds.some(id => !snapshot.rows.some(row => row.id === id))) throw new Error('Uma linha selecionada foi removida. Leia a planilha novamente.');
-  const plan = createSiteQuotePlan(snapshot, { rowIds, supplierColumns });
+  const plan = createSiteQuotePlan(snapshot, { rowIds, supplierColumns, queryOverrides, learnedAliases });
   const report = { rows: [], processed: 0, written: 0, review: 0, skipped: plan.skipped.length, pending: 0, quoteIds: [], cancelled: false };
   for (const item of plan.skipped) {
     report.rows.push({ rowId: item.rowId, product: snapshot.rows.find(row => row.id === item.rowId)?.values?.produto || '',
@@ -46,7 +53,8 @@ export async function runSiteQuotation({ client, request, quote, signal, onProgr
     if (signal?.aborted || stopWrites) break;
     const entry = { ...planned, quoteId: snapshot.quote.id, startedAt: new Date().toISOString() };
     const suppliers = Object.keys(resolved.mapping);
-    const rowReport = { rowId: entry.rowId, product: entry.identity.produto || entry.identity.ean, suppliers: [] };
+    const rowReport = { rowId: entry.rowId, product: entry.identity.produto || entry.identity.ean,
+      query: entry.query, interpretation: entry.interpretation, suppliers: [] };
     report.rows.push(rowReport);
     const progress = { rowId: entry.rowId, product: rowReport.product, currentItem: index + 1, totalItems: plan.entries.length };
     currentProgress = progress;
@@ -92,10 +100,11 @@ export async function runSiteQuotation({ client, request, quote, signal, onProgr
       const originalRow = currentSnapshot.rows.find(row => row.id === entry.rowId);
       const existingValue = String(originalRow.values?.[columnKey] ?? '');
       const selected = selectSiteQuotePrice(entry, supplierName, { results });
-      const outcome = { supplierName, existingValue, status: 'revisar', reason: selected.reason };
+      const outcome = { supplierName, existingValue, status: 'revisar', reason: selected.reason,
+        ...(selected.candidates ? { candidates: selected.candidates } : {}) };
       if (selected.value) {
         outcome.newValue = selected.value;
-        if (existingValue.trim()) {
+        if (!isSiteMissingPrice(existingValue)) {
           const existingPrice = numericPrice(existingValue);
           outcome.status = 'comparado';
           outcome.reason = existingPrice === null ? 'Valor existente preservado; confira o marcador.' :

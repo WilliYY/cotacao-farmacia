@@ -2,6 +2,19 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.9.5] - 2026-10-09
+
+- Correção de erros de digitação usa nomes de princípios ativos e marcas conhecidos, preserva a marca e reinterpreta dose/embalagem após a correção. `purran 88` passa a pesquisar `puran 88`; abreviações de embalagem como `30comp` deixam de impedir a correção.
+- Abreviação confirmada pelo operador: `losartana 100 25` e `losartana10025` representam losartana 100mg + hidroclorotiazida 25mg, incluindo a variação com Biolab e embalagem explícita. Outras combinações não são inferidas dessa regra.
+- Planilha trata células vazias e compostas somente por asteriscos como cotação ausente. Preços/textos existentes permanecem preservados. Cada gravação confere o marcador anterior exato, além das proteções de identidade e versão.
+- Nomes incompletos podem consultar candidatos sem escolher dose ou embalagem pelo menor preço. Ajuste de pesquisa por linha aceita EAN ou descrição complementar, bloqueia contradições e preserva o ajuste na releitura somente enquanto a linha estiver inalterada. Múltiplas doses não se desdobram silenciosamente em uma célula.
+- ANB e Profarma tentam o nome após resposta vazia ou sem candidato tecnicamente compatível; auditoria continua usando todos os dados originais. EAN, timeout e falha técnica não ampliam a busca. Fabricantes e outros qualificadores explícitos continuam obrigatórios no preenchimento.
+- Prévia de organização identifica somente lacunas internas totalmente vazias e sem estilos. Aplicação exige backup durável, relê cada alvo e confirma a preservação das linhas restantes; cancela ou interrompe em conflito/entrega incerta, sem retry. Notas, preços soltos, asteriscos, estilos e espaço final de entrada são preservados. Nenhuma mudança no servidor.
+- Backup usa `data/backups` na instalação por pasta e `userData/backups` no aplicativo empacotado, evitando escrita dentro do arquivo de instalação.
+- Relatório diferencia produto encontrado e bloqueado de ausência de oferta compatível, mostrando motivos da auditoria atual somente para a mesma identidade e fornecedor; nunca expõe preço bloqueado como cotação.
+- Testes reais locais encontraram Puran 88mcg na ANB sem estoque e na Profarma sem estoque/ST; a associação 100/25mg retornou duas apresentações Biolab. As linhas ficaram para revisão sem gravação indevida. Prévia real identificou 22 linhas sem produto/EAN com conteúdo preservado e 34 lacunas removíveis; não houve exclusão real.
+- Validação: 291/291 testes, build aprovado, lint com zero erros e 22 avisos preexistentes. Banco principal preservado por SHA-256. Correções revisadas separadamente; nenhuma dependência nova.
+
 ## [1.9.4] - 2026-10-09
 
 - Preenchimento no site rejeita divergências explícitas entre a consulta, a descrição e os metadados: dose, apresentação, via, liberação, volume e quantidade da embalagem. EAN idêntico não encobre contradições; concentração equivalente e abreviação genérica `CPR` continuam aceitas quando compatíveis.
