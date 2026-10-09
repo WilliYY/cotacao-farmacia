@@ -104,7 +104,7 @@ function packageSizeMatches(queryPackageSize, resultPackaging = '', resultText =
   );
 }
 
-function dosageMatches(queryDosage, resultDosage, resultText = '') {
+export function dosageMatches(queryDosage, resultDosage, resultText = '') {
   if (!queryDosage) return true;
   if (!resultDosage && !resultText) return false;
 

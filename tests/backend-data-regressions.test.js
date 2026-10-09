@@ -11,11 +11,61 @@ process.env.DB_TYPE = 'sqlite';
 process.env.DATABASE_PATH = '';
 process.env.USE_MOCKS = 'true';
 const db = await import('../src/lib/database.js');
-const { parseSearchQuery } = await import('../src/lib/parser.js');
+const { parseSearchQuery, fuzzyMatch } = await import('../src/lib/parser.js');
 const { presentationsMatch } = await import('../src/lib/pharmaceutical-context.js');
 const { auditQuoteResult, productIdentityMatches } = await import('../src/lib/quote-auditor.js');
 
 test.after(async () => { await db.closeDatabase(); });
+
+test('boxed coated tablet queries preserve identity and commercial constraints', () => {
+  const originalTerms = 'LACTO PURGA 5MG CX 12 COMP REV';
+  const parsed = parseSearchQuery(originalTerms);
+  assert.equal(parsed.name, 'lacto purga');
+  assert.equal(parsed.dosage, '5mg');
+  assert.equal(parsed.quantity, 12);
+  assert.equal(parsed.presentation, 'comprimido revestido');
+  assert.equal(parsed.originalTerms, originalTerms);
+
+  const result = {
+    supplierProductName: 'Lacto Purga 5mg 12 comprimidos revestidos',
+    dosage: '5mg', presentation: 'comprimido revestido', quantity: 12,
+    price: 10, stStatus: 'COM_ST', availability: 'disponivel', source: 'test'
+  };
+  assert.equal(fuzzyMatch(parsed.name, result.supplierProductName), true);
+  assert.equal(productIdentityMatches(parsed, result), true);
+  assert.notEqual(auditQuoteResult(parsed, result).status, 'BLOQUEADO');
+  for (const changed of [
+    { dosage: '10mg', supplierProductName: 'Lacto Purga 10mg 12 comprimidos revestidos' },
+    { presentation: 'capsula', supplierProductName: 'Lacto Purga 5mg 12 capsulas' },
+    { supplierProductName: 'Lacto Purga 5mg 12 comprimidos XR' },
+    { supplierProductName: 'Outro Produto 5mg 12 comprimidos revestidos' }
+  ]) {
+    assert.equal(productIdentityMatches(parsed, { ...result, ...changed }), false);
+    assert.equal(auditQuoteResult(parsed, { ...result, ...changed }).status, 'BLOQUEADO');
+  }
+  const differentPackage = { ...result, quantity: 24, supplierProductName: 'Lacto Purga 5mg 24 comprimidos revestidos' };
+  assert.equal(productIdentityMatches(parsed, differentPackage), false);
+  assert.match(auditQuoteResult(parsed, differentPackage).summary, /Embalagem retornada \(24\) difere da busca \(12\)/);
+});
+
+test('packaging and coating abbreviations are removed only in their own context', () => {
+  for (const form of ['COMP REV', 'CP REV', 'COMPRIMIDOS REVESTIDOS']) {
+    const parsed = parseSearchQuery(`LACTO PURGA 5MG CX 12 ${form}`);
+    assert.equal(parsed.name, 'lacto purga');
+    assert.equal(parsed.presentation, 'comprimido revestido');
+    assert.equal(parsed.quantity, 12);
+  }
+  for (const query of ['Marca CX 5mg 12 comp', 'Marca REV 5mg 12 comp', 'Marca CX', 'Marca REV']) {
+    assert.equal(parseSearchQuery(query).name, query.includes('CX') ? 'marca cx' : 'marca rev');
+  }
+  assert.equal(parseSearchQuery('Marca REV 5mg CX 12 COMP REV').name, 'marca rev');
+  assert.equal(parseSearchQuery('Marca CX 5mg CX 12 COMP REV').name, 'marca cx');
+  const compact = parseSearchQuery('Lacto Purga 5mg CX. 12COMP REV.');
+  assert.equal(compact.name, 'lacto purga');
+  assert.equal(compact.quantity, 12);
+  assert.equal(compact.presentation, 'comprimido revestido');
+  assert.equal(parseSearchQuery('Marca 5mg 12 COMP REV/PLUS').name, 'marca rev plus');
+});
 
 test('explicit administration route conflicts precede generic presentation matching', () => {
   for (const [query, result] of [['nasal', 'injetavel'], ['oral', 'oftalmica'], ['otologica', 'nasal'], ['topica', 'oral']]) {

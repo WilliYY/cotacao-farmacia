@@ -45,6 +45,14 @@ Se o Node.js estiver ausente, o inicializador oculto mostra uma mensagem em vez 
 
 As senhas não ficam no Git. Com `CREDENTIAL_STORAGE_MODE=plain`, configuração operacional padrão, elas ficam codificadas no SQLite local e podem acompanhar uma cópia autorizada do banco para outro computador. Esse modo não é criptografia: limite o acesso à pasta e nunca envie `.env` ou `data/cotador-st.db` ao repositório. O histórico pode permanecer local, mas nunca é usado como fonte de preço para uma nova cotação.
 
+### Cotar a planilha do site pelo aplicativo
+
+Clique em **Cotar planilha do site**, abra o site e entre na janela **Planilha de cotação — Wimifarma**. Esse primeiro login é necessário em cada computador; a sessão fica no perfil local do cotador. Em seguida, clique em **Ler planilha**, confira as colunas e selecione as linhas. A leitura seleciona três linhas para um teste inicial; ajuste a seleção antes de iniciar.
+
+ANB, Santa Cruz, Profarma e DM Paraná seguem o nome e a chave da coluna, mesmo após mudar sua ordem. Conforme a configuração confirmada pelo operador, **DM**, **DM Aline** e outros nomes iniciados pelo termo DM correspondem à DM Paraná. Se houver duas colunas para o mesmo fornecedor, escolha a correta. **Nenhuma** desativa a consulta daquele fornecedor.
+
+O botão **Cotar, comparar e preencher vazias** consulta preços atuais e grava somente ofertas com identidade suficiente, estoque, ST e preço final conferidos. Dose ou embalagem incompletas ficam para revisão. Valores existentes são comparados e preservados. Evite edições simultâneas nas linhas selecionadas: o endpoint atual do site não oferece bloqueio atômico. Conflito ou entrega incerta interrompe novas gravações sem repetir a requisição. Toda a integração roda localmente, usando o site existente, sem instalar componentes no servidor ou enviar pedidos às distribuidoras.
+
 ---
 
 ## 🚀 Como Rodar o Sistema

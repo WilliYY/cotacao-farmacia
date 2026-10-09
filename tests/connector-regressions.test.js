@@ -12,6 +12,36 @@ import * as dm from '../src/lib/dm-playwright.js';
 const row = ['Pex', '7896181915638', 'LOSARTANA 50MG 30CPR', '0', '2,70', '76.6%', '8,11', '-', '0,96'];
 const headers = ['Pex', 'EAN', 'Produto', 'Quantidade', 'Preço Final', 'Desconto', 'Preço', 'ST %', 'ST'];
 
+test('Name-only acquisition retries empty descriptions without changing the audited request or broadening EAN', async () => {
+  for (const [file, className] of [['anb-real.js', 'ANBRealConnector'], ['profarma-real.js', 'ProfarmaRealConnector']]) {
+    const source = fs.readFileSync(new URL(`../src/connectors/real/${file}`, import.meta.url), 'utf8');
+    const calls = [];
+    const context = vm.createContext({
+      SupplierConnector: class {}, getSupplierCredentials: async () => ({ username: 'test', password: 'test' }),
+      normalizeAnbUrl: value => value, normalizeProfarmaUrl: value => value,
+      getCombinationSearchFallback: () => '', getProfarmaRetryTerm: () => '',
+      applyAnbEanEvidence: values => values, Date,
+      logger: { info() {}, warn() {}, error() {} },
+      scrapePortal: async (...args) => { calls.push(args[5]); return args[5] === 'lacto purga' ? [{ name: 'LACTO PURGA 5MG 12CPR', price: 3.5 }] : []; }
+    });
+    vm.runInContext(source.slice(source.indexOf(`export class ${className}`)).replace('export class', 'class') + `\nthis.connector = new ${className}();`, context);
+    const parsed = { name: 'lacto purga', dosage: '5mg', presentation: 'comprimido revestido', quantity: 12 };
+    const before = { ...parsed };
+    const results = await context.connector.searchProduct(parsed);
+    assert.deepEqual(calls, ['lacto purga 5mg comprimido revestido', 'lacto purga']);
+    assert.deepEqual(parsed, before);
+    assert.equal(results[0].price, 3.5);
+    assert.equal(results[0].searchFallback, 'NOME_SEM_METADADOS');
+    calls.length = 0;
+    await context.connector.searchProduct({ ...parsed, ean: '7896181915638' });
+    assert.deepEqual(calls, ['7896181915638']);
+    calls.length = 0;
+    context.scrapePortal = async (...args) => { calls.push(args[5]); return [{ liveFailureReason: 'login failed' }]; };
+    await context.connector.searchProduct(parsed);
+    assert.equal(calls.length, 1);
+  }
+});
+
 test('Profarma never substitutes discount or another price for final price', () => {
   for (const price of ['', '0,00', '76.6%', '-1,00']) {
     assert.equal(electron.parseProfarmaTableRow(row.with(4, price), true, headers), null);

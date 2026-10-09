@@ -206,6 +206,18 @@ export function parseSearchQuery(rawText) {
   if (hasExtendedReleasePhrase) {
     presentation = 'liberacao prolongada';
   }
+  const coatedTabletMatches = [...cleaned.matchAll(/\b(?:\d{1,3})?(?:comprimidos?|comp|cpr|cps?|cp)\s+(rev\.?|revestid[oa]s?)(?=\s|$)/gi)];
+  if (coatedTabletMatches.length > 0 && presentation === 'comprimido') {
+    presentation = 'comprimido revestido';
+  }
+  const packagingBoxMatches = [...cleaned.matchAll(/\bcx\.?(?=\s+\d{1,3}\s*(?:capsulas?|caps?|comprimidos?|comp?s?|cprs?|cps?|gotas?|gts|ampolas?|amps?|unidades?|unds?|envelopes?|env?s?|tablets?|tbls?|flaconetes?|flac?s?)\b)/gi)];
+  const descriptionTokenRanges = [
+    ...coatedTabletMatches.map(match => {
+      const start = match.index + match[0].lastIndexOf(match[1]);
+      return [start, start + match[1].length];
+    }),
+    ...packagingBoxMatches.map(match => [match.index, match.index + match[0].length])
+  ];
 
   // 5. Extract name (filtering out matching tokens)
   const words = cleaned.split(/\s+/);
@@ -215,7 +227,10 @@ export function parseSearchQuery(rawText) {
   const dosageNumbers = dosageStr.match(/\d+(?:[.,]\d+)?/g) || [];
   const qtyToken = qtyMatch ? qtyMatch[0] : '';
   
-  for (const word of words) {
+  for (const wordMatch of cleaned.matchAll(/\S+/g)) {
+    const word = wordMatch[0];
+    const isDescriptionToken = descriptionTokenRanges.some(([start, end]) =>
+      wordMatch.index >= start && wordMatch.index < end);
     const normalizedWord = normalizePharmaceuticalText(word);
     const cleanWord = normalizePharmaceuticalText(word).replace(/[+/.%]/g, '');
     const compactWord = normalizedWord.replace(/\s+/g, '').replace(',', '.');
@@ -243,7 +258,7 @@ export function parseSearchQuery(rawText) {
       SYNONYMS[cleanWord] !== undefined ||
       (presentation && cleanWord.endsWith(presentation));
 
-    if (!isPresentationWord && !isDosageWord && !isPackageSizeWord && !isEan && !isQtyWord &&
+    if (!isDescriptionToken && !isPresentationWord && !isDosageWord && !isPackageSizeWord && !isEan && !isQtyWord &&
         cleanWord !== 'mg' && cleanWord !== 'mcg' && cleanWord !== 'ml' && cleanWord !== 'g' && cleanWord !== 'ui' &&
         cleanWord !== 'cp' && cleanWord !== 'cps' && cleanWord !== 'comp' && cleanWord !== 'caps') {
       nameWords.push(word);

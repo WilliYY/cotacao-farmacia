@@ -33,6 +33,9 @@ import { analyzeQuoteBatch, deriveApprovedCorrection, INPUT_STATUS } from './src
 import { generateExcelBuffer } from './src/lib/exporter.js';
 import { logger } from './src/lib/logger.js';
 import { createQuoteRunCoordinator } from './src/lib/quote-run-coordinator.js';
+import { createSiteSheetClient } from './src/lib/site-sheet-client.js';
+import { runSiteQuotation, validateSiteQuoteRequest } from './src/lib/site-quote-runner.js';
+import { resolveSiteSupplierColumns } from './src/lib/site-quotation.js';
 import {
   createTrustedIpcHandler,
   isAllowedApplicationUrl,
@@ -256,6 +259,10 @@ function createWindow() {
 }
 
 function sendQuoteProgress(event, payload) {
+  if (typeof event?.onQuoteProgress === 'function') {
+    event.onQuoteProgress(payload);
+    return;
+  }
   if (!event?.sender || event.sender.isDestroyed()) return;
   event.sender.send('quote-progress', payload);
 }
@@ -361,11 +368,14 @@ app.on('will-quit', async () => {
 });
 
 const quoteRunCoordinator = createQuoteRunCoordinator();
+const siteSheetClient = createSiteSheetClient(BrowserWindow);
+let siteQuoteController = null;
 
 app.on('before-quit', event => {
-  if (!quoteRunCoordinator.hasActiveQuote()) return;
+  if (!quoteRunCoordinator.hasActiveQuote() && !siteQuoteController) return;
   event.preventDefault();
   quittingAfterQuote = true;
+  siteQuoteController?.abort('USER_CANCELLED');
   quoteRunCoordinator.requestCancellation('USER_CANCELLED');
 });
 
@@ -389,8 +399,13 @@ handleIpc('cancel-quote', async () => {
   return { success: true, message: 'Cotação cancelada pelo usuário.' };
 });
 
-// IPC Handler: Run Quote Process
+// Both entry points share the same audited, cancellable local quotation flow.
 handleIpc('run-quote', async (event, rawTextList, activeSuppliers) => {
+  if (siteQuoteController) throw new Error('A cotacao da planilha esta em andamento.');
+  return executeLocalQuote(event, rawTextList, activeSuppliers);
+});
+
+async function executeLocalQuote(event, rawTextList, activeSuppliers) {
   let quoteId = null;
   let quoteController = null;
   let quoteTimeoutId = null;
@@ -608,8 +623,40 @@ handleIpc('run-quote', async (event, rawTextList, activeSuppliers) => {
   } finally {
     if (quoteTimeoutId) clearTimeout(quoteTimeoutId);
     quoteRunCoordinator.finish(quoteController);
+    if (quittingAfterQuote && !quoteRunCoordinator.hasActiveQuote() && !siteQuoteController) app.quit();
+  }
+}
+
+handleIpc('open-site-sheet', () => siteSheetClient.open());
+handleIpc('read-site-sheet', async () => {
+  const snapshot = await siteSheetClient.readSnapshot();
+  return { columns: snapshot.columns, rows: snapshot.rows,
+    supplierMapping: resolveSiteSupplierColumns(snapshot.columns) };
+});
+handleIpc('run-site-quote', async (event, payload) => {
+  const request = validateSiteQuoteRequest(payload);
+  if (siteQuoteController || quoteRunCoordinator.hasActiveQuote()) {
+    throw new Error('Outra cotacao esta em andamento. Aguarde seu encerramento.');
+  }
+  const controller = new AbortController();
+  siteQuoteController = controller;
+  try {
+    return await runSiteQuotation({ client: siteSheetClient, request, signal: controller.signal,
+      quote: (query, suppliers, onQuoteProgress) => executeLocalQuote({ sender: event.sender, onQuoteProgress }, [query], suppliers),
+      onProgress: progress => {
+        if (!event.sender.isDestroyed()) event.sender.send('site-quote-progress', progress);
+      }
+    });
+  } finally {
+    siteQuoteController = null;
     if (quittingAfterQuote && !quoteRunCoordinator.hasActiveQuote()) app.quit();
   }
+});
+handleIpc('cancel-site-quote', () => {
+  if (!siteQuoteController) return { success: false, message: 'Nenhuma cotacao da planilha ativa.' };
+  siteQuoteController.abort('USER_CANCELLED');
+  quoteRunCoordinator.requestCancellation('USER_CANCELLED');
+  return { success: true, message: 'Cancelamento solicitado; aguardando consultas e gravacao em andamento.' };
 });
 
 // IPC Handler: Get History

@@ -2,6 +2,18 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.9.3] - 2026-10-09
+
+- Integração da planilha Wimifarma inteiramente no Electron, sem mudanças no servidor: login próprio, leitura, vínculo por chave, seleção de linhas e comparação de valores existentes.
+- ANB, Santa Cruz, Profarma e DM Paraná seguem o nome da coluna, independentemente da ordem. Conforme confirmação do operador, DM, DM Aline e nomes iniciados pelo termo DM correspondem à DM Paraná; duplicidade exige escolha explícita.
+- Células vazias recebem somente preço final auditado e atual, com EAN ou dose/apresentação/embalagem suficientes. Nomes incompletos ficam para revisão; não se usa preço por comprimido.
+- UUID, identidade, versão e vínculo são conferidos antes de gravar; resposta e releitura confirmam a operação. Conflito ou entrega incerta interrompem o lote sem repetição. A interface informa a limitação de edição simultânea do endpoint existente.
+- Cancelamento impede novas gravações, inclusive durante o preflight. Ofertas SQLite com flag inteiro 1 são aceitas explicitamente. Sessão do site fica no perfil local, com primeiro login em cada computador; nenhuma dependência nova.
+- Corrigida a extração de `CX 12 COMP REV`: embalagem e revestimento deixam de contaminar o nome; dose, quantidade e apresentação continuam na auditoria. ANB e Profarma tentam o nome sem metadados somente após busca vazia, sem ampliar a pesquisa por EAN ou repetir falhas técnicas.
+- Progresso distingue linha em consulta de linhas concluídas, transmite etapas dos fornecedores e não mostra 100% ao iniciar uma única linha. Falha inesperada de gravação preserva o relatório parcial e interrompe o lote.
+- Consulta pelo nome pode aceitar exclusivamente a advertência de EAN ausente quando nome, dose, apresentação, embalagem, estoque, ST e preço final conferem. Demais advertências e consultas que exigem EAN continuam bloqueadas. Dose dos metadados é conferida separadamente para rejeitar contradição com a descrição.
+- Corrigido o isolamento SQLite do teste de evidência DM: a configuração local não prevalece sobre o diretório temporário e o arquivo ativo é conferido antes da gravação. A suíte executa arquivos em sequência, pois as verificações nativas da Santa Cruz compartilham recursos globais do Windows.
+
 ## [1.9.2] - 2026-10-09
 
 - Corrigida a passagem da Home maximizada da Santa Cruz 13.0.001 para Digitador/Pedidos: restauração, foco da janela e posição atual do controle antes do clique. Cliques e F3 verificam a janela em primeiro plano; a lupa calcula sua posição após preparar a janela.

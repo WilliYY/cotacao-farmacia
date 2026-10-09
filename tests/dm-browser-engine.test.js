@@ -428,10 +428,16 @@ test('DM browser-engine evidence survives recommendation processing', async () =
 test('DM browser-engine evidence persists in portable SQLite history', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cotacao-dm-engine-'));
   const previousDbType = process.env.DB_TYPE;
+  const previousDatabasePath = process.env.DATABASE_PATH;
   process.env.DB_TYPE = 'sqlite';
+  process.env.DATABASE_PATH = '';
 
   try {
-    await initDatabase(directory);
+    const database = await initDatabase(directory);
+    const databaseFiles = await database.all('PRAGMA database_list');
+    const mainDatabase = databaseFiles.find(entry => entry.name === 'main');
+    assert.ok(mainDatabase?.file, 'SQLite must expose its active database file');
+    assert.strictEqual(path.resolve(mainDatabase.file), path.join(directory, 'cotador-st.db'));
     const quoteId = await createQuote('processing');
     const quoteItemId = await createQuoteItem(quoteId, 'losartana 50mg', {
       name: 'losartana',
@@ -465,9 +471,11 @@ test('DM browser-engine evidence persists in portable SQLite history', async () 
     assert.strictEqual(details.items[0].results[0].browserEngine, 'electron');
     assert.strictEqual(details.items[0].results[0].browserEngineFallback, 'playwright');
   } finally {
-    await closeDatabase();
-    fs.rmSync(directory, { recursive: true, force: true });
     if (previousDbType === undefined) delete process.env.DB_TYPE;
     else process.env.DB_TYPE = previousDbType;
+    if (previousDatabasePath === undefined) delete process.env.DATABASE_PATH;
+    else process.env.DATABASE_PATH = previousDatabasePath;
+    await closeDatabase();
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });

@@ -28,6 +28,7 @@ import { analyzeQuoteBatch, INPUT_STATUS } from './lib/search-intelligence.js';
 import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from './lib/quote-progress.js';
 import { buildQuoteSummary } from './lib/quote-summary.js';
 import { getSantaCruzStatusView } from './lib/santacruz-status.js';
+import SiteQuotationPanel from './components/SiteQuotationPanel.jsx';
 import { completeBrowserMockResults } from './lib/browser-mock.js';
 import {
   SUPPLIER_NAMES,
@@ -687,6 +688,7 @@ function App() {
   const [quoteStartedAt, setQuoteStartedAt] = useState(null);
   const [quoteElapsedSeconds, setQuoteElapsedSeconds] = useState(0);
   const [selectedQuoteId, setSelectedQuoteId] = useState(null);
+  const [isSiteQuotationOpen, setIsSiteQuotationOpen] = useState(false);
   
   // Git updates state
   const [updateAvailable, setUpdateAvailable] = useState(null);
@@ -1513,6 +1515,10 @@ function App() {
         )}
 
         <div className="sidebar-actions">
+          <button className="btn btn-secondary btn-block" disabled={loading || !api.openSiteSheet}
+            onClick={() => setIsSiteQuotationOpen(true)}>
+            <FileSpreadsheet size={16} aria-hidden="true" /> Cotar planilha do site
+          </button>
           <button 
             className="btn btn-primary btn-block"
             onClick={handleNewQuoteClick}
@@ -1697,6 +1703,10 @@ function App() {
             <p className="search-subtitle">
               Informe um medicamento por linha ou cole códigos EAN para comparar os valores finais com ST.
             </p>
+            <button className="btn btn-secondary" disabled={loading || !api.openSiteSheet}
+              onClick={() => setIsSiteQuotationOpen(true)}>
+              <FileSpreadsheet size={16} aria-hidden="true" /> Cotar planilha do site
+            </button>
 
             <div className="textarea-container">
               <div className="field-heading">
@@ -2548,6 +2558,13 @@ function App() {
           </div>
         </div>
       )}
+      {isSiteQuotationOpen && <SiteQuotationPanel api={api}
+        onClose={() => setIsSiteQuotationOpen(false)}
+        onQuoteCreated={async quoteId => {
+          setHistory(await api.getHistory());
+          setActiveQuote(await api.getQuoteDetails(quoteId));
+          setSelectedQuoteId(quoteId);
+        }} />}
     </div>
   );
 }

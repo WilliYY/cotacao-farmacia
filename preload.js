@@ -2,6 +2,15 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   runQuote: (rawTextList, activeSuppliers) => ipcRenderer.invoke('run-quote', rawTextList, activeSuppliers),
+  openSiteSheet: () => ipcRenderer.invoke('open-site-sheet'),
+  readSiteSheet: () => ipcRenderer.invoke('read-site-sheet'),
+  runSiteQuote: (request) => ipcRenderer.invoke('run-site-quote', request),
+  cancelSiteQuote: () => ipcRenderer.invoke('cancel-site-quote'),
+  onSiteQuoteProgress: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('site-quote-progress', listener);
+    return () => ipcRenderer.removeListener('site-quote-progress', listener);
+  },
   getHistory: () => ipcRenderer.invoke('get-history'),
   getQuoteDetails: (quoteId) => ipcRenderer.invoke('get-quote-details', quoteId),
   updateResult: (resultId, fields) => ipcRenderer.invoke('update-result', resultId, fields),

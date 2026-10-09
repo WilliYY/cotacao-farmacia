@@ -344,6 +344,19 @@ The Node test suite validates the high-risk pharmacy purchase paths:
 - XLSX export workbook structure and best/ignored sheet routing.
 - Startup update safety for disabled updates, dirty worktrees, wrong branches, missing upstreams, local-ahead/diverged histories, offline remotes, bounded fetches, portable shortcuts, and real fast-forward clones.
 
+### Local site worksheet integration (2026-10-09)
+
+- `site-sheet-client.js` owns a sandboxed BrowserWindow without Node or preload, restricted to HTTPS `wimifarma.com`. Its persistent partition uses application userData. Ordinary Home login/SSO, bootstrap and CSRF-protected cell updates are reused; no server deployment is involved.
+- `site-quotation.js` maps suppliers to stable keys and plans selected UUIDs. User-confirmed labels beginning with the separate term DM identify DM Paraná. Duplicate aliases, protected fields and conflicting mappings are rejected. Order quantity is never appended as package size.
+- `site-quote-runner.js` invokes the existing quotation flow once per site row, preserving history and row association. Selection requires audited valid offers, recent capture, final-price label and EAN or sufficient dose/presentation/package. SQLite integer eligibility flags are handled explicitly. Existing values are compared; per-unit prices never fill the worksheet.
+- `SiteQuotationPanel` exposes login, reading, mapping, selection, progress, cancellation and existing/current-price report. Initial selection contains three nonempty rows. The new entry is visible in the search panel even with history collapsed.
+- Parser treats contextual `CX` and `COMP REV` as packaging and coated-tablet metadata, preserving dosage, quantity and original text. After an empty full-description search, ANB/Profarma may acquire candidates by the clean name; EAN and technical failures never trigger this retry. The original complete query still governs identity and price auditing.
+- Site progress forwards supplier stages while retaining the worksheet UUID and batch position. `completedItems` advances only after a row resolves; cancellation and uncertain writes retain the actual completion count and partial report.
+- A name-based offer may retain exactly one missing-EAN warning when persisted and fresh audits agree, no EAN was requested, and complete product identity passes. Other warnings remain blocked. Exported `dosageMatches` also checks supplier dosage metadata independently of the product name, rejecting contradictory strengths.
+- DM SQLite persistence tests explicitly isolate `DATABASE_PATH`, verify `PRAGMA database_list`, and restore the environment afterward. Test files run sequentially because native Santa Cruz checks share Windows resources; run the suite after real connector work has stopped.
+- The existing endpoint reports `overwroteRemote` after updating; it has no atomic compare-and-set. Immediate preflight, response validation, post-write reading and stop on conflicts reduce risk but cannot eliminate simultaneous edits during the request. No atomic preservation is promised, nor automatic rollback/retry after uncertain delivery. Cancellation prevents a new PATCH; an already-dispatched write must be reconciled before quitting.
+- Other Windows computers require Node/dependencies or the packaged app, supplier configuration, their own site sign-in and a compatible local Santa Cruz installation. Plain credentials remain portable; machine-bound encryption/session cookies do not. No credentials or browser profiles are committed.
+
 ### Delivery Workflow
 - Every completed project change includes synchronized documentation, executable validation, a scoped Git commit, and a push of the current branch by default.
 - The staged diff must be reviewed before commit. Credentials, `.env`, databases, logs, caches, screenshots, and supplier-owned binaries stay local.

@@ -117,6 +117,12 @@ export class ANBRealConnector extends SupplierConnector {
         logger.info(`ANB returned no products for the association; retrying by active ingredient: "${combinationFallback}"`);
         results = await runSearch(combinationFallback);
       }
+      const nameFallback = !parsedQuery.ean && results.length === 0 && parsedQuery.name &&
+        ![searchTerm, combinationFallback].includes(parsedQuery.name) ? parsedQuery.name : '';
+      if (nameFallback) {
+        logger.info(`ANB returned no products for the full description; retrying by name: "${nameFallback}"`);
+        results = await runSearch(nameFallback);
+      }
       
       const evidencedResults = applyAnbEanEvidence(results, searchTerm);
       if (parsedQuery.ean && !evidencedResults.some(result =>
@@ -128,7 +134,7 @@ export class ANBRealConnector extends SupplierConnector {
 
       return evidencedResults.map(res => ({
         ...res,
-        searchFallback: combinationFallback
+        searchFallback: nameFallback ? 'NOME_SEM_METADADOS' : combinationFallback
           ? (res.searchFallback || 'ASSOCIACAO_POR_PRINCIPIO_ATIVO')
           : res.searchFallback,
         source: 'ANB',

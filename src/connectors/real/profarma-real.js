@@ -90,10 +90,16 @@ export class ProfarmaRealConnector extends SupplierConnector {
         logger.info(`Profarma returned no products for the association; retrying by active ingredient: "${combinationFallback}"`);
         results = await runSearch(combinationFallback);
       }
+      const nameFallback = !parsedQuery.ean && results.length === 0 && parsedQuery.name &&
+        ![searchTerm, retryTerm, combinationFallback].includes(parsedQuery.name) ? parsedQuery.name : '';
+      if (nameFallback) {
+        logger.info(`Profarma returned no products for the full description; retrying by name: "${nameFallback}"`);
+        results = await runSearch(nameFallback);
+      }
       
       return results.map(res => ({
         ...res,
-        searchFallback: combinationFallback
+        searchFallback: nameFallback ? 'NOME_SEM_METADADOS' : combinationFallback
           ? (res.searchFallback || 'ASSOCIACAO_POR_PRINCIPIO_ATIVO')
           : res.searchFallback,
         source: 'Profarma',

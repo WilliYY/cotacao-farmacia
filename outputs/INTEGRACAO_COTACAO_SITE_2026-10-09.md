@@ -1,14 +1,14 @@
 # Preenchimento automático da cotação no site
 
-É possível integrar o cotador a `https://wimifarma.com/cotacao/`. O código local do site já oferece autenticação, leitura da planilha e gravação de células. Esta análise não executou login nem gravou dados no site.
+O cotador agora integra `https://wimifarma.com/cotacao/` pelo aplicativo local, usando autenticação, leitura e edição já existentes. Nenhuma modificação ou implantação no servidor foi realizada. A evidência atual está em `outputs/TESTE_PLANILHA_SITE_2026-10-09.md`; os resultados reais devem ser conferidos nesse relatório.
 
 ## Reconhecimento dos fornecedores
 
 O cotador deve ler os cabeçalhos atuais e vincular cada conector à chave estável da coluna. A posição visual serve apenas para apresentação: colocar Santa Cruz antes de ANB não deve alterar o destino dos preços.
 
-O vínculo deve ser salvo por `columnKey`, com nomes conhecidos para a configuração inicial: ANB/Anb, Santa/Santa Cruz e Profarma. Cabeçalhos duplicados ou desconhecidos exigem ajuste do vínculo. O conector atual da DM é `DM Paraná`; a coluna `dm aline` mostrada na imagem precisa de associação explícita ao fornecedor correspondente. A palavra DM, isolada, não identifica qual distribuidora é.
+O vínculo usa `columnKey`, com nomes conhecidos para a configuração inicial: ANB/Anb, Santa/Santa Cruz e Profarma. O usuário confirmou que DM, DM Aline e outros nomes começando pelo termo DM correspondem à DM Paraná neste projeto. Duas colunas para o mesmo fornecedor exigem escolha explícita. Campos protegidos e vínculos colidindo são bloqueados.
 
-## Fluxo proposto
+## Fluxo implementado
 
 1. Autenticar a sessão do cotador com o usuário do site; os cookies de um navegador externo não ficam automaticamente disponíveis no Electron.
 2. Ler `/cotacao/api/bootstrap`, recebendo colunas com `key`, `label`, `position` e linhas com `id`, `values`, `version`.
@@ -17,13 +17,13 @@ O vínculo deve ser salvo por `columnKey`, com nomes conhecidos para a configura
 5. Enviar somente preços válidos para suas colunas vinculadas, preservando quantidade, categoria e demais fornecedores. Falha de consulta não deve apagar valores existentes nem criar um preço fictício.
 6. Registrar a operação e atualizar a planilha conforme cada consulta termina, com progresso e cancelamento no cotador.
 
-## API existente e ajuste necessário
+## API existente e limite de concorrência
 
-- Login: `POST /cotacao/login.php`; sessão revalidada por `requireApiAuth`.
+- Login: formulário normal da Home e ponte SSO para a cotação; sessão revalidada pela autenticação existente. O usuário entra na janela própria do cotador.
 - Gravação: `PATCH /cotacao/api/cells/batch`, com `x-csrf-token` e `{changes:[{rowId,columnKey,value,expectedValue}],clientId}`; limite de 1.000 células por chamada.
 - Histórico: `GET /cotacao/api/cells/:rowId/:columnKey/history`. O site registra usuário, valor anterior e novo e transmite alterações às demais telas.
 
-O `expectedValue` atual detecta sobrescrita, mas **não impede** salvar sobre uma alteração concorrente. Antes de ativar a gravação automática, a API precisa de uma precondição atômica que rejeite a célula quando o valor esperado ou a versão mudou. O cotador deve reler o conflito e mostrar a pendência, preservando a edição humana.
+O `expectedValue` atual detecta sobrescrita, mas **não impede** salvar sobre uma alteração concorrente. Conforme o pedido de manter toda a integração local, o servidor permanece intacto. O cotador faz preflight de versão/identidade/célula vazia, valida a resposta e relê o valor gravado. Conflito ou entrega incerta interrompem novas gravações sem repetição ou rollback automático. A janela entre preflight e escrita continua sem bloqueio atômico; mantenha as linhas selecionadas sem edição simultânea.
 
 ## Evidência local
 
@@ -37,4 +37,4 @@ Código inspecionado em `C:/Users/Williany/Desktop/wimifarma-com/apps/cotacao/sr
 
 Contrato em `apps/cotacao/src/contracts/domain.ts:34`; comportamento de concorrência documentado em `docs/20-cotacao-v2.md:379`. O conector local identifica DM como `DM Paraná` em `C:/Users/Williany/Desktop/cotação/src/connectors/real/dm-parana-real.js:30`.
 
-Não há preenchimento automático do site implementado nesta entrega. A integração exige mudanças delimitadas no cotador e na precondição de gravação do site; a posição das colunas já pode ser tratada sem depender de coordenadas.
+O preenchimento automático foi implementado no cotador com o endpoint existente. Sessão do Chrome não é importada: o operador entra na janela do cotador uma vez em cada computador. As colunas seguem suas chaves e nomes, independentemente da ordem visual. A validação real e suas limitações estão registradas no relatório de teste.
