@@ -1,4 +1,38 @@
 import { logger } from './logger.js';
+import { getConnectorSessionIdentity } from './connector-session.js';
+
+export function serializeRedactedDiagnostic(document, secrets = []) {
+  const clone = document.documentElement.cloneNode(true);
+  for (const field of clone.querySelectorAll('input, textarea, select')) {
+    field.removeAttribute('value');
+    field.value = '';
+    field.textContent = '';
+  }
+  for (const node of clone.querySelectorAll('script')) node.remove();
+  let html = clone.outerHTML;
+  for (const secret of secrets.filter(Boolean)) {
+    const encoded = String(secret).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    for (const value of [String(secret), encoded, encodeURIComponent(secret)]) {
+      html = html.split(value).join('[REDACTED]');
+    }
+  }
+  return html;
+}
+
+export function getPortalGridSignature(document, supplierId) {
+  if (supplierId === 4) {
+    const cards = Array.from(document.querySelectorAll('span')).filter(node => /^pre[cç]o\s*final:\s*R\$/i.test((node.textContent || '').trim())).map(node => {
+      let card = node;
+      while (card && card !== document.body) {
+        if (/EAN:\s*\d{13}/i.test(card.innerText || '') && card.querySelector('button')) return card.innerText || '';
+        card = card.parentElement;
+      }
+      return '';
+    });
+    return JSON.stringify(cards);
+  }
+  return JSON.stringify(Array.from(document.querySelectorAll('table tr, .table tr, mat-row')).filter(row => row.querySelector('td') || row.querySelector('mat-cell')).map(row => row.innerText || ''));
+}
 
 function parsePositiveCurrency(value) {
   const match = String(value || '').match(/-?\d{1,3}(?:\.\d{3})*,\d+|-?\d+(?:[.,]\d+)?/);
@@ -215,7 +249,7 @@ export function parseDmParanaCard(cardData = {}) {
   };
 }
 
-export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
+export function parseProfarmaTableRow(columns, hasQuantityInput = false, headers) {
   const cols = Array.isArray(columns) ? columns.map(value => String(value || '').trim()) : [];
   if (cols.length < 5) return null;
 
@@ -238,7 +272,12 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false) {
   if (!name) return null;
 
   const quantityText = cols[3] ? normalize(cols[3]) : '';
-  const finalPrice = parseCurrency(cols[4]) || parseCurrency(cols[5]) || parseCurrency(cols[6]);
+  const priceIndex = headers === undefined ? 4 : headers.findIndex(header => normalize(header).trim() === 'preco final');
+  // Other fields still use the proven portal layout; shifted layouts require revalidation.
+  if (priceIndex !== 4 || (headers && headers.filter(header => normalize(header).trim() === 'preco final').length !== 1)) return null;
+  const priceText = cols[priceIndex] || '';
+  if (!/^(?:R\$\s*)?\d+(?:\.\d{3})*(?:,\d{2}|\.\d{2})?$/.test(priceText)) return null;
+  const finalPrice = parseCurrency(priceText);
   if (finalPrice <= 0) return null;
 
   const stAmount = cols.length >= 9 ? parseCurrency(cols[8]) : 0;
@@ -301,7 +340,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
         nodeIntegration: false,
         contextIsolation: true,
         backgroundThrottling: false,
-        partition: `persist:wimifarma-supplier-${supplierId}`
+        partition: `persist:wimifarma-supplier-${supplierId}-${getConnectorSessionIdentity(supplierId, { loginUrl, username, password, clientCode })}`
       }
     });
 
@@ -335,7 +374,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
         const fs = await import('node:fs');
         const path = await import('node:path');
         if (win && !win.isDestroyed()) {
-          const html = await win.webContents.executeJavaScript('document.documentElement.outerHTML');
+          const html = await win.webContents.executeJavaScript(`(${serializeRedactedDiagnostic.toString()})(document, ${JSON.stringify([username, password, clientCode])})`);
           const debugDirectory = path.resolve(process.cwd(), 'logs', 'scraper-debug');
           const safeName = String(name || 'scraper').replace(/[^a-z0-9._-]+/gi, '_');
           fs.mkdirSync(debugDirectory, { recursive: true });
@@ -461,7 +500,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 } else {
                   input.value = value;
                 }
-                input.setAttribute('value', value);
+                input.removeAttribute('value');
                 input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
                 input.blur();
@@ -962,6 +1001,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
               const results = await win.webContents.executeJavaScript(`
                 (async () => {
                   const wait = ms => new Promise(r => setTimeout(r, ms));
+                  try {
                     const results = [];
                     const visitedEans = new Set();
                     const supplierId = ${Number(supplierId)};
@@ -972,6 +1012,9 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                    const parseProfarmaRow = ${parseProfarmaTableRow.toString()};
                    const parseDmParanaCardFn = ${parseDmParanaCard.toString()};
                    const isDirectDmProductMatchFn = ${isDirectDmProductMatch.toString()};
+                   const getGridSignature = ${getPortalGridSignature.toString()};
+                   const seenGridSignatures = new Set();
+                   const failPagination = message => { const error = new Error('PAGINATION_INCOMPLETE: ' + message); error.partialResults = results; throw error; };
 
                   const nextSelectors = [
                     'button.mat-paginator-navigation-next',
@@ -1019,6 +1062,9 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
                   while (hasNext && pageCount < maxPages) {
                     pageCount++;
+                    const currentGridSignature = getGridSignature(document, supplierId);
+                    if (seenGridSignatures.has(currentGridSignature)) failPagination('Repeated product grid.');
+                    seenGridSignatures.add(currentGridSignature);
                     const rows = Array.from(document.querySelectorAll('table tr, .table tr, mat-row')).filter(row => row.querySelector('td') || row.querySelector('mat-cell'));
                     const headers = Array.from(document.querySelectorAll('table th, .table th, mat-header-cell'))
                       .map(header => (header.innerText || header.textContent || '').trim());
@@ -1080,7 +1126,8 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                           ].filter(Boolean).join(' ').trim().toLowerCase();
                           return label === '+' || /adicionar|incrementar|aumentar|quantidade/.test(label);
                         });
-                        const parsedRow = parseProfarmaRow(cols, hasQuantityControl);
+                        const parsedRow = parseProfarmaRow(cols, hasQuantityControl, headers);
+                        if (!parsedRow) throw new Error('PROFARMA_PRICE_UNRESOLVED: Preço Final ausente, inválido ou cabeçalho não comprovado.');
                         if (!parsedRow || !parsedRow.ean || visitedEans.has(parsedRow.ean)) continue;
                         visitedEans.add(parsedRow.ean);
                         results.push({
@@ -1181,28 +1228,26 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                     }
 
                     if (nextBtn) {
-                      const firstItemBefore = supplierId === 4
-                        ? Array.from(document.querySelectorAll('span')).find(el => /^pre[cç]o\\s*final:\\s*R\\$/i.test((el.textContent || '').trim()))?.closest('div')
-                        : document.querySelector('table tr td, mat-row mat-cell');
-                      const textBefore = firstItemBefore ? firstItemBefore.innerText : '';
-
+                      if (pageCount >= maxPages) failPagination('Configured page limit reached while next is enabled.');
+                      const textBefore = getGridSignature(document, supplierId);
                       nextBtn.click();
-                      
                       let pageChanged = false;
-                      for (let w = 0; w < 30; w++) {
+                      let candidateSignature = '';
+                      let stableSince = 0;
+                      for (let w = 0; w < 50; w++) {
                         await wait(100);
-                        const firstItemAfter = supplierId === 4
-                          ? Array.from(document.querySelectorAll('span')).find(el => /^pre[cç]o\\s*final:\\s*R\\$/i.test((el.textContent || '').trim()))?.closest('div')
-                          : document.querySelector('table tr td, mat-row mat-cell');
-                        const textAfter = firstItemAfter ? firstItemAfter.innerText : '';
-                        if (textAfter !== textBefore) {
+                        const textAfter = getGridSignature(document, supplierId);
+                        if (textAfter !== candidateSignature) {
+                          candidateSignature = textAfter;
+                          stableSince = Date.now();
+                        }
+                        if (textAfter !== textBefore && textAfter !== '[]' && Date.now() - stableSince >= 500) {
+                          if (seenGridSignatures.has(textAfter)) failPagination('Repeated product grid.');
                           pageChanged = true;
                           break;
                         }
                       }
-                      if (!pageChanged) {
-                        hasNext = false;
-                      }
+                      if (!pageChanged) failPagination('Next page did not confirm a stable product grid transition.');
                     } else {
                       hasNext = false;
                     }
@@ -1224,9 +1269,18 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   }
 
                   return finalResults;
+                  } catch (error) {
+                    return { connectorFailure: true, failureCode: error.message.split(':')[0], message: error.message, partialResults: error.partialResults || [] };
+                  }
                 })()
               `);
 
+              if (results?.connectorFailure) {
+                const error = new Error(results.message);
+                error.code = results.failureCode;
+                error.partialResults = results.partialResults;
+                throw error;
+              }
               const portalFetchFailed = didPortalFetchFailDuringSearch(
                 portalFetchFailureAt,
                 submittedSearchAt

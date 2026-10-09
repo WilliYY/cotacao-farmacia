@@ -193,6 +193,10 @@ export function auditQuoteResult(parsed, result) {
   if (!Number.isFinite(price) || price <= 0) {
     blocks.push('Preco invalido ou zerado');
   }
+  const quantity = result.quantity === undefined ? 1 : Number(result.quantity);
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+    blocks.push('Quantidade invalida');
+  }
 
   if (result.liveFailureReason || result.failureCode) {
     // A falha tecnica ja explica por que estoque e preco nao foram confirmados.
@@ -337,7 +341,7 @@ export function applyPriceOutlierAudit(results) {
         isValidOption: false,
         ignoreReason: auditMessage,
         recommendationStatus: 'Precisa revisar preço',
-        reviewStatus: 'PRECISA_REVISAR',
+        reviewStatus: result.reviewStatus === 'APROVADO' ? 'APROVADO' : 'PRECISA_REVISAR',
         auditStatus: AUDIT_STATUS.BLOCKED,
         auditSummary: summary,
         notes: result.notes || `Auditoria: ${summary}`,

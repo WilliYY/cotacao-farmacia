@@ -26,10 +26,11 @@ graph TD
 
 ## 🔒 2. Cofre Seguro de Credenciais (Security)
 
-Para proteger as credenciais de acesso das distribuidoras no banco SQLite local, o sistema utiliza o mecanismo de criptografia nativo **Windows DPAPI** fornecido pelo Electron.
-*   **Implementação:** No arquivo [database.js](file:///c:/Users/Williany/Desktop/cota%C3%A7%C3%A3o/src/lib/database.js), a função `getSafeStorage()` carrega dinamicamente a API `safeStorage` do Electron.
-*   **Gravação:** O campo `password` é criptografado em bytes e salvo no SQLite como string Base64.
-*   **Leitura:** O sistema descriptografa o Base64 em texto plano em tempo de execução antes de enviar aos robôs. Se executado fora do Electron (ex: suíte de testes do terminal), o sistema faz bypass automático usando codificação UTF-8 simples.
+O armazenamento é configurável em `CREDENTIAL_STORAGE_MODE`, no arquivo [database.js](file:///c:/Users/Williany/Desktop/cota%C3%A7%C3%A3o/src/lib/database.js).
+*   **Portátil (`plain`):** A senha é salva no SQLite com prefixo `plain:` e payload Base64. Base64 é codificação, não criptografia. Esse modo mantém as credenciais utilizáveis ao mover a pasta do projeto.
+*   **Opcional (`dpapi`):** A API `safeStorage` do Electron usa a proteção do Windows, vinculada ao usuário/máquina. Uma senha que não puder ser lida é sinalizada; não é substituída silenciosamente.
+*   **Transporte:** Com o aplicativo fechado, copie a pasta local `data` e a configuração `.env` junto do projeto. Credenciais, banco, sessões e diagnósticos permanecem locais e fora do Git. Trocar URL, login, senha ou código de cliente inicia outra identidade de sessão nos portais.
+*   **IPC:** A lista de fornecedores retorna apenas indicadores de configuração. A tela de edição obtém as credenciais pelo canal específico, restrito à janela principal do aplicativo.
 
 ---
 

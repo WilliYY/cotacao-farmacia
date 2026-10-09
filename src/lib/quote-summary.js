@@ -5,7 +5,8 @@ const REVIEW_ITEM_STATUSES = new Set([
   'supplier_error',
   'supplier_timeout',
   'completed_with_timeout',
-  'cancelled'
+  'cancelled',
+  'interrupted'
 ]);
 
 function isValidOption(result) {
@@ -63,6 +64,7 @@ export function buildQuoteSummary(items = []) {
       item?.status === 'supplier_timeout' ||
       item?.status === 'completed_with_timeout' ||
       item?.status === 'cancelled' ||
+      item?.status === 'interrupted' ||
       results.some(result => Boolean(result?.liveFailureReason))
     ) failedItemCount++;
     if (item?.status === 'not_found') notFoundItemCount++;

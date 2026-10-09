@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { getConnectorSessionIdentity } from './connector-session.js';
 
 import {
   isDirectDmProductMatch,
@@ -95,8 +96,8 @@ async function resolveUserDataDir(explicitDirectory) {
   );
 }
 
-async function getBodyState(page) {
-  const bodyText = await page.locator('body').innerText().catch(() => '');
+async function getBodyState(page, timeout) {
+  const bodyText = await page.locator('body').innerText(timeout ? { timeout } : {}).catch(() => '');
   const normalized = normalize(bodyText);
   return {
     normalized,
@@ -296,12 +297,39 @@ async function getPageSignature(page) {
   return cards.map(card => `${card.name}|${card.text}`).join('||');
 }
 
-async function waitForDmResults(page, searchTerm, timeoutMs, signal, evidence) {
-  const deadline = Date.now() + timeoutMs;
+function getRemainingSearchTimeout(deadline) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw createPlaywrightError('PLAYWRIGHT_TIMEOUT', 'DM search deadline expired.');
+  return remaining;
+}
+
+export async function performDmSearchFieldAction(page, method, value, deadline) {
+  getRemainingSearchTimeout(deadline);
+  const input = page.locator(SEARCH_SELECTOR).first();
+  if (!await input.isVisible()) {
+    throw createPlaywrightError('PLAYWRIGHT_LAYOUT_CHANGED', 'DM search field disappeared from the current page.');
+  }
+  try {
+    const options = { timeout: getRemainingSearchTimeout(deadline) };
+    return method === 'inputValue' ? await input.inputValue(options) : await input[method](value, options);
+  } catch (cause) {
+    if (!await input.isVisible().catch(() => false)) {
+      throw createPlaywrightError('PLAYWRIGHT_LAYOUT_CHANGED', 'DM search field disappeared from the current page.', cause);
+    }
+    if (cause.name === 'TimeoutError') {
+      throw createPlaywrightError('PLAYWRIGHT_TIMEOUT', 'DM search field operation timed out.', cause);
+    }
+    throw cause;
+  }
+}
+
+export async function waitForDmResults(page, searchTerm, timeoutMs, signal, evidence) {
+  const deadline = Math.min(Date.now() + timeoutMs, evidence.deadline || Infinity);
   let emptySince = 0;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw createAbortError();
-    const state = await getBodyState(page);
+    const inputValue = await performDmSearchFieldAction(page, 'inputValue', undefined, deadline);
+    const state = await getBodyState(page, getRemainingSearchTimeout(deadline));
     const observedAt = Date.now();
     if (state.explicitlyEmpty) {
       if (!emptySince) emptySince = observedAt;
@@ -309,7 +337,6 @@ async function waitForDmResults(page, searchTerm, timeoutMs, signal, evidence) {
       emptySince = 0;
     }
     if (!state.loading) {
-      const inputValue = await page.locator(SEARCH_SELECTOR).first().inputValue().catch(() => '');
       const results = await extractDmPageResults(page, searchTerm);
       const signatureAfter = await getPageSignature(page);
       const decision = evaluateDmGridEvidence({
@@ -337,7 +364,7 @@ async function waitForDmResults(page, searchTerm, timeoutMs, signal, evidence) {
       }
       if (decision.status === 'empty') return { results: [], explicitlyEmpty: true };
     }
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(Math.min(250, Math.max(0, deadline - Date.now())));
   }
   return { results: [], explicitlyEmpty: false };
 }
@@ -393,13 +420,13 @@ async function waitForDmPageTransition(page, searchTerm, signatureBefore, seenSi
       seenSignatures
     });
     if (decision.status === 'ready') return { signature: signatureAfter, results };
-    if (decision.status === 'repeated') return null;
+    if (decision.status === 'repeated') throw createPlaywrightError('PLAYWRIGHT_PAGINATION_INCOMPLETE', 'DM pagination returned a repeated product grid.');
     await page.waitForTimeout(150);
   }
-  return null;
+  throw createPlaywrightError('PLAYWRIGHT_PAGINATION_INCOMPLETE', 'DM next page did not confirm a stable product grid transition.');
 }
 
-async function collectAllPages(page, searchTerm, signal, options = {}) {
+export async function collectAllPages(page, searchTerm, signal, options = {}) {
   const results = [];
   const seenEans = new Set();
   const seenSignatures = new Set();
@@ -412,7 +439,11 @@ async function collectAllPages(page, searchTerm, signal, options = {}) {
   for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
     if (signal?.aborted) throw createAbortError();
     const currentSignature = await getPageSignature(page);
-    if (seenSignatures.has(currentSignature)) break;
+    if (seenSignatures.has(currentSignature)) {
+      const error = createPlaywrightError('PLAYWRIGHT_PAGINATION_INCOMPLETE', 'DM pagination repeated a product grid.');
+      error.partialResults = results;
+      throw error;
+    }
     seenSignatures.add(currentSignature);
     const pageResults = await extractDmPageResults(page, searchTerm);
     for (const result of pageResults) {
@@ -424,15 +455,18 @@ async function collectAllPages(page, searchTerm, signal, options = {}) {
     const nextButton = await findEnabledNextButton(page);
     if (!nextButton) break;
     if (pageNumber === maxPages) {
-      throw createPlaywrightError(
+      const error = createPlaywrightError(
         'PLAYWRIGHT_PAGINATION_LIMIT',
         `DM pagination exceeded the configured limit of ${maxPages} pages.`
       );
+      error.partialResults = results;
+      throw error;
     }
 
     const signatureBefore = await getPageSignature(page);
     await nextButton.click();
-    const transition = await waitForDmPageTransition(
+    try {
+      await waitForDmPageTransition(
       page,
       searchTerm,
       signatureBefore,
@@ -440,7 +474,10 @@ async function collectAllPages(page, searchTerm, signal, options = {}) {
       signal,
       pageTimeoutMs
     );
-    if (!transition) break;
+    } catch (error) {
+      error.partialResults = results;
+      throw error;
+    }
   }
 
   return results;
@@ -484,7 +521,7 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
       throw createPlaywrightError('PLAYWRIGHT_UNAVAILABLE', 'playwright-core is not installed.', cause);
     }
 
-    const userDataDir = await resolveUserDataDir(options.userDataDir);
+    const userDataDir = path.join(await resolveUserDataDir(options.userDataDir), getConnectorSessionIdentity(4, params));
     try {
       context = await chromium.launchPersistentContext(userDataDir, {
         channel,
@@ -544,7 +581,7 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
       );
     }
 
-    const searchInput = await loginIfNeeded(page, params, pageTimeoutMs, signal);
+    await loginIfNeeded(page, params, pageTimeoutMs, signal);
     const traceMode = String(environment.DM_PLAYWRIGHT_TRACE || 'on-failure').toLowerCase();
     if (traceMode !== 'off') {
       await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
@@ -554,14 +591,16 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
     let searchState = { results: [], explicitlyEmpty: false };
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (signal?.aborted) throw createAbortError();
-      await searchInput.fill('');
-      await page.waitForTimeout(250);
+      const searchDeadline = Date.now() + Math.min(searchTimeoutMs, pageTimeoutMs);
+      await performDmSearchFieldAction(page, 'fill', '', searchDeadline);
+      await page.waitForTimeout(Math.min(250, getRemainingSearchTimeout(searchDeadline)));
       const signatureBefore = await getPageSignature(page);
-      await searchInput.fill(params.searchTerm);
+      await performDmSearchFieldAction(page, 'fill', params.searchTerm, searchDeadline);
       const submittedAt = Date.now();
       activeSearchTerm = params.searchTerm;
-      await searchInput.press('Enter');
+      await performDmSearchFieldAction(page, 'press', 'Enter', searchDeadline);
       searchState = await waitForDmResults(page, params.searchTerm, searchTimeoutMs, signal, {
+        deadline: searchDeadline,
         signatureBefore,
         submittedAt,
         networkFailureAt: () => lastNetworkFailure.at,

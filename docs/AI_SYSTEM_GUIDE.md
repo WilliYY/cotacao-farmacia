@@ -7,8 +7,8 @@ This guide provides a comprehensive technical overview of the **Cotador Intelige
 ## 🏗️ System Architecture & Stack
 
 The application is structured as a Desktop application powered by **Electron** on the backend and **React** (built with **Vite**) on the frontend. It is designed to work in two modes:
-1.  **Local Desktop Mode:** Standalone deployment running offline, using local **SQLite** database storage.
-2.  **Server Mode:** Web or networked server deployment using a remote **PostgreSQL** database.
+1.  **Local Desktop Mode:** Electron with local **SQLite** storage; supplier searches require access to the live portals or local Santa Cruz application.
+2.  **PostgreSQL Storage Mode:** The same Electron application using a configured **PostgreSQL** database. This is not an HTTP server. A PostgreSQL connection failure stops initialization instead of silently opening another SQLite database.
 
 ```mermaid
 graph TD
@@ -125,6 +125,18 @@ erDiagram
 ---
 
 ## ⚙️ Core Engines & Algorithms
+
+### Reliability contracts (2026-10-09)
+- SQLite schema upgrades are transactional, inspect each missing column, verify the resulting schema and record `user_version=1`. Migration errors stop startup. Legacy capture timestamps derive from the original quotation date; unknown dates remain unknown.
+- Only normal startup, after acquiring the single-instance lock, calls `recoverInterruptedQuotes()`. Quotations left `processing` and their still-`pending` items become `interrupted`; previously captured offers and completed items remain available. Diagnostic runs do not perform this recovery.
+- All renderer IPC handlers validate the exact application window, main frame and URL, wait for database initialization and recheck the sender. Bulk credential status exposes configuration flags; credential values are returned only to the settings request. Santa Cruz accepts an absolute Windows executable path; web suppliers accept HTTP/HTTPS URLs.
+- Explicit conflicting administration routes (such as nasal versus injectable) block pharmaceutical matching even when concentration and generic presentation agree.
+- Manual review accepts only supported editable fields. Changed prices must be finite and positive; changed quantities must be positive safe integers. Notes/rejection may retain an invalid historical number, which never becomes recommendable. An explicit approval preserves price-outlier evidence while allowing an otherwise valid offer.
+- Profarma requires the literal `Preço Final` column and a positive monetary value. Percentage/discount columns never supply a fallback price. Pagination repetition, unconfirmed transitions and remaining pages beyond the limit fail the source instead of recommending from a partial search.
+- Santa Cruz's complete grid scan uses twice the configured result-wait time, bounded between 15 and 120 seconds (90 seconds by default). It still requires full row coverage and confirmed stock; incomplete captures never enter the ranking.
+- Supplier browser identities include login URL, account, client code and password through a digest, so changed credentials start a separate session. Local diagnostic HTML removes form values and redacts supplied credentials; authenticated diagnostics remain local and outside Git.
+- DM Playwright search actions use the remaining deadline. If the search field disappears after navigation, the source fails with `PLAYWRIGHT_LAYOUT_CHANGED` instead of swallowing locator timeouts and retrying blindly. The local installation uses the Electron engine after a successful live check; Playwright remains opt-in.
+- Cancellation keeps the UI busy until connector cleanup completes. Quitting during a quotation first cancels the run and waits for cleanup. Production HTML has a Content Security Policy; external navigation and new windows from the main application are blocked.
 
 ### 1. Normalization Parser (`parser.js`)
 Extracts structured terms from unstructured text lines using regular expressions and dictionary matching:

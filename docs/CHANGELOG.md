@@ -2,6 +2,20 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.9.1] - 2026-10-09
+
+- Corrigidos conflitos de via farmacêutica, captura do preço final da Profarma, estoque desconhecido da Santa Cruz e paginação incompleta dos portais.
+- Revisão manual valida preço/quantidade, recalcula auditoria e ranking, preserva aprovação de outlier válido e permite anotar/rejeitar falhas sem inventar preço.
+- Migrações SQLite transacionais, sem falhas silenciosas; PostgreSQL falha explicitamente sem trocar de banco. Datas históricas não são atualizadas para o momento da migração.
+- Inicialização normal recupera cotações interrompidas, preservando ofertas capturadas. IPC aguarda o banco e valida janela, frame, URL, fornecedores, IDs e campos editáveis.
+- Mantida a portabilidade das credenciais locais `plain:`. Troca de credenciais renova a identidade da sessão; diagnósticos HTML removem valores de formulários. Santa Cruz mantém seu contrato de caminho local `.exe`.
+- Cancelamento e fechamento aguardam a limpeza dos conectores; produção recebe CSP e bloqueio de navegação externa. Corrigida a assinatura de cancelamento do listener de atualização na interface.
+- Adicionadas regressões de dados, conectores e IPC à suíte padrão. Atualizada `shell-quote` para 1.11.0 mediante override, mantendo `tar` em 7.5.22.
+- Electron fixado em 43.5.0, na mesma série major, para incorporar correções de segurança e estabilidade do runtime.
+- Diagnóstico real confirmou ANB, Profarma e DM via Electron. A configuração local da DM voltou a `electron`; Playwright detecta campo desaparecido/navegação incompatível sem absorver timeout nem repetir cegamente.
+- Santa Cruz: ampliada a margem da varredura completa para 90 segundos por padrão, limitada a 120 segundos e à configuração de espera; cobertura integral e bloqueio de preços parciais preservados.
+- Validação final: 218/218 testes, build e parser PowerShell aprovados; lint sem erros. Electron e `main.js` validados em SQLite isolado; consultas reais aprovadas nos quatro fornecedores, com banco principal preservado.
+
 ## [1.9.0] - 2026-08-23
 
 ### Playwright incremental na DM Paraná

@@ -265,6 +265,21 @@ export function presentationsMatch(queryPresentation, resultPresentation, contex
   const result = normalizePharmaceuticalText(resultPresentation);
   const queryContext = normalizePharmaceuticalText(`${queryPresentation} ${context.queryText || ''}`);
   const resultContext = normalizePharmaceuticalText(`${resultPresentation} ${context.resultText || ''}`);
+  const routes = [
+    /\b(?:nasal|intranasal)\b/,
+    /\b(?:injetavel|injet|intravenos[ao]|intramuscular|subcutane[ao])\b/,
+    /\b(?:oral|via oral)\b/,
+    /\b(?:oftalmic[ao]|ocular|colirio)\b/,
+    /\b(?:otologic[ao]|otica|auricular)\b/,
+    /\b(?:topic[ao]|cutane[ao]|dermatologic[ao])\b/,
+    /\b(?:vaginal|intravaginal)\b/,
+    /\b(?:retal)\b/,
+    /\b(?:inalatori[ao]|inalacao|pulmonar)\b/
+  ];
+  const queryRoutes = routes.map(route => route.test(queryContext));
+  const resultRoutes = routes.map(route => route.test(resultContext));
+  if (queryRoutes.some(Boolean) && resultRoutes.some(Boolean) &&
+      queryRoutes.some((present, index) => present !== resultRoutes[index])) return false;
   const queryIsExtendedRelease = containsAny(queryContext, EXTENDED_RELEASE_PRESENTATIONS);
   const resultIsExtendedRelease = containsAny(resultContext, EXTENDED_RELEASE_PRESENTATIONS);
   if (queryIsExtendedRelease !== resultIsExtendedRelease) return false;

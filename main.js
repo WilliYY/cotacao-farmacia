@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { execFile } from 'child_process';
@@ -25,13 +25,22 @@ import {
   getSupplierIdByName,
   getLearnedCorrections,
   recordQueryCorrection,
-  closeDatabase
+  closeDatabase,
+  recoverInterruptedQuotes
 } from './src/lib/database.js';
 import { getQuoteTimeoutMs, isTimeoutFailure, processQuoteQuery } from './src/lib/recommendation.js';
 import { analyzeQuoteBatch, deriveApprovedCorrection, INPUT_STATUS } from './src/lib/search-intelligence.js';
 import { generateExcelBuffer } from './src/lib/exporter.js';
 import { logger } from './src/lib/logger.js';
 import { createQuoteRunCoordinator } from './src/lib/quote-run-coordinator.js';
+import {
+  createTrustedIpcHandler,
+  isAllowedApplicationUrl,
+  summarizeSupplierCredentials,
+  validatePositiveId,
+  validateQuoteInput,
+  validateSupplierCredentials
+} from './src/lib/ipc-security.js';
 import { getSantaCruzStatus, prepareSantaCruz } from './src/connectors/real/santacruz-real.js';
 import {
   getSupplierFailureThreshold,
@@ -44,6 +53,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow = null;
+let mainWindowSourceUrl = '';
+let quittingAfterQuote = false;
+let resolveBackendReady;
+let rejectBackendReady;
+const backendReady = new Promise((resolve, reject) => {
+  resolveBackendReady = resolve;
+  rejectBackendReady = reject;
+});
+backendReady.catch(() => {});
 let updateCheckInProgress = false;
 let updateCheckIntervalId = null;
 const isLiveDiagnostic = process.argv.includes('--live-diagnostic');
@@ -209,12 +227,20 @@ function createWindow() {
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 
   if (devServerUrl) {
+    mainWindowSourceUrl = new URL(devServerUrl).href;
     mainWindow.loadURL(devServerUrl);
   } else if (fs.existsSync(distPath)) {
+    mainWindowSourceUrl = pathToFileURL(distPath).href;
     mainWindow.loadFile(distPath);
   } else {
+    mainWindowSourceUrl = 'http://localhost:5173/';
     mainWindow.loadURL('http://localhost:5173');
   }
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedApplicationUrl(url, mainWindowSourceUrl)) event.preventDefault();
+  });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   if (process.env.OPEN_DEVTOOLS === 'true') {
     mainWindow.webContents.openDevTools();
@@ -248,6 +274,7 @@ if (!gotSingleInstanceLock) {
 }
 
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return;
   if (isLiveDiagnostic || isSantaCruzPrepareDiagnostic) {
     const diagnosticUserDataPath = app.getPath('userData');
     console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
@@ -286,6 +313,11 @@ app.whenReady().then(async () => {
   const userDataPath = app.getPath('userData');
   console.log('Database path configuration:', process.env.DATABASE_PATH || 'default (AppData)');
   await initDatabaseWithTimeout(userDataPath);
+  const recovered = await recoverInterruptedQuotes();
+  if (recovered.quotes > 0) {
+    logger.warn(`Recovered ${recovered.quotes} interrupted quotation(s), preserving captured results.`);
+  }
+  resolveBackendReady();
 
   updateCheckIntervalId = setInterval(checkGitUpdates, getUpdateCheckIntervalMs());
 
@@ -295,6 +327,7 @@ app.whenReady().then(async () => {
     }
   });
 }).catch(async (error) => {
+  rejectBackendReady(error);
   const message = error?.message || String(error);
   logger.error(`Application startup failed: ${message}`);
   if (!isDiagnosticMode) {
@@ -329,7 +362,22 @@ app.on('will-quit', async () => {
 
 const quoteRunCoordinator = createQuoteRunCoordinator();
 
-ipcMain.handle('cancel-quote', async () => {
+app.on('before-quit', event => {
+  if (!quoteRunCoordinator.hasActiveQuote()) return;
+  event.preventDefault();
+  quittingAfterQuote = true;
+  quoteRunCoordinator.requestCancellation('USER_CANCELLED');
+});
+
+function handleIpc(channel, handler) {
+  ipcMain.handle(channel, createTrustedIpcHandler(handler, {
+    getWindow: () => mainWindow,
+    getAllowedUrl: () => mainWindowSourceUrl,
+    ready: backendReady
+  }));
+}
+
+handleIpc('cancel-quote', async () => {
   const cancellation = quoteRunCoordinator.requestCancellation('USER_CANCELLED');
   if (!cancellation.accepted) {
     const message = cancellation.reason === 'QUOTE_FINALIZING'
@@ -342,11 +390,12 @@ ipcMain.handle('cancel-quote', async () => {
 });
 
 // IPC Handler: Run Quote Process
-ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
+handleIpc('run-quote', async (event, rawTextList, activeSuppliers) => {
   let quoteId = null;
   let quoteController = null;
   let quoteTimeoutId = null;
   try {
+    ({ rawTextList, activeSuppliers } = validateQuoteInput(rawTextList, activeSuppliers));
     quoteController = new AbortController();
     if (!quoteRunCoordinator.start(quoteController)) {
       throw new Error('Cotacao anterior ainda esta encerrando. Aguarde a limpeza das distribuidoras.');
@@ -559,11 +608,12 @@ ipcMain.handle('run-quote', async (event, rawTextList, activeSuppliers) => {
   } finally {
     if (quoteTimeoutId) clearTimeout(quoteTimeoutId);
     quoteRunCoordinator.finish(quoteController);
+    if (quittingAfterQuote && !quoteRunCoordinator.hasActiveQuote()) app.quit();
   }
 });
 
 // IPC Handler: Get History
-ipcMain.handle('get-history', async () => {
+handleIpc('get-history', async () => {
   try {
     return await getQuotes();
   } catch (error) {
@@ -573,9 +623,9 @@ ipcMain.handle('get-history', async () => {
 });
 
 // IPC Handler: Get Quote Details
-ipcMain.handle('get-quote-details', async (event, quoteId) => {
+handleIpc('get-quote-details', async (event, quoteId) => {
   try {
-    return await getQuoteDetails(quoteId);
+    return await getQuoteDetails(validatePositiveId(quoteId));
   } catch (error) {
     console.error('Error getting quote details:', error);
     throw error;
@@ -583,8 +633,9 @@ ipcMain.handle('get-quote-details', async (event, quoteId) => {
 });
 
 // IPC Handler: Update Result Status
-ipcMain.handle('update-result', async (event, resultId, fields) => {
+handleIpc('update-result', async (event, resultId, fields) => {
   try {
+    resultId = validatePositiveId(resultId);
     const quoteItemId = await updateQuoteResult(resultId, fields);
     const dbInstance = getDb();
     const item = await dbInstance.get(
@@ -610,6 +661,7 @@ ipcMain.handle('update-result', async (event, resultId, fields) => {
         );
       }
     }
+    if (!item) throw new Error('Item da cotacao nao encontrado.');
     return await getQuoteDetails(item.quoteId);
   } catch (error) {
     console.error('Error updating result:', error);
@@ -618,8 +670,9 @@ ipcMain.handle('update-result', async (event, resultId, fields) => {
 });
 
 // IPC Handler: Export to Excel
-ipcMain.handle('export-excel', async (event, quoteId) => {
+handleIpc('export-excel', async (event, quoteId) => {
   try {
+    quoteId = validatePositiveId(quoteId);
     const quoteData = await getQuoteDetails(quoteId);
     if (!quoteData) {
       throw new Error('Quote data not found');
@@ -648,7 +701,7 @@ ipcMain.handle('export-excel', async (event, quoteId) => {
 });
 
 // IPC Handler: Get Popular Searches
-ipcMain.handle('get-popular-searches', async () => {
+handleIpc('get-popular-searches', async () => {
   try {
     return await getPopularSearches();
   } catch (error) {
@@ -658,8 +711,12 @@ ipcMain.handle('get-popular-searches', async () => {
 });
 
 // IPC Handlers for Supplier Credentials
-ipcMain.handle('save-supplier-credentials', async (event, supplierId, url, username, password, clientCode) => {
+handleIpc('save-supplier-credentials', async (event, supplierId, url, username, password, clientCode) => {
   try {
+    if (quoteRunCoordinator.hasActiveQuote()) {
+      throw new Error('Aguarde o encerramento da cotacao antes de alterar credenciais.');
+    }
+    supplierId = validateSupplierCredentials(supplierId, url, username, password, clientCode ?? '');
     logger.info(`Saving supplier credentials for supplierId: ${supplierId}`);
     await saveSupplierCredentials(supplierId, url, username, password, clientCode);
     return { success: true };
@@ -669,8 +726,10 @@ ipcMain.handle('save-supplier-credentials', async (event, supplierId, url, usern
   }
 });
 
-ipcMain.handle('get-supplier-credentials', async (event, supplierId) => {
+handleIpc('get-supplier-credentials', async (event, supplierId) => {
   try {
+    supplierId = validatePositiveId(supplierId);
+    if (supplierId > 4) throw new Error('Distribuidora invalida.');
     return await getSupplierCredentials(supplierId);
   } catch (error) {
     logger.error(`Failed to get supplier credentials for supplierId: ${supplierId}: ${error.message}`);
@@ -678,16 +737,16 @@ ipcMain.handle('get-supplier-credentials', async (event, supplierId) => {
   }
 });
 
-ipcMain.handle('get-all-supplier-credentials', async () => {
+handleIpc('get-all-supplier-credentials', async () => {
   try {
-    return await getAllSupplierCredentials();
+    return summarizeSupplierCredentials(await getAllSupplierCredentials());
   } catch (error) {
     logger.error(`Failed to get all supplier credentials: ${error.message}`);
     throw error;
   }
 });
 
-ipcMain.handle('get-santacruz-status', async () => {
+handleIpc('get-santacruz-status', async () => {
   try {
     return await getSantaCruzStatus();
   } catch (error) {
@@ -702,7 +761,7 @@ ipcMain.handle('get-santacruz-status', async () => {
   }
 });
 
-ipcMain.handle('prepare-santacruz', async () => {
+handleIpc('prepare-santacruz', async () => {
   try {
     return await prepareSantaCruz();
   } catch (error) {
@@ -717,4 +776,5 @@ ipcMain.handle('prepare-santacruz', async () => {
   }
 });
 
-ipcMain.handle('get-update-status', () => readUpdateStatus());
+handleIpc('get-update-status', () => readUpdateStatus());
+handleIpc('ping', () => 'pong');

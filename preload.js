@@ -7,7 +7,9 @@ contextBridge.exposeInMainWorld('api', {
   updateResult: (resultId, fields) => ipcRenderer.invoke('update-result', resultId, fields),
   exportExcel: (quoteId) => ipcRenderer.invoke('export-excel', quoteId),
   onGitUpdateAvailable: (callback) => {
-    ipcRenderer.on('git-update-available', (event, data) => callback(data));
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('git-update-available', listener);
+    return () => ipcRenderer.removeListener('git-update-available', listener);
   },
   onQuoteProgress: (callback) => {
     const listener = (event, data) => callback(data);

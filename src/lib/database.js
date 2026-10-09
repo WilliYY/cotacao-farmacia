@@ -5,6 +5,8 @@ import fs from 'fs';
 import { logger } from './logger.js';
 import { isValidST, getSTPriority } from './st-rules.js';
 import { buildQuoteSummary } from './quote-summary.js';
+import { auditQuoteResult, applyPriceOutlierAudit } from './quote-auditor.js';
+import { parseSearchQuery } from './parser.js';
 
 let dbInstance = null;
 let isPostgres = false;
@@ -143,8 +145,10 @@ export async function initDatabase(userDataPath) {
       client.release();
     } catch (err) {
       logger.error(`PostgreSQL connection failed: ${err.message}`);
-      logger.warn('Falling back to SQLite due to PostgreSQL error.');
-      isPostgres = false;
+      await pgPool?.end();
+      pgPool = null;
+      dbInstance = null;
+      throw err;
     }
   }
 
@@ -399,163 +403,62 @@ export async function initDatabase(userDataPath) {
     `);
   }
 
-  // Schema migrations checking
+  // Check each column independently: older installations can have partial migrations.
+  const migrations = {
+    QuoteResult: [
+      ['reviewStatus', "TEXT DEFAULT 'PENDENTE'"], ['notes', 'TEXT'], ['confidence', 'REAL'],
+      ['capturedAt', isPostgres ? 'TIMESTAMP' : 'DATETIME'],
+      ['ean', 'TEXT'], ['packaging', 'TEXT'], ['quantity', 'INTEGER DEFAULT 1'], ['unitPrice', 'REAL'],
+      ['auditStatus', "TEXT DEFAULT 'OK'"], ['auditSummary', 'TEXT'],
+      ['priceSourceLabel', 'TEXT'], ['liveFailureReason', 'TEXT'], ['failureCode', 'TEXT'],
+      ['timedOut', 'INTEGER DEFAULT 0'], ['searchFallback', 'TEXT'],
+      ['browserEngine', 'TEXT'], ['browserEngineFallback', 'TEXT'],
+      ['farmaciaPopular', 'INTEGER DEFAULT 0'], ['farmaciaPopularCategory', 'TEXT'],
+      ['farmaciaPopularCoverage', 'TEXT'], ['farmaciaPopularNotes', 'TEXT']
+    ],
+    QuoteItem: [
+      ['ean', 'TEXT'], ['quantity', 'INTEGER DEFAULT 1'], ['confidenceStatus', 'TEXT'],
+      ['refinementSuggestion', 'TEXT'], ['searchText', 'TEXT'],
+      ['correctionType', 'TEXT'], ['correctionMessage', 'TEXT']
+    ]
+  };
+  // PostgreSQL migrations run without a pool-wide BEGIN (queries may use different clients).
+  if (!isPostgres) await dbInstance.exec('BEGIN IMMEDIATE');
   try {
-    let hasReviewStatus = true;
-    if (isPostgres) {
-      const colCheck = await dbInstance.all(`
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name='quoteresult' AND column_name='reviewstatus'
-      `);
-      hasReviewStatus = colCheck.length > 0;
-    } else {
-      const resColumns = await dbInstance.all("PRAGMA table_info(QuoteResult)");
-      hasReviewStatus = resColumns.some(c => c.name === 'reviewStatus');
-    }
-
-    if (!hasReviewStatus) {
-      logger.info('Migrating tables to Phase 2 schema...');
-      await dbInstance.exec(`
-        ALTER TABLE QuoteResult ADD COLUMN reviewStatus TEXT DEFAULT 'PENDENTE';
-        ALTER TABLE QuoteResult ADD COLUMN notes TEXT;
-        ALTER TABLE QuoteResult ADD COLUMN confidence REAL;
-        ALTER TABLE QuoteResult ADD COLUMN capturedAt DATETIME DEFAULT CURRENT_TIMESTAMP;
-      `);
-    }
-
-    let hasEan = true;
-    if (isPostgres) {
-      const colCheck = await dbInstance.all(`
-        SELECT column_name 
-        FROM information_schema.columns 
-        WHERE table_name='quoteresult' AND column_name='ean'
-      `);
-      hasEan = colCheck.length > 0;
-    } else {
-      const resColumns = await dbInstance.all("PRAGMA table_info(QuoteResult)");
-      hasEan = resColumns.some(c => c.name === 'ean');
-    }
-
-    if (!hasEan) {
-      logger.info('Migrating tables to granular EAN/Packaging schema...');
-      await dbInstance.exec(`
-        ALTER TABLE QuoteResult ADD COLUMN ean TEXT;
-        ALTER TABLE QuoteResult ADD COLUMN packaging TEXT;
-        ALTER TABLE QuoteResult ADD COLUMN quantity INTEGER DEFAULT 1;
-        ALTER TABLE QuoteResult ADD COLUMN unitPrice REAL;
-        
-        ALTER TABLE QuoteItem ADD COLUMN ean TEXT;
-        ALTER TABLE QuoteItem ADD COLUMN quantity INTEGER DEFAULT 1;
-      `);
-      logger.info('Granular database migration completed successfully.');
-    }
-
-    let hasConfidenceStatus = true;
-    if (isPostgres) {
-      const colCheck = await dbInstance.all(`
-        SELECT column_name 
-        FROM information_schema.columns 
-        WHERE table_name='quoteitem' AND column_name='confidencestatus'
-      `);
-      hasConfidenceStatus = colCheck.length > 0;
-    } else {
-      const resColumns = await dbInstance.all("PRAGMA table_info(QuoteItem)");
-      hasConfidenceStatus = resColumns.some(c => c.name === 'confidenceStatus');
-    }
-
-    if (!hasConfidenceStatus) {
-      logger.info('Migrating tables to vague description refinement schema...');
-      await dbInstance.exec(`
-        ALTER TABLE QuoteItem ADD COLUMN confidenceStatus TEXT;
-        ALTER TABLE QuoteItem ADD COLUMN refinementSuggestion TEXT;
-      `);
-      logger.info('Vague description database migration completed successfully.');
-    }
-
-    let hasAuditStatus = true;
-    if (isPostgres) {
-      const colCheck = await dbInstance.all(`
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name='quoteresult' AND column_name='auditstatus'
-      `);
-      hasAuditStatus = colCheck.length > 0;
-    } else {
-      const resColumns = await dbInstance.all("PRAGMA table_info(QuoteResult)");
-      hasAuditStatus = resColumns.some(c => c.name === 'auditStatus');
-    }
-
-    if (!hasAuditStatus) {
-      logger.info('Migrating tables to quote audit schema...');
-      await dbInstance.exec(`
-        ALTER TABLE QuoteResult ADD COLUMN auditStatus TEXT DEFAULT 'OK';
-        ALTER TABLE QuoteResult ADD COLUMN auditSummary TEXT;
-      `);
-      logger.info('Quote audit database migration completed successfully.');
-    }
-
-    let hasSearchText = true;
-    if (isPostgres) {
-      const colCheck = await dbInstance.all(`
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name='quoteitem' AND column_name='searchtext'
-      `);
-      hasSearchText = colCheck.length > 0;
-    } else {
-      const itemColumns = await dbInstance.all("PRAGMA table_info(QuoteItem)");
-      hasSearchText = itemColumns.some(c => c.name === 'searchText');
-    }
-
-    if (!hasSearchText) {
-      logger.info('Migrating tables to contextual query intelligence schema...');
-      await dbInstance.exec(`
-        ALTER TABLE QuoteItem ADD COLUMN searchText TEXT;
-        ALTER TABLE QuoteItem ADD COLUMN correctionType TEXT;
-        ALTER TABLE QuoteItem ADD COLUMN correctionMessage TEXT;
-      `);
-      logger.info('Contextual query intelligence migration completed successfully.');
-    }
-
-    const evidenceColumnDefinitions = [
-      ['priceSourceLabel', 'TEXT'],
-      ['liveFailureReason', 'TEXT'],
-      ['failureCode', 'TEXT'],
-      ['timedOut', 'INTEGER DEFAULT 0'],
-      ['searchFallback', 'TEXT'],
-      ['browserEngine', 'TEXT'],
-      ['browserEngineFallback', 'TEXT'],
-      ['farmaciaPopular', 'INTEGER DEFAULT 0'],
-      ['farmaciaPopularCategory', 'TEXT'],
-      ['farmaciaPopularCoverage', 'TEXT'],
-      ['farmaciaPopularNotes', 'TEXT']
-    ];
-    let existingEvidenceColumns;
-    if (isPostgres) {
-      const colCheck = await dbInstance.all(`
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name='quoteresult'
-      `);
-      existingEvidenceColumns = new Set(colCheck.map(column => String(column.column_name).toLowerCase()));
-    } else {
-      const resultColumns = await dbInstance.all("PRAGMA table_info(QuoteResult)");
-      existingEvidenceColumns = new Set(resultColumns.map(column => String(column.name).toLowerCase()));
-    }
-
-    const missingEvidenceColumns = evidenceColumnDefinitions.filter(
-      ([name]) => !existingEvidenceColumns.has(name.toLowerCase())
-    );
-    if (missingEvidenceColumns.length > 0) {
-      logger.info('Migrating tables to live supplier evidence schema...');
-      for (const [name, definition] of missingEvidenceColumns) {
-        await dbInstance.exec(`ALTER TABLE QuoteResult ADD COLUMN ${name} ${definition}`);
+    for (const [table, definitions] of Object.entries(migrations)) {
+      const columns = isPostgres
+        ? await dbInstance.all('SELECT column_name FROM information_schema.columns WHERE table_name = ?', table.toLowerCase())
+        : await dbInstance.all(`PRAGMA table_info(${table})`);
+      const existing = new Set(columns.map(column => String(column.column_name || column.name).toLowerCase()));
+      for (const [name, definition] of definitions) {
+        if (!existing.has(name.toLowerCase())) {
+          await dbInstance.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+        }
       }
-      logger.info('Live supplier evidence database migration completed successfully.');
+      const verified = isPostgres
+        ? await dbInstance.all('SELECT column_name FROM information_schema.columns WHERE table_name = ?', table.toLowerCase())
+        : await dbInstance.all(`PRAGMA table_info(${table})`);
+      const verifiedNames = new Set(verified.map(column => String(column.column_name || column.name).toLowerCase()));
+      if (definitions.some(([name]) => !verifiedNames.has(name.toLowerCase()))) {
+        throw new Error(`Database schema incomplete: ${table}`);
+      }
+    }
+    // Historical results must not look like freshly captured prices.
+    // Leave the capture date unknown when no historical quote date is available.
+    await dbInstance.exec(`UPDATE QuoteResult SET capturedAt = (
+      SELECT Quote.createdAt FROM QuoteItem JOIN Quote ON Quote.id = QuoteItem.quoteId
+      WHERE QuoteItem.id = QuoteResult.quoteItemId
+    ) WHERE capturedAt IS NULL`);
+    if (!isPostgres) {
+      const version = await dbInstance.get('PRAGMA user_version');
+      if (version.user_version < 1) await dbInstance.exec('PRAGMA user_version = 1');
+      await dbInstance.exec('COMMIT');
     }
   } catch (err) {
+    if (!isPostgres) await dbInstance.exec('ROLLBACK');
     logger.error(`Database migration checking failed: ${err.message}`);
+    await closeDatabase();
+    throw err;
   }
 
   // Insert default suppliers
@@ -720,6 +623,35 @@ export async function updateQuoteStatus(quoteId, status) {
   );
 }
 
+// Invoke only after the normal startup has acquired single-instance ownership.
+// Diagnostic initialization must never alter historical execution states.
+export async function recoverInterruptedQuotes() {
+  const database = getDb();
+  const connection = isPostgres ? await pgPool.connect() : null;
+  const execute = connection
+    ? (sql) => connection.query(sql)
+    : (sql) => database.exec(sql);
+  const count = async (sql) => connection
+    ? Number((await connection.query(sql)).rows[0].count)
+    : Number((await database.get(sql)).count);
+  let transactionStarted = false;
+  try {
+    await execute(isPostgres ? 'BEGIN' : 'BEGIN IMMEDIATE');
+    transactionStarted = true;
+    const quotes = await count("SELECT COUNT(*) AS count FROM Quote WHERE status = 'processing'");
+    const items = await count("SELECT COUNT(*) AS count FROM QuoteItem WHERE status = 'pending' AND quoteId IN (SELECT id FROM Quote WHERE status = 'processing')");
+    await execute("UPDATE QuoteItem SET status = 'interrupted' WHERE status = 'pending' AND quoteId IN (SELECT id FROM Quote WHERE status = 'processing')");
+    await execute("UPDATE Quote SET status = 'interrupted' WHERE status = 'processing'");
+    await execute('COMMIT');
+    return { quotes, items };
+  } catch (error) {
+    if (transactionStarted) await execute('ROLLBACK');
+    throw error;
+  } finally {
+    connection?.release();
+  }
+}
+
 export async function createQuoteItem(quoteId, rawText, parsed, status = 'pending', intelligence = {}) {
   const result = await dbInstance.run(
     'INSERT INTO QuoteItem (quoteId, rawText, normalizedName, dosage, presentation, ean, quantity, searchText, correctionType, correctionMessage, status, confidenceStatus, refinementSuggestion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -870,29 +802,40 @@ export async function getQuoteDetails(quoteId) {
 }
 
 export async function updateQuoteResult(resultId, fields) {
-  logger.info(`Updating QuoteResult #${resultId} with fields: ${JSON.stringify(fields)}`);
-  
-  const result = await dbInstance.get('SELECT quoteItemId, price, quantity FROM QuoteResult WHERE id = ?', resultId);
-  if (!result) {
-    throw new Error(`QuoteResult with ID ${resultId} not found.`);
+  const editableFields = new Set([
+    'price', 'quantity', 'stStatus', 'availability', 'reviewStatus', 'notes', 'ean', 'packaging'
+  ]);
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+    throw new Error('Campos de revisao invalidos');
   }
-  
+  for (const [key, value] of Object.entries(fields)) {
+    if (!editableFields.has(key)) throw new Error(`Campo nao editavel: ${key}`);
+    if (key !== 'price' && key !== 'quantity' && typeof value !== 'string') {
+      throw new Error(`Campo invalido: ${key}`);
+    }
+  }
+  if (fields.reviewStatus !== undefined && !['PENDENTE', 'PRECISA_REVISAR', 'APROVADO', 'REJEITADO'].includes(fields.reviewStatus)) {
+    throw new Error('Campo invalido: reviewStatus');
+  }
+  const result = await dbInstance.get('SELECT quoteItemId, price, quantity FROM QuoteResult WHERE id = ?', resultId);
+  if (!result) throw new Error(`QuoteResult with ID ${resultId} not found.`);
   const { quoteItemId } = result;
-
-  const newPrice = fields.price !== undefined ? fields.price : result.price;
-  const newQty = fields.quantity !== undefined ? fields.quantity : result.quantity;
-  const unitPrice = newPrice ? (newPrice / (newQty || 1)) : 0;
-  
-  fields.unitPrice = unitPrice;
-
-  const keys = Object.keys(fields);
-  const values = Object.values(fields);
-  const setString = keys.map(k => `${k} = ?`).join(', ');
-
+  const price = fields.price !== undefined ? fields.price : result.price;
+  const quantity = fields.quantity !== undefined ? fields.quantity : result.quantity;
+  if (fields.price !== undefined && fields.price !== result.price &&
+      (typeof price !== 'number' || !Number.isFinite(price) || price <= 0)) {
+    throw new Error('Preco deve ser finito e maior que zero');
+  }
+  if (fields.quantity !== undefined && fields.quantity !== result.quantity &&
+      (!Number.isSafeInteger(quantity) || quantity <= 0)) {
+    throw new Error('Quantidade deve ser inteira e maior que zero');
+  }
+  const unitPrice = price / quantity;
+  const update = { ...fields, unitPrice: Number.isFinite(unitPrice) ? unitPrice : null };
+  const keys = Object.keys(update);
   await dbInstance.run(
-    `UPDATE QuoteResult SET ${setString} WHERE id = ?`,
-    ...values,
-    resultId
+    `UPDATE QuoteResult SET ${keys.map(key => `${key} = ?`).join(', ')} WHERE id = ?`,
+    ...Object.values(update), resultId
   );
 
   await recalculateQuoteItemRecommendations(quoteItemId);
@@ -905,7 +848,19 @@ export async function recalculateQuoteItemRecommendations(quoteItemId) {
 
   const results = await dbInstance.all('SELECT * FROM QuoteResult WHERE quoteItemId = ?', quoteItemId);
   
-  const processed = results.map(res => {
+  const item = await dbInstance.get('SELECT * FROM QuoteItem WHERE id = ?', quoteItemId);
+  const parsed = parseSearchQuery(item?.searchText || item?.rawText || item?.normalizedName || '');
+  const auditedResults = results.map(res => {
+    const audit = auditQuoteResult(parsed, res);
+    const availability = String(res.availability || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const isValidOption = Number.isFinite(res.price) && res.price > 0 &&
+      Number.isSafeInteger(res.quantity) && res.quantity > 0 &&
+      !res.liveFailureReason && !res.failureCode && availability === 'disponivel' &&
+      isValidST(res.stStatus) && res.reviewStatus !== 'REJEITADO' &&
+      (audit.status !== 'BLOQUEADO' || res.reviewStatus === 'APROVADO');
+    return { ...res, isValidOption, unitPrice: Number(res.price) / Number(res.quantity), auditStatus: audit.status, auditSummary: audit.summary };
+  });
+  const processed = applyPriceOutlierAudit(auditedResults).map(res => {
     let isValidOption = false;
     let ignoreReason = '';
     let recStatus = '';
@@ -919,7 +874,12 @@ export async function recalculateQuoteItemRecommendations(quoteItemId) {
     const auditBlocked = res.auditStatus === 'BLOQUEADO' && res.reviewStatus !== 'APROVADO';
     const stValid = isValidST(res.stStatus);
 
-    if (res.reviewStatus === 'REJEITADO') {
+    const numericValid = Number.isFinite(res.price) && res.price > 0 &&
+      Number.isSafeInteger(res.quantity) && res.quantity > 0 && Number.isFinite(res.unitPrice);
+    if (!numericValid || res.liveFailureReason || res.failureCode) {
+      ignoreReason = res.auditSummary || 'Preco ou quantidade invalida';
+      recStatus = 'Precisa revisar cotação';
+    } else if (res.reviewStatus === 'REJEITADO') {
       ignoreReason = 'Rejeitado pelo usuário';
       recStatus = 'Ignorado — rejeitado';
     } else if (auditBlocked) {
@@ -984,11 +944,17 @@ export async function recalculateQuoteItemRecommendations(quoteItemId) {
       `UPDATE QuoteResult SET 
         isValidOption = ?, 
         ignoreReason = ?, 
-        recommendationStatus = ? 
+        recommendationStatus = ?,
+        unitPrice = ?,
+        auditStatus = ?,
+        auditSummary = ?
       WHERE id = ?`,
       res.isValidOption ? 1 : 0,
       res.ignoreReason,
       finalRecStatus,
+      Number.isFinite(res.unitPrice) ? res.unitPrice : null,
+      res.auditStatus,
+      res.auditSummary,
       res.id
     );
   }

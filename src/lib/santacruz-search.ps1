@@ -2383,7 +2383,7 @@ function Invoke-SantaCruzSearchAttempt {
             if ($confirmedEmpty) { break }
 
             if ($freshStableGridObserved) {
-                $scanSeconds = [Math]::Max(15, [Math]::Min(45, $ResultWaitSeconds * 2))
+                $scanSeconds = [Math]::Max(15, [Math]::Min(120, $ResultWaitSeconds * 2))
                 $scanDeadline = [DateTime]::UtcNow.AddSeconds($scanSeconds)
                 $scanResult = Read-AllSantaCruzRowsWithScroll $attemptTable $Columns $scanDeadline
                 if (-not $scanResult.Complete) {
@@ -2480,6 +2480,9 @@ if ($attemptResult.Status -eq "empty") {
 }
 
 $results = @($attemptResult.Results)
+if ($attemptResult.Status -eq "stock-unresolved" -or @($results | Where-Object { $_.stock -eq "estoque desconhecido" }).Count -gt 0) {
+    Complete-SantaCruzSearchResult "stock-unresolved" "A grade da Santa Cruz contem produtos sem estoque comprovado; consulta bloqueada" @() $searchControl $readyWindow $installation
+}
 
 # CRITICAL: The Santa Cruz GUI application window is ALWAYS left OPEN on screen after a search.
 # It is NEVER closed, terminated, or hidden by the automation script so the operator can continue quoting.

@@ -16,7 +16,7 @@
     "diagnose:santacruz:discover": "powershell -NoProfile -ExecutionPolicy Bypass -File src/lib/santacruz-search.ps1 --discover-only",
     "diagnose:santacruz:status": "powershell -NoProfile -ExecutionPolicy Bypass -File src/lib/santacruz-search.ps1 --status-only",
     "package": "electron-builder",
-    "test": "node --test tests/all.test.js tests/dm-browser-engine.test.js",
+    "test": "node --test tests/all.test.js tests/dm-browser-engine.test.js tests/backend-data-regressions.test.js tests/connector-regressions.test.js tests/ipc-regressions.test.js",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -36,7 +36,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "concurrently": "^10.0.3",
-    "electron": "^43.1.0",
+    "electron": "43.5.0",
     "electron-builder": "^26.15.3",
     "oxlint": "^1.71.0",
     "vite": "^8.1.1",
@@ -47,6 +47,7 @@
     "sqlite3@6.0.1": true
   },
   "overrides": {
-    "tar": "7.5.22"
+    "tar": "7.5.22",
+    "shell-quote": "1.11.0"
   }
 }

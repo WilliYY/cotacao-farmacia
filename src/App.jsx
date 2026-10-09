@@ -751,11 +751,7 @@ function App() {
     });
     
     // Register Git update callback
-    if (api.onGitUpdateAvailable) {
-      api.onGitUpdateAvailable((data) => {
-        setUpdateAvailable(data);
-      });
-    }
+    return api.onGitUpdateAvailable?.(data => setUpdateAvailable(data));
   }, []);
 
   useEffect(() => {
@@ -897,7 +893,7 @@ function App() {
         const allCreds = await api.getAllSupplierCredentials();
         const configMap = {};
         allCreds.forEach(c => {
-          if (c.username && c.password) {
+          if (c.configured ?? Boolean(c.username && c.password)) {
             configMap[c.canonicalSupplierId || c.supplierId] = true;
           }
         });
@@ -1055,15 +1051,18 @@ function App() {
   const handleCancelQuote = async () => {
     try {
       if (api?.cancelQuote) {
-        await api.cancelQuote();
+        const response = await api.cancelQuote();
+        if (!response?.success) {
+          console.warn(response?.message || 'A cotação já está encerrando.');
+          return;
+        }
+        setQuoteProgress(previous => previous && ({
+          ...previous,
+          message: 'Cancelamento solicitado. Aguardando o encerramento das distribuidoras.'
+        }));
       }
     } catch (e) {
       console.warn('Erro ao solicitar cancelamento da cotação:', e);
-    } finally {
-      setLoading(false);
-      setQuoteProgress(null);
-      setQuoteStartedAt(null);
-      setQuoteElapsedSeconds(0);
     }
   };
 
@@ -1135,24 +1134,33 @@ function App() {
   // Save manual review edits
   const saveManualReview = async () => {
     if (!editingResult) return;
+    const price = Number(editPrice);
+    const quantity = Number(editQuantity);
+    const priceUnchanged = price === Number(editingResult.price);
+    const quantityUnchanged = quantity === Number(editingResult.quantity ?? 1);
+    if (!Number.isFinite(price) || (price <= 0 && !priceUnchanged) ||
+        ((!Number.isSafeInteger(quantity) || quantity <= 0) && !quantityUnchanged)) {
+      alert('Informe um preço maior que zero e uma quantidade inteira maior que zero.');
+      return;
+    }
     setLoading(true);
     try {
       const updatedQuote = await api.updateResult(editingResult.id, {
-        price: parseFloat(editPrice) || 0,
+        price,
         stStatus: editSTStatus,
         availability: editAvailability,
         reviewStatus: editReviewStatus,
         notes: editNotes,
         ean: editEan,
         packaging: editPackaging,
-        quantity: parseInt(editQuantity, 10) || 1
+        quantity
       });
       setActiveQuote(updatedQuote);
       setEditingResult(null);
       loadHistory();
     } catch (e) {
       console.error(e);
-      alert('Erro ao salvar alteração.');
+      alert(e.message || 'Erro ao salvar alteração.');
     } finally {
       setLoading(false);
     }
@@ -1218,7 +1226,7 @@ function App() {
     activeQuote.items.forEach(item => {
       const results = item.results || [];
       const validFilteredResults = results.filter(res => {
-        const forceVisible = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout', 'cancelled'].includes(item.status);
+        const forceVisible = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout', 'cancelled', 'interrupted'].includes(item.status);
         if (!forceVisible && filterSupplier !== 'All' && res.source !== filterSupplier) return false;
         if (!forceVisible && filterOnlyST && !(res.stStatus === 'COM_ST' || res.stStatus === 'ST_INCLUSO' || res.stStatus === 'ST_SEPARADO')) return false;
         if (!forceVisible && !filterShowIgnored && res.stStatus === 'SEM_ST') return false;
@@ -1847,7 +1855,7 @@ function App() {
                     <h2>Cotação #{activeQuote.id}</h2>
                     <span
                       className={`results-status-dot ${
-                        activeQuote.status === 'cancelled'
+                        ['cancelled', 'interrupted', 'failed'].includes(activeQuote.status)
                           ? 'is-danger'
                           : activeQuote.status === 'completed_with_timeout' || metrics.failedItems > 0
                             ? 'is-warning'
@@ -1883,10 +1891,14 @@ function App() {
               </div>
 
               <div className="results-health" aria-label="Resumo rápido da cotação">
-                <span className={activeQuote.status === 'completed_with_timeout' || activeQuote.status === 'cancelled' || metrics.failedItems > 0 ? 'is-warning' : 'is-success'}>
-                  {activeQuote.status === 'completed_with_timeout' || activeQuote.status === 'cancelled' || metrics.failedItems > 0 ? <CircleAlert size={14} /> : <CheckCircle2 size={14} />}
+                <span className={['completed_with_timeout', 'cancelled', 'interrupted', 'failed'].includes(activeQuote.status) || metrics.failedItems > 0 ? 'is-warning' : 'is-success'}>
+                  {['completed_with_timeout', 'cancelled', 'interrupted', 'failed'].includes(activeQuote.status) || metrics.failedItems > 0 ? <CircleAlert size={14} /> : <CheckCircle2 size={14} />}
                   {activeQuote.status === 'cancelled'
                     ? 'Cotação cancelada'
+                    : activeQuote.status === 'interrupted'
+                      ? 'Cotação interrompida'
+                    : activeQuote.status === 'failed'
+                      ? 'Cotação não concluída'
                     : activeQuote.status === 'completed_with_timeout'
                     ? 'Concluída com resultado parcial'
                     : metrics.failedItems > 0
@@ -1917,6 +1929,15 @@ function App() {
                 <div>
                   <strong>Cotação cancelada pelo usuário</strong>
                   <span>Novas consultas foram interrompidas e os resultados já concluídos foram preservados.</span>
+                </div>
+              </section>
+            )}
+            {activeQuote.status === 'interrupted' && (
+              <section className="quote-timeout-notice" role="status" aria-label="Cotação interrompida">
+                <CircleAlert size={19} aria-hidden="true" />
+                <div>
+                  <strong>Cotação interrompida na execução anterior</strong>
+                  <span>O aplicativo encerrou antes da conclusão. Os resultados capturados foram preservados; inicie uma nova cotação para consultar preços atuais.</span>
                 </div>
               </section>
             )}
@@ -1955,13 +1976,15 @@ function App() {
                   {activeQuote.items
                     .filter(item => item.correctionMessage || item.status !== 'completed')
                     .map(item => {
-                      const isProblem = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout', 'cancelled'].includes(item.status);
+                      const isProblem = ['needs_info', 'not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout', 'cancelled', 'interrupted'].includes(item.status);
                       const statusText = item.status === 'needs_info'
                         ? item.refinementSuggestion || 'Informe mais detalhes para pesquisar.'
                         : item.status === 'not_found'
                           ? 'Não encontrado nas distribuidoras consultadas. Revise nome, dose ou EAN.'
                           : item.status === 'cancelled'
                             ? 'Cotação cancelada. Somente os resultados concluídos antes do cancelamento foram preservados.'
+                          : item.status === 'interrupted'
+                            ? 'A execução anterior foi interrompida. Os resultados existentes foram preservados.'
                           : item.status === 'supplier_timeout'
                             ? 'Tempo limite atingido. Nenhuma fonte respondeu a tempo e nenhum preço antigo foi reutilizado.'
                             : item.status === 'completed_with_timeout'
@@ -2295,7 +2318,7 @@ function App() {
                       }
 
                       const rowClasses = [
-                        ['not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout'].includes(row.itemStatus) ? 'result-row--problem' : '',
+                        ['not_found', 'supplier_error', 'supplier_timeout', 'completed_with_timeout', 'interrupted'].includes(row.itemStatus) ? 'result-row--problem' : '',
                         row.auditStatus === 'BLOQUEADO' ? 'result-row--problem' : '',
                         row.recommendationStatus === 'Melhor preço com ST' ? 'result-row--best' : '',
                         row.recommendationStatus === 'Segunda opção com ST' ? 'result-row--second' : '',
@@ -2401,6 +2424,7 @@ function App() {
                   <input
                     type="number"
                     step="0.01"
+                    min="0.01"
                     value={editPrice}
                     onChange={(e) => setEditPrice(e.target.value)}
                     className="search-textarea"
@@ -2425,6 +2449,8 @@ function App() {
                   <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Qtd. Unidades</label>
                   <input
                     type="number"
+                    min="1"
+                    step="1"
                     value={editQuantity}
                     onChange={(e) => setEditQuantity(e.target.value)}
                     className="search-textarea"
