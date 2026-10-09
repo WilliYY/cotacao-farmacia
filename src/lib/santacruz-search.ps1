@@ -565,7 +565,7 @@ function Find-SantaCruzMainWindowProcess {
 }
 
 function Get-RecentSantaCruzStartupIssue {
-    param([string]$InstallRoot)
+    param([string]$InstallRoot, [Nullable[DateTime]]$Since = $null)
     if (-not $InstallRoot) { return "" }
     $initializerLog = Join-Path $InstallRoot "log\inicializador.log.0"
     if (-not (Test-Path -LiteralPath $initializerLog -PathType Leaf)) { return "" }
@@ -573,8 +573,44 @@ function Get-RecentSantaCruzStartupIssue {
         $logFile = Get-Item -LiteralPath $initializerLog -ErrorAction Stop
         if ($logFile.LastWriteTime -lt (Get-Date).AddMinutes(-20)) { return "" }
         $recentLines = Get-Content -LiteralPath $initializerLog -Tail 160 -ErrorAction Stop
-        if ($recentLines -match '503\s*-\s*Service Unavailable') {
-            return "O atualizador da Santa Cruz respondeu 503 Service Unavailable"
+        $cutoff = $Since
+        if ($null -eq $cutoff) {
+            $processVariable = Get-Variable -Name existingProcess -ErrorAction SilentlyContinue
+            if ($processVariable -and $processVariable.Value) {
+                try { $cutoff = $processVariable.Value.StartTime } catch {}
+            }
+        }
+        if ($null -ne $cutoff) {
+            if ($cutoff.Kind -eq [DateTimeKind]::Utc) { $cutoff = $cutoff.ToLocalTime() }
+            $cutoff = $cutoff.AddTicks(-($cutoff.Ticks % [TimeSpan]::TicksPerSecond))
+        }
+        $months = @{ jan = 1; fev = 2; mar = 3; abr = 4; mai = 5; jun = 6; jul = 7; ago = 8; set = 9; out = 10; nov = 11; dez = 12 }
+        $records = New-Object System.Collections.ArrayList
+        $record = $null
+        foreach ($line in $recentLines) {
+            if ($line -match '^(?<month>[a-z]{3})\.?\s+(?<day>\d{1,2}),\s+(?<year>\d{4})\s+(?<hour>\d{1,2}):(?<minute>\d{2}):(?<second>\d{2})\s+(?<period>AM|PM)\s+') {
+                $record = $null
+                $month = $months[$Matches.month.ToLowerInvariant()]
+                if (-not $month) { continue }
+                $hour = ([int]$Matches.hour % 12) + $(if ($Matches.period -eq 'PM') { 12 } else { 0 })
+                $timestamp = New-Object DateTime ([int]$Matches.year, [int]$month, [int]$Matches.day, $hour, [int]$Matches.minute, [int]$Matches.second)
+                $record = [PSCustomObject]@{ Timestamp = $timestamp; Lines = (New-Object System.Collections.ArrayList) }
+                [void]$records.Add($record)
+                # JUL headers identify the start of each updater initialization.
+                if ($line -match '\b(?:verficar|verificar)Atualizacao\b' -and ($null -eq $cutoff -or $timestamp -gt $cutoff)) {
+                    $cutoff = $timestamp
+                }
+            }
+            if ($record) { [void]$record.Lines.Add($line) }
+        }
+        # An unanchored tail is not evidence of an error in the current startup.
+        if ($null -eq $cutoff) { return "" }
+        $recentCutoff = (Get-Date).AddMinutes(-20)
+        if ($cutoff -lt $recentCutoff) { $cutoff = $recentCutoff }
+        foreach ($entry in $records) {
+            if ($entry.Timestamp -ge $cutoff -and $entry.Lines -match '503\s*-\s*Service Unavailable') {
+                return "O atualizador da Santa Cruz respondeu 503 Service Unavailable"
+            }
         }
     } catch {}
     return ""
@@ -814,6 +850,7 @@ function Prepare-SantaCruzWindowForInput {
             [SantaCruzMouse]::ShowWindow($handle, 5) | Out-Null
         }
         [SantaCruzMouse]::SetForegroundWindow($handle) | Out-Null
+        $Window.SetFocus()
         Start-Sleep -Milliseconds 150
     } catch {
         Write-SantaCruzTrace "window preparation failed: $_"
@@ -836,6 +873,7 @@ function Invoke-SantaCruzProductList {
     if (-not $Window -or -not (Test-SantaCruzWindowResponsive $Window)) { return $false }
     try {
         Prepare-SantaCruzWindowForInput $Window
+        if ([SantaCruzMouse]::GetForegroundWindow() -ne [System.IntPtr]$Window.Current.NativeWindowHandle) { return $false }
         [System.Windows.Forms.SendKeys]::SendWait("{F3}")
         Write-SantaCruzTrace "product list requested with F3"
         return $true
@@ -1059,6 +1097,9 @@ function Invoke-SantaCruzSearchSubmit {
         return $false
     }
     try {
+        # Window preparation may move/resize it; read the controls afterwards.
+        Prepare-SantaCruzWindowForInput $Window
+        if ([SantaCruzMouse]::GetForegroundWindow() -ne [System.IntPtr]$Window.Current.NativeWindowHandle) { return $false }
         $searchBounds = $SearchControl.Current.BoundingRectangle
         $comboCondition = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -1113,7 +1154,6 @@ function Invoke-SantaCruzSearchSubmit {
             return $false
         }
 
-        Prepare-SantaCruzWindowForInput $Window
         Write-SantaCruzTrace "click search magnifier x=$x y=$y rightEdge=$rightEdge"
         [SantaCruzMouse]::SetCursorPos($x, $y) | Out-Null
         [SantaCruzMouse]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
@@ -1134,6 +1174,7 @@ function Invoke-AutomationControl {
         $centerX = $bounds.Left + ($bounds.Width / 2)
         $centerY = $bounds.Top + ($bounds.Height / 2)
         $windowHandle = 0
+        $inputWindow = $null
         $topWindows = $desktop.FindAll(
             [System.Windows.Automation.TreeScope]::Children,
             [System.Windows.Automation.PropertyCondition]::TrueCondition
@@ -1147,36 +1188,46 @@ function Invoke-AutomationControl {
             $containingWindows += [PSCustomObject]@{
                 Handle = $topWindow.Current.NativeWindowHandle
                 Area = $topBounds.Width * $topBounds.Height
+                Element = $topWindow
             }
         }
         $topMatch = $containingWindows | Sort-Object Area | Select-Object -First 1
-        if ($topMatch) { $windowHandle = $topMatch.Handle }
+        if ($topMatch) { $windowHandle = $topMatch.Handle; $inputWindow = $topMatch.Element }
 
         if ($windowHandle -eq 0) {
             $ancestor = $Element
             for ($level = 0; $level -lt 12 -and $ancestor; $level++) {
-                if ($ancestor.Current.NativeWindowHandle -ne 0) { $windowHandle = $ancestor.Current.NativeWindowHandle }
+                if ($ancestor.Current.NativeWindowHandle -ne 0) { $windowHandle = $ancestor.Current.NativeWindowHandle; $inputWindow = $ancestor }
                 $ancestor = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($ancestor)
             }
         }
         if ($windowHandle -ne 0) {
             Write-SantaCruzTrace "activate handle=$windowHandle id=$($Element.Current.AutomationId) name=$($Element.Current.Name)"
-            [SantaCruzMouse]::ShowWindow([System.IntPtr]$windowHandle, 5) | Out-Null
+            # Restoring the JavaFX Home first avoids its maximized transition hiding the window.
+            $showCommand = if ($inputWindow.Current.Name -match '(?i)\s-\sHome\s-') { 9 } else { 5 }
+            [SantaCruzMouse]::ShowWindow([System.IntPtr]$windowHandle, $showCommand) | Out-Null
+            Start-Sleep -Milliseconds 300
             [SantaCruzMouse]::SwitchToThisWindow([System.IntPtr]$windowHandle, $true)
             [SantaCruzMouse]::SetForegroundWindow([System.IntPtr]$windowHandle) | Out-Null
-            Start-Sleep -Milliseconds 200
-            try { $bounds = $Element.Current.BoundingRectangle } catch {}
+            try { $inputWindow.SetFocus() } catch {}
         }
         try { $Element.SetFocus() } catch {}
-        if ($bounds.Width -gt 0 -and $bounds.Height -gt 0 -and $bounds.Left -gt 0) {
+        # JavaFX focus can restore/move the Home window. Never reuse pre-focus coordinates.
+        Start-Sleep -Milliseconds 300
+        $bounds = $Element.Current.BoundingRectangle
+        $foregroundMatches = $windowHandle -ne 0 -and [SantaCruzMouse]::GetForegroundWindow() -eq [System.IntPtr]$windowHandle
+        if ($foregroundMatches -and -not $Element.Current.IsOffscreen -and $Element.Current.IsEnabled -and
+            $bounds.Width -gt 0 -and $bounds.Height -gt 0) {
             $x = [int]($bounds.Left + ($bounds.Width / 2))
             $y = [int]($bounds.Top + ($bounds.Height / 2))
+            if (-not $inputWindow.Current.BoundingRectangle.Contains($x, $y)) { return $false }
             Write-SantaCruzTrace "click x=$x y=$y bounds=$bounds"
             [SantaCruzMouse]::SetCursorPos($x, $y) | Out-Null
             [SantaCruzMouse]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
             [SantaCruzMouse]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
             return $true
         }
+        Write-SantaCruzTrace "physical click skipped: target window is not foreground or control is unavailable"
     } catch {}
 
     foreach ($patternId in @(

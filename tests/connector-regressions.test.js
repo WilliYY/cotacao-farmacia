@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as electron from '../src/lib/electron-scraper.js';
 import * as dm from '../src/lib/dm-playwright.js';
@@ -143,4 +146,91 @@ test('Account and password changes receive distinct opaque session identities', 
     assert.notEqual(key, session.getConnectorSessionIdentity(2, { ...a, ...change }));
   }
   assert.equal(key, session.getConnectorSessionIdentity(2, a));
+});
+
+test('Santa Cruz startup issue uses JUL record time and current initialization, never file mtime', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'santacruz-startup-'));
+  try {
+    fs.mkdirSync(path.join(directory, 'log'));
+    const file = path.join(directory, 'log', 'inicializador.log.0');
+    const source = new URL('../src/lib/santacruz-search.ps1', import.meta.url);
+    const launchedAt = new Date(Date.now() - 10 * 60000);
+    const record = (minutesAgo, method, message) => {
+      const date = new Date(Date.now() - minutesAgo * 60000);
+      const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+      const pad = value => String(value).padStart(2, '0');
+      return `${months[date.getMonth()]} ${pad(date.getDate())}, ${date.getFullYear()} ${date.getHours() % 12 || 12}:${pad(date.getMinutes())}:${pad(date.getSeconds())} ${date.getHours() >= 12 ? 'PM' : 'AM'} br.com.santacruz.sd.init.Gerenciador ${method}\n${message}\n`;
+    };
+    const extract = `$tokens=$null; $errors=$null; $ast=[System.Management.Automation.Language.Parser]::ParseFile('${fileURLToPath(source).replace(/'/g, "''")}',[ref]$tokens,[ref]$errors); $fn=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-RecentSantaCruzStartupIssue'},$true); Invoke-Expression $fn.Extent.Text;`;
+    const invoke = cutoff => {
+      const ps = `${extract} Get-RecentSantaCruzStartupIssue '${directory.replace(/'/g, "''")}' ${cutoff ? `([datetime]'${launchedAt.toISOString()}')` : ''}`;
+      const result = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    };
+    const old = record(45, 'downloadArquivo', 'SEVERE: 503 - Service Unavailable');
+    const launch = record(10, 'verficarAtualizacao', 'INFO: initializing');
+    fs.writeFileSync(file, old + launch);
+    assert.equal(invoke(false), '');
+    assert.equal(invoke(true), '');
+    fs.appendFileSync(file, record(9, 'downloadArquivo', 'SEVERE: 503 - Service Unavailable'));
+    assert.match(invoke(false), /503 Service Unavailable/);
+    assert.match(invoke(true), /503 Service Unavailable/);
+    fs.writeFileSync(file, old);
+    assert.equal(invoke(true), '');
+    assert.equal(invoke(false), '');
+    fs.writeFileSync(file, record(50, 'verficarAtualizacao', 'INFO: initializing') + old + record(0, 'downloadArquivo', 'INFO: still active'));
+    assert.equal(invoke(false), '');
+    assert.equal(invoke(true), '');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Santa Cruz clicks use bounds after focus and never click another foreground window', () => {
+  const source = fs.readFileSync(new URL('../src/lib/santacruz-search.ps1', import.meta.url), 'utf8');
+  const action = source.slice(source.indexOf('function Invoke-AutomationControl'), source.indexOf('function Find-TopActionImage'))
+    .replaceAll('} catch {}', '} catch { [Console]::Error.WriteLine($_.Exception.Message) }');
+  const ps = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName WindowsBase
+Add-Type @'
+using System;
+public class SantaCruzMouse {
+ public static IntPtr Foreground = new IntPtr(111);
+ public static int X, Y, Clicks;
+ public static bool ShowWindow(IntPtr h, int c) { return true; }
+ public static bool IsIconic(IntPtr h) { return false; }
+ public static void SwitchToThisWindow(IntPtr h, bool b) {}
+ public static bool SetForegroundWindow(IntPtr h) { return false; }
+ public static IntPtr GetForegroundWindow() { return Foreground; }
+ public static bool SetCursorPos(int x, int y) { X=x; Y=y; return true; }
+ public static void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e) { Clicks++; }
+}
+'@
+function Write-SantaCruzTrace { param($Message) }
+$script:blocked = $false
+$script:element = [PSCustomObject]@{ Current = [PSCustomObject]@{ ProcessId=8; NativeWindowHandle=0; AutomationId='image'; Name=''; IsEnabled=$true; IsOffscreen=$false; BoundingRectangle=(New-Object System.Windows.Rect(1040,52,88,60)) } }
+$script:element | Add-Member ScriptMethod SetFocus { $this.Current.BoundingRectangle = New-Object System.Windows.Rect(1040,152,88,60) }
+$script:element | Add-Member ScriptMethod GetCurrentPattern { throw 'No accessible invocation pattern' }
+$script:window = [PSCustomObject]@{ Current = [PSCustomObject]@{ ProcessId=8; NativeWindowHandle=42; BoundingRectangle=(New-Object System.Windows.Rect(900,0,600,800)) } }
+$script:window | Add-Member ScriptMethod SetFocus { if ($script:blocked) { throw 'Focus denied' }; [SantaCruzMouse]::Foreground = [IntPtr]42 }
+$desktop = [PSCustomObject]@{}
+$desktop | Add-Member ScriptMethod FindAll { return @($script:window) }
+${action}
+$result = Invoke-AutomationControl $script:element
+$success = @{ result=[bool]$result; x=[SantaCruzMouse]::X; y=[SantaCruzMouse]::Y; clicks=[SantaCruzMouse]::Clicks }
+$script:blocked = $true
+[SantaCruzMouse]::Foreground = [IntPtr]111
+[SantaCruzMouse]::Clicks = 0
+$result = Invoke-AutomationControl $script:element
+@{ success=$success; denied=@{ result=[bool]$result; clicks=[SantaCruzMouse]::Clicks } } | ConvertTo-Json -Compress
+`;
+  const result = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout.trim());
+  assert.deepEqual(payload.success, { result: true, x: 1084, y: 182, clicks: 2 }, result.stderr);
+  assert.deepEqual(payload.denied, { result: false, clicks: 0 });
 });

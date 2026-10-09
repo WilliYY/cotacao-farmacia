@@ -2,6 +2,14 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.9.2] - 2026-10-09
+
+- Corrigida a passagem da Home maximizada da Santa Cruz 13.0.001 para Digitador/Pedidos: restauração, foco da janela e posição atual do controle antes do clique. Cliques e F3 verificam a janela em primeiro plano; a lupa calcula sua posição após preparar a janela.
+- Diagnóstico do atualizador considera o timestamp JUL, a inicialização atual e a janela de 20 minutos. Um 503 antigo não encurta a espera da abertura nova por causa do mtime do arquivo.
+- Regressões cobrem deslocamento do controle após foco, foco negado sem clique, 503 atual e antigo com log recém-modificado.
+- Teste real desde `closed` terminou em `ready`: consulta `losartana 50mg`, 10 ofertas, 6 válidas, 47/47 linhas e 88,5 segundos. Banco principal preservado; sem envio de pedido.
+- Validação: 220/220 testes, build e parser PowerShell aprovados; lint sem erros. Viabilidade de preenchimento do site documentada em `outputs/INTEGRACAO_COTACAO_SITE_2026-10-09.md`; nenhuma gravação no site foi implementada ou executada.
+
 ## [1.9.1] - 2026-10-09
 
 - Corrigidos conflitos de via farmacêutica, captura do preço final da Profarma, estoque desconhecido da Santa Cruz e paginação incompleta dos portais.
