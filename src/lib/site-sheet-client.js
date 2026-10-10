@@ -1,6 +1,7 @@
 import { validateSiteWrite } from './site-quotation.js';
 import { isDeepStrictEqual } from 'node:util';
 import { validateEmptySiteRow } from './site-sheet-organization.js';
+import { createEmbeddedSiteSurface } from './site-sheet-surface.js';
 
 export const SITE_SHEET_URL = 'https://wimifarma.com/cotacao/';
 
@@ -11,22 +12,31 @@ export function isAllowedSiteUrl(value) {
   } catch { return false; }
 }
 
-// This window uses the ordinary site session. It has no Node access or IPC bridge.
-export function createSiteSheetClient(BrowserWindow) {
+// The remote renderer uses the ordinary site session, without Node or an IPC bridge.
+export function createSiteSheetClient(BrowserWindow, { WebContentsView, getHostWindow } = {}) {
   let window;
   let writing = false;
+  let loaded = false;
+  let loading = null;
+  let visible = false;
 
-  async function open() {
+  async function open({ reveal = true } = {}) {
+    if (reveal) visible = true;
     if (window && !window.isDestroyed()) {
-      window.show();
-      window.focus();
+      if (!loaded) await load();
+      if (visible) window.show();
+      if (reveal) window.focus();
       return { opened: true };
     }
-    window = new BrowserWindow({
+    const settings = {
       width: 1280, height: 850, title: 'Planilha de cotação — Wimifarma',
       webPreferences: { partition: 'persist:wimifarma-site-sheet', contextIsolation: true,
         nodeIntegration: false, sandbox: true, webSecurity: true }
-    });
+    };
+    window = WebContentsView
+      ? createEmbeddedSiteSurface(WebContentsView, getHostWindow?.(), settings.webPreferences)
+      : new BrowserWindow(settings);
+    loaded = false;
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.on('page-title-updated', event => event.preventDefault());
     for (const name of ['will-navigate', 'will-redirect']) {
@@ -37,7 +47,31 @@ export function createSiteSheetClient(BrowserWindow) {
     window.on('close', event => {
       if (writing) event.preventDefault();
     });
-    await window.loadURL(SITE_SHEET_URL);
+    await load();
+    if (visible) window.show();
+    return { opened: true };
+  }
+
+  async function load() {
+    if (!loading) loading = window.loadURL(SITE_SHEET_URL).then(() => { loaded = true; }).finally(() => { loading = null; });
+    await loading;
+  }
+
+  async function setVisible(value) {
+    if (typeof value !== 'boolean') throw new Error('Visibilidade da planilha invalida.');
+    visible = value;
+    // Hide immediately, including while an initial navigation is still pending.
+    if (!value) { window?.hide?.(); return { visible: false }; }
+    await open({ reveal: false });
+    if (visible) window.show();
+    return { visible };
+  }
+
+  async function refresh() {
+    if (writing) throw new Error('Aguarde a gravacao antes de atualizar a planilha.');
+    await open({ reveal: false });
+    loaded = false;
+    await load();
     return { opened: true };
   }
 
@@ -50,14 +84,14 @@ export function createSiteSheetClient(BrowserWindow) {
     assertWindow();
     if (!window.webContents.getURL().startsWith(SITE_SHEET_URL)) {
       const awaitingLogin = await window.webContents.executeJavaScript('Boolean(document.querySelector(\'input[type="password"]\'))');
-      if (awaitingLogin) throw new Error('Conclua o login na janela Planilha de cotacao antes de ler.');
+      if (awaitingLogin) throw new Error('Entre na planilha com seu acesso e depois clique em Cotar.');
       // Home login redirects through the normal SSO bridge.
       await window.loadURL(SITE_SHEET_URL);
     }
     if (signal?.aborted) throw new Error('Cancelamento confirmado antes do envio.');
     return window.webContents.executeJavaScript(`(async () => {
       if (location.origin !== 'https://wimifarma.com' || !location.pathname.startsWith('/cotacao/')) {
-        throw new Error('Entre no site nesta janela e depois clique em Ler planilha.');
+        throw new Error('Entre na planilha com seu acesso e depois clique em Cotar.');
       }
       const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
       const body = ${JSON.stringify(body ?? null)};
@@ -70,7 +104,8 @@ export function createSiteSheetClient(BrowserWindow) {
           headers: body ? { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf } : {},
           ...(body ? {body: JSON.stringify(body)} : {}), signal: controller.signal
         });
-        if (!response.ok) throw new Error('Site respondeu HTTP ' + response.status);
+        if (response.status === 401 || response.status === 403) throw new Error('Entre na planilha com uma conta autorizada a cotar.');
+        if (!response.ok) throw new Error('Não foi possível ler a planilha (HTTP ' + response.status + '). Tente novamente.');
         if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Entre no site antes de ler a planilha.');
         const data = await response.json();
         if (data.ok !== true) throw new Error(data.error || 'Resposta invalida do site.');
@@ -80,6 +115,7 @@ export function createSiteSheetClient(BrowserWindow) {
   }
 
   async function readSnapshot() {
+    await open({ reveal: false });
     const data = await request('bootstrap');
     if (!Array.isArray(data.rows) || !Array.isArray(data.columns) || !data.quote?.id) {
       throw new Error('A planilha retornou dados incompletos.');
@@ -153,5 +189,5 @@ export function createSiteSheetClient(BrowserWindow) {
     } finally { writing = false; }
   }
 
-  return { open, readSnapshot, writeCell, deleteEmptyRow };
+  return { open, setVisible, refresh, readSnapshot, writeCell, deleteEmptyRow };
 }

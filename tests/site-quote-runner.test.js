@@ -234,6 +234,7 @@ test('Cancellation during the immediate write preflight prevents the site PATCH'
         return { ok: true, ...fixture() };
       } };
     on() {}
+    show() {}
     loadURL() { return Promise.resolve(); }
     isDestroyed() { return false; }
   }

@@ -2,6 +2,15 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [1.9.6] - 2026-10-09
+
+- Tela inicial abre diretamente a planilha Wimifarma na janela principal, com barra superior para Cotar, pesquisa/histórico, logins e atualização. O site usa sessão persistente própria, isolamento, sandbox e nenhum preload/Node.
+- Cotar lê a planilha automaticamente. O operador marca as distribuidoras, escolhe todas as linhas ou intervalo inclusivo De/Até e inicia pelo botão com a quantidade de itens. Nenhuma distribuidora começa selecionada; lacunas contam na numeração do site, mas somente produtos/EANs entram na pesquisa.
+- Ajustes de colunas, seleção individual, refinamento de pesquisa e organização permanecem acessíveis em seções expansíveis. Progresso, cancelamento e proteções de preço/identidade foram preservados.
+- Corrigido bloqueio causado por vínculo duplicado de uma distribuidora desmarcada. Sessão vencida mostra orientação de login; retorno à planilha funciona inclusive com o histórico recolhido. A superfície nativa acompanha o tamanho da janela, oculta-se durante o painel e libera seus recursos no encerramento.
+- Teste visual com leitura autenticada confirmou 119 produtos e seis no intervalo 1–10. Consultas simuladas de interface conferiram os UUIDs e somente os fornecedores selecionados. Nenhuma consulta real a fornecedor, gravação no site ou alteração de servidor ocorreu nesta etapa.
+- Validação: 302/302 testes, build aprovado, lint com zero erros e 22 avisos preexistentes. Banco preservado durante a suíte final. Layout do painel conferido em viewport 1024×700; execução física em outro computador e pacote instalado não foram testados.
+
 ## [1.9.5] - 2026-10-09
 
 - Correção de erros de digitação usa nomes de princípios ativos e marcas conhecidos, preserva a marca e reinterpreta dose/embalagem após a correção. `purran 88` passa a pesquisar `puran 88`; abreviações de embalagem como `30comp` deixam de impedir a correção.

@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('api', {
   runQuote: (rawTextList, activeSuppliers) => ipcRenderer.invoke('run-quote', rawTextList, activeSuppliers),
   openSiteSheet: () => ipcRenderer.invoke('open-site-sheet'),
+  setSiteSheetVisible: (visible) => ipcRenderer.invoke('set-site-sheet-visible', visible),
+  refreshSiteSheet: () => ipcRenderer.invoke('refresh-site-sheet'),
   readSiteSheet: () => ipcRenderer.invoke('read-site-sheet'),
   runSiteQuote: (request) => ipcRenderer.invoke('run-site-quote', request),
   organizeSiteRows: (request) => ipcRenderer.invoke('organize-site-rows', request),

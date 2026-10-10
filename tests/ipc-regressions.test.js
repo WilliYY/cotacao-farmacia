@@ -25,6 +25,7 @@ test('Closing the main window routes active manual or site quotes through applic
       handlers = new Map();
       webContents = { on() {}, setWindowOpenHandler() {} };
       once() {}
+      setMenu() {}
       on(name, handler) { this.handlers.set(name, handler); }
       loadURL() {}
       close() {

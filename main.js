@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, dialog } from 'electron';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
@@ -221,6 +221,7 @@ function createWindow() {
       nodeIntegration: false
     }
   });
+  mainWindow.setMenu(null);
 
   mainWindow.once('ready-to-show', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -376,7 +377,7 @@ app.on('will-quit', async () => {
 });
 
 const quoteRunCoordinator = createQuoteRunCoordinator();
-const siteSheetClient = createSiteSheetClient(BrowserWindow);
+const siteSheetClient = createSiteSheetClient(BrowserWindow, { WebContentsView, getHostWindow: () => mainWindow });
 let siteQuoteController = null;
 
 app.on('before-quit', event => {
@@ -636,6 +637,11 @@ async function executeLocalQuote(event, rawTextList, activeSuppliers) {
 }
 
 handleIpc('open-site-sheet', () => siteSheetClient.open());
+handleIpc('set-site-sheet-visible', (_event, visible) => siteSheetClient.setVisible(visible));
+handleIpc('refresh-site-sheet', () => {
+  if (siteQuoteController || quoteRunCoordinator.hasActiveQuote()) throw new Error('Aguarde a cotacao terminar antes de atualizar a pagina.');
+  return siteSheetClient.refresh();
+});
 handleIpc('read-site-sheet', async () => {
   const snapshot = await siteSheetClient.readSnapshot();
   return { columns: snapshot.columns, rows: snapshot.rows,

@@ -40,17 +40,45 @@ async function harness(replies, options = {}) {
       })
     };
     on(name, callback) { this.events.set(name, callback); }
-    async loadURL(url) { this.url = url; }
+    async loadURL(url) { await options.onLoad?.(); this.url = url; }
     isDestroyed() { return false; }
-    show() {}
+    show() { this.visible = true; }
+    hide() { this.visible = false; }
     focus() {}
   }
   const client = createSiteSheetClient(FakeWindow);
-  await client.open();
+  if (!options.skipOpen) await client.open();
   const entry = createSiteQuotePlan(snapshot(), { supplierColumns: { ANB: 'anb' } }).entries[0];
   entry.quoteId = 'quote';
-  return { client, entry, target: entry.targets[0], window, requests };
+  return { client, entry, target: entry.targets[0], get window() { return window; }, requests };
 }
+
+test('Reading prepares the worksheet automatically without a manual open step', async () => {
+  const { client, requests } = await harness([snapshot()], { skipOpen: true });
+  assert.deepEqual(await client.readSnapshot(), snapshot());
+  assert.equal(requests.length, 1);
+});
+
+test('Opening a dialog during navigation keeps the worksheet hidden after loading finishes', async () => {
+  let finishLoading;
+  const pending = new Promise(resolve => { finishLoading = resolve; });
+  const context = await harness([], { skipOpen: true, onLoad: () => pending });
+  const showing = context.client.setVisible(true);
+  await context.client.setVisible(false);
+  finishLoading();
+  await showing;
+  assert.equal(context.window.visible, false);
+  await context.client.setVisible(true);
+  assert.equal(context.window.visible, true);
+  await assert.rejects(context.client.setVisible('true'), /invalida/);
+});
+
+test('An expired or unauthorized site session gives a login instruction without an Electron stack', async () => {
+  for (const http of [401, 403]) {
+    const { client } = await harness([{ http }]);
+    await assert.rejects(client.readSnapshot(), /conta autorizada a cotar/);
+  }
+});
 
 test('Site client sends the existing authenticated API contract and confirms the exact cell after writing', async () => {
   const { client, entry, target, requests, window } = await harness([snapshot(), confirmation(), afterWrite()]);

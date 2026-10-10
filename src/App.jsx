@@ -29,6 +29,7 @@ import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgres
 import { buildQuoteSummary } from './lib/quote-summary.js';
 import { getSantaCruzStatusView } from './lib/santacruz-status.js';
 import SiteQuotationPanel from './components/SiteQuotationPanel.jsx';
+import SiteWorkspace from './components/SiteWorkspace.jsx';
 import { completeBrowserMockResults } from './lib/browser-mock.js';
 import {
   SUPPLIER_NAMES,
@@ -689,6 +690,7 @@ function App() {
   const [quoteElapsedSeconds, setQuoteElapsedSeconds] = useState(0);
   const [selectedQuoteId, setSelectedQuoteId] = useState(null);
   const [isSiteQuotationOpen, setIsSiteQuotationOpen] = useState(false);
+  const [workspace, setWorkspace] = useState(() => typeof api.setSiteSheetVisible === 'function' ? 'site' : 'manual');
   
   // Git updates state
   const [updateAvailable, setUpdateAvailable] = useState(null);
@@ -1378,6 +1380,21 @@ function App() {
     isPreparing: isPreparingSantaCruz
   });
 
+  const siteQuotationPanel = isSiteQuotationOpen && <SiteQuotationPanel api={api}
+    onClose={() => setIsSiteQuotationOpen(false)}
+    onQuoteCreated={async quoteId => {
+      setHistory(await api.getHistory());
+      setActiveQuote(await api.getQuoteDetails(quoteId));
+      setSelectedQuoteId(quoteId);
+    }} />;
+
+  if (workspace === 'site') return <SiteWorkspace api={api} panelOpen={isSiteQuotationOpen}
+    onQuote={() => setIsSiteQuotationOpen(true)}
+    onManual={() => setWorkspace('manual')}
+    onSettings={() => { setIsSettingsOpen(true); setWorkspace('manual'); }}>
+    {siteQuotationPanel}
+  </SiteWorkspace>;
+
   return (
     <div className={`app-container ${isHistoryOpen ? '' : 'history-collapsed'}`}>
       {/* Top update notification banner */}
@@ -1539,6 +1556,8 @@ function App() {
 
       {/* Main Panel */}
       <main className="main-content">
+        {api.setSiteSheetVisible && <nav className="manual-workspace-nav" aria-label="Voltar à planilha online"><button className="btn btn-secondary" disabled={loading}
+          onClick={() => { setIsSettingsOpen(false); setWorkspace('site'); }} type="button"><ArrowLeft size={16} aria-hidden="true" /> Voltar à planilha</button></nav>}
         {loading ? (
           quoteProgress ? (
             <QuoteProgressOverlay
@@ -2558,13 +2577,7 @@ function App() {
           </div>
         </div>
       )}
-      {isSiteQuotationOpen && <SiteQuotationPanel api={api}
-        onClose={() => setIsSiteQuotationOpen(false)}
-        onQuoteCreated={async quoteId => {
-          setHistory(await api.getHistory());
-          setActiveQuote(await api.getQuoteDetails(quoteId));
-          setSelectedQuoteId(quoteId);
-        }} />}
+      {siteQuotationPanel}
     </div>
   );
 }
