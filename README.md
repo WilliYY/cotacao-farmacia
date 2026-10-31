@@ -45,25 +45,11 @@ Se o Node.js estiver ausente, o inicializador oculto mostra uma mensagem em vez 
 
 As senhas não ficam no Git. Com `CREDENTIAL_STORAGE_MODE=plain`, configuração operacional padrão, elas ficam codificadas no SQLite local e podem acompanhar uma cópia autorizada do banco para outro computador. Esse modo não é criptografia: limite o acesso à pasta e nunca envie `.env` ou `data/cotador-st.db` ao repositório. O histórico pode permanecer local, mas nunca é usado como fonte de preço para uma nova cotação.
 
-### Cotar a planilha do site pelo aplicativo
+### Tela inicial do Cotador
 
-O aplicativo já abre a planilha do site dentro da janela principal. Entre com seu acesso se solicitado; esse primeiro login é necessário em cada computador e a sessão fica no perfil local do cotador. Clique em **Cotar** na barra superior: a planilha é lida automaticamente. Marque as distribuidoras desejadas e escolha **Todas as linhas** ou **Intervalo**, informando **De** e **Até**. Confira a quantidade e clique em **Cotar N itens** para iniciar.
+O aplicativo abre diretamente a tela local de cotação: informe os medicamentos ou EANs, selecione as distribuidoras e inicie a pesquisa. O histórico, a exportação XLSX e a configuração dos logins continuam disponíveis no próprio Cotador.
 
-O intervalo usa os números exibidos no site, incluindo as lacunas, e considera as duas pontas. Somente linhas com produto ou EAN entram na pesquisa; notas ou preços soltos continuam preservados. Todas as distribuidoras começam desmarcadas. O painel mostra o progresso e permite cancelar. Para continuar editando o site, feche o painel; em caso de sessão vencida, use **Voltar à planilha**, entre novamente e clique em **Cotar**.
-
-ANB, Santa Cruz, Profarma e DM Paraná seguem o nome e a chave da coluna, mesmo após mudar sua ordem. Conforme a configuração confirmada pelo operador, **DM**, **DM Aline** e outros nomes iniciados pelo termo DM correspondem à DM Paraná. Se houver duas colunas para o mesmo fornecedor, abra **Ajustar colunas** e escolha a correta. Desmarcar o fornecedor desativa sua consulta; somente os vínculos das distribuidoras selecionadas precisam estar definidos e não podem se repetir.
-
-O botão **Cotar N itens** consulta preços atuais e grava somente ofertas com identidade suficiente, estoque, ST e preço final conferidos. Células vazias ou contendo apenas asteriscos (`*`, `**`, `***`, inclusive separados por espaços) indicam cotação ausente. Valores numéricos e outros textos existentes são comparados e preservados. Evite edições simultâneas nas linhas selecionadas: o endpoint atual do site não oferece bloqueio atômico. Conflito ou entrega incerta interrompe novas gravações sem repetir a requisição. Toda a integração roda localmente, usando o site existente, sem instalar componentes no servidor ou enviar pedidos às distribuidoras.
-
-**Pesquisa e histórico** abre a consulta manual e as cotações salvas; **Voltar à planilha** restaura o site. A engrenagem da barra superior abre os logins das distribuidoras. Ajustes por produto, seleção individual e organização continuam disponíveis em **Conferir produtos e ajustes**, sem exigir essa conferência para toda cotação.
-
-**Nomes e descrições incompletos:** o cotador corrige erros próximos de nomes conhecidos, preservando a marca, dose e embalagem. Conforme confirmação do operador, `losartana 100 25` e `losartana10025` significam losartana 100mg + hidroclorotiazida 25mg; a variação com `biolab` preserva o fabricante. Essa regra não adivinha outras combinações numéricas. Por exemplo, `purran 88` pode ser pesquisado como `puran 88`, mas `Puran` sem dose não autoriza escolher uma dose pelo menor preço.
-
-Quando faltarem dados, o relatório mostra as apresentações elegíveis encontradas. Use **Ajustar pesquisa** na linha para informar o EAN ou a descrição completa com dose, apresentação e embalagem, depois execute novamente. Esse ajuste não modifica o produto escrito no site e não pode contrariar dados já explícitos. Uma releitura conserva o ajuste somente se a linha permanecer com o mesmo UUID, versão, produto, EAN e quantidade. Linhas com várias doses não são desdobradas silenciosamente em uma única célula.
-
-**Organização:** clique em **Revisar organização das linhas** para conferir as lacunas e depois na ação de remoção exibida. Somente linhas internas totalmente vazias, sem estilos próprios, podem ser removidas. Notas, preços soltos, asteriscos sem produto, linhas coloridas e as linhas vazias finais de entrada são preservados. Os produtos seguintes sobem porque o site renumera as linhas restantes; seus UUIDs, valores e estilos permanecem iguais. O aplicativo grava um backup completo em `data/backups/` antes da primeira remoção, relê antes/depois de cada operação e para em cancelamento, conflito ou resposta incerta. A API existente não oferece exclusão condicional atômica: faça a organização sem outras pessoas editando a cotação. Não há repetição automática nem restauração automática após entrega incerta.
-
-Na versão empacotada, os backups ficam em `backups/` dentro da pasta de dados do aplicativo no perfil do Windows; o caminho completo aparece no relatório. Assim o backup não depende de permissão de escrita dentro do pacote instalado.
+A abertura automática e os atalhos para a planilha do site Wimifarma COM foram retirados. Não é necessário entrar nesse site para utilizar o Cotador. Os dados locais, o histórico e os módulos antigos de integração foram preservados; não há navegação nem preenchimento da planilha pela tela inicial.
 
 ---
 

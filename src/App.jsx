@@ -28,8 +28,6 @@ import { analyzeQuoteBatch, INPUT_STATUS } from './lib/search-intelligence.js';
 import { createInitialQuoteProgress, getQuoteProgressPercent, reduceQuoteProgress } from './lib/quote-progress.js';
 import { buildQuoteSummary } from './lib/quote-summary.js';
 import { getSantaCruzStatusView } from './lib/santacruz-status.js';
-import SiteQuotationPanel from './components/SiteQuotationPanel.jsx';
-import SiteWorkspace from './components/SiteWorkspace.jsx';
 import { completeBrowserMockResults } from './lib/browser-mock.js';
 import {
   SUPPLIER_NAMES,
@@ -689,8 +687,6 @@ function App() {
   const [quoteStartedAt, setQuoteStartedAt] = useState(null);
   const [quoteElapsedSeconds, setQuoteElapsedSeconds] = useState(0);
   const [selectedQuoteId, setSelectedQuoteId] = useState(null);
-  const [isSiteQuotationOpen, setIsSiteQuotationOpen] = useState(false);
-  const [workspace, setWorkspace] = useState(() => typeof api.setSiteSheetVisible === 'function' ? 'site' : 'manual');
   
   // Git updates state
   const [updateAvailable, setUpdateAvailable] = useState(null);
@@ -1380,21 +1376,6 @@ function App() {
     isPreparing: isPreparingSantaCruz
   });
 
-  const siteQuotationPanel = isSiteQuotationOpen && <SiteQuotationPanel api={api}
-    onClose={() => setIsSiteQuotationOpen(false)}
-    onQuoteCreated={async quoteId => {
-      setHistory(await api.getHistory());
-      setActiveQuote(await api.getQuoteDetails(quoteId));
-      setSelectedQuoteId(quoteId);
-    }} />;
-
-  if (workspace === 'site') return <SiteWorkspace api={api} panelOpen={isSiteQuotationOpen}
-    onQuote={() => setIsSiteQuotationOpen(true)}
-    onManual={() => setWorkspace('manual')}
-    onSettings={() => { setIsSettingsOpen(true); setWorkspace('manual'); }}>
-    {siteQuotationPanel}
-  </SiteWorkspace>;
-
   return (
     <div className={`app-container ${isHistoryOpen ? '' : 'history-collapsed'}`}>
       {/* Top update notification banner */}
@@ -1532,10 +1513,6 @@ function App() {
         )}
 
         <div className="sidebar-actions">
-          <button className="btn btn-secondary btn-block" disabled={loading || !api.openSiteSheet}
-            onClick={() => setIsSiteQuotationOpen(true)}>
-            <FileSpreadsheet size={16} aria-hidden="true" /> Cotar planilha do site
-          </button>
           <button 
             className="btn btn-primary btn-block"
             onClick={handleNewQuoteClick}
@@ -1556,8 +1533,6 @@ function App() {
 
       {/* Main Panel */}
       <main className="main-content">
-        {api.setSiteSheetVisible && <nav className="manual-workspace-nav" aria-label="Voltar à planilha online"><button className="btn btn-secondary" disabled={loading}
-          onClick={() => { setIsSettingsOpen(false); setWorkspace('site'); }} type="button"><ArrowLeft size={16} aria-hidden="true" /> Voltar à planilha</button></nav>}
         {loading ? (
           quoteProgress ? (
             <QuoteProgressOverlay
@@ -1715,17 +1690,13 @@ function App() {
               </div>
               <div className="workspace-stats" aria-label="Resumo da pesquisa">
                 <span>{inputItemCount} {inputItemCount === 1 ? 'item' : 'itens'}</span>
-                <span>{selectedSupplierCount} de 4 distribuidoras</span>
+                <span>{selectedSupplierCount} de {SUPPLIER_NAMES.length} distribuidoras</span>
               </div>
             </header>
 
             <p className="search-subtitle">
               Informe um medicamento por linha ou cole códigos EAN para comparar os valores finais com ST.
             </p>
-            <button className="btn btn-secondary" disabled={loading || !api.openSiteSheet}
-              onClick={() => setIsSiteQuotationOpen(true)}>
-              <FileSpreadsheet size={16} aria-hidden="true" /> Cotar planilha do site
-            </button>
 
             <div className="textarea-container">
               <div className="field-heading">
@@ -2577,7 +2548,6 @@ function App() {
           </div>
         </div>
       )}
-      {siteQuotationPanel}
     </div>
   );
 }

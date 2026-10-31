@@ -344,7 +344,9 @@ The Node test suite validates the high-risk pharmacy purchase paths:
 - XLSX export workbook structure and best/ignored sheet routing.
 - Startup update safety for disabled updates, dirty worktrees, wrong branches, missing upstreams, local-ahead/diverged histories, offline remotes, bounded fetches, portable shortcuts, and real fast-forward clones.
 
-### Local site worksheet integration (2026-10-09)
+### Archived local site worksheet integration (2026-10-09)
+
+As of 2026-10-31, the application opens the local quotation form directly. The automatic website workspace, worksheet quotation shortcuts and return-to-worksheet navigation were removed from App.jsx. Local quotation, history, XLSX export and supplier settings remain available. Historical integration modules, IPC contracts and local data remain preserved; the details below document those retained modules, not the current home screen.
 
 - `site-sheet-client.js` owns a sandboxed remote surface without Node or preload, restricted to HTTPS `wimifarma.com`. In Electron, `site-sheet-surface.js` attaches a `WebContentsView` to the main window below the 72px React toolbar. A BrowserWindow fallback remains available to existing consumers. The persistent partition uses application userData. Ordinary Home login/SSO, bootstrap and CSRF-protected cell updates are reused; no server deployment is involved.
 - `site-quotation.js` maps suppliers to stable keys and plans selected UUIDs. User-confirmed labels beginning with the separate term DM identify DM Paraná. Duplicate aliases, protected fields and conflicting mappings are rejected. Order quantity is never appended as package size.
