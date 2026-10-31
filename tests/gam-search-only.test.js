@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { normalizeGamUrl, gamSearchUrl, isAllowedGamRequest, inspectGamResults, submitVerifiedGamLogin, scrapeGamPortal, readGamSnapshot } from '../src/lib/gam-browser-engine.js';
 import { auditQuoteResult } from '../src/lib/quote-auditor.js';
 import { parseSearchQuery } from '../src/lib/parser.js';
+import { summarizeCatalogueOffer } from '../src/lib/catalogue-audit.js';
 
 const ean = '7890704810516';
 const headers = ['Cód', 'Inf.', 'Mercadoria', 'Ind/Marca', 'Qtd', 'Desc (%)', 'Preço', 'Líquido + Imposto', 'P.M.C.'];
@@ -122,6 +123,94 @@ test('Avise-me overrides the price and any conflicting enabled order control', (
   assert.equal(offer.availability, 'indisponivel');
   assert.equal(offer.availabilityEvidence, 'AVISE_ME');
   assert.equal(offer.stockQuantity, null);
+});
+
+function unavailableWithoutPrice({ notice = true, className = 'falta', identity = ean } = {}) {
+  const data = snapshot();
+  data.rows[0] = { cells: ['123', '', `Ver imagem\nOLEO SINTETICO CAP/CORP 100ML${notice ? ' (Avise-me quando chegar)' : ''}\n${identity}: OLEO CAPILAR E CORPORAL SINTETICO 100 ML 1 UNID`,
+    'MARCA SINTETICA', '', '', 'indisponível', '---', '---'], className, quantityEnabled: false };
+  return data;
+}
+
+test('observed unavailable GAM layout completes with confirmed identity and explicit null price', () => {
+  const result = inspectGamResults(unavailableWithoutPrice(), ean);
+  assert.equal(result.state, 'READY');
+  const [offer] = result.results;
+  assert.equal(offer.ean, ean);
+  assert.equal(offer.eanEvidence, 'PORTAL_ROW');
+  assert.equal(offer.price, null);
+  assert.equal(offer.availability, 'indisponivel');
+  assert.equal(offer.stockQuantity, null);
+  const summary = summarizeCatalogueOffer(offer, { ean }, 'GAM');
+  assert.equal(summary.identityConfirmed, true);
+  assert.equal(summary.price, null);
+  assert.equal(summary.availability, 'unavailable');
+  assert.equal(summary.eligible, false);
+  assert.equal(summary.eligibleAtCollection, false);
+});
+
+test('missing GAM price accepts either explicit unavailable signal independently', () => {
+  for (const options of [{ notice: true, className: '' }, { notice: false, className: 'falta' }]) {
+    const result = inspectGamResults(unavailableWithoutPrice(options), ean);
+    assert.equal(result.state, 'READY');
+    assert.equal(result.results[0].price, null);
+    assert.equal(result.results[0].availability, 'indisponivel');
+  }
+});
+
+test('missing or malformed price without unavailable evidence and mismatched identities still wait', () => {
+  for (const quantityEnabled of [true, false]) {
+    for (const price of ['---', '', 'R$ inválido', 'R$ 0,00']) {
+      const data = unavailableWithoutPrice({ notice: false, className: '' });
+      data.rows[0].quantityEnabled = quantityEnabled;
+      data.rows[0].cells[7] = price;
+      assert.equal(inspectGamResults(data, ean).state, 'WAIT');
+    }
+  }
+  assert.equal(inspectGamResults(unavailableWithoutPrice({ identity: '7891182810203' }), ean).state, 'WAIT');
+});
+
+const zeroPrefixedEan = '0070341368305';
+function leadingZeroSnapshot(identity = '70341368305', query = zeroPrefixedEan) {
+  const data = snapshot({ url: gamSearchUrl('https://egam.com.br', query) });
+  data.rows[0].cells[2] = `Ver imagem\nPRODUTO SINTETICO 200ML\n${identity}: PRODUTO SINTETICO FILTROS UV 200ML`;
+  return data;
+}
+
+test('GAM label with removed leading zeroes remains an inferred candidate, never observed EAN', () => {
+  const result = inspectGamResults(leadingZeroSnapshot(), zeroPrefixedEan);
+  assert.equal(result.state, 'READY');
+  const [offer] = result.results;
+  assert.equal(offer.ean, null);
+  assert.equal(offer.candidateEan, zeroPrefixedEan);
+  assert.equal(offer.eanEvidence, 'LEADING_ZERO_REMOVAL_CANDIDATE');
+  assert.equal(offer.portalProductCode, '70341368305');
+  assert.equal(offer.price, 21.53);
+  assert.equal(auditQuoteResult(parseSearchQuery(zeroPrefixedEan), offer).status, 'BLOQUEADO');
+  const summary = summarizeCatalogueOffer(offer, { ean: zeroPrefixedEan }, 'GAM');
+  assert.equal(summary.observedEan, null);
+  assert.equal(summary.candidateEan, zeroPrefixedEan);
+  assert.equal(summary.identityConfirmed, false);
+  assert.equal(summary.eligible, false);
+  assert.equal(summary.eligibleAtCollection, false);
+});
+
+test('GAM leading-zero inference rejects wrong codes, nonzero queries and ambiguous labelled lines', () => {
+  for (const code of ['70341368306', '070341368305', '7034136', '00070341368305']) {
+    assert.equal(inspectGamResults(leadingZeroSnapshot(code), zeroPrefixedEan).state, 'WAIT', code);
+  }
+  assert.equal(inspectGamResults(leadingZeroSnapshot('70341368305', ean), ean).state, 'WAIT');
+  for (const extra of ['70341368305: Outra descrição', `${zeroPrefixedEan}: Outra descrição`, '1234567: Outra descrição']) {
+    const data = leadingZeroSnapshot();
+    data.rows[0].cells[2] += `\n${extra}`;
+    assert.equal(inspectGamResults(data, zeroPrefixedEan).state, 'WAIT');
+  }
+  const noPrice = leadingZeroSnapshot();
+  noPrice.rows[0].cells[7] = '---';
+  assert.equal(inspectGamResults(noPrice, zeroPrefixedEan).state, 'WAIT');
+  const unknown = unavailableWithoutPrice({ notice: false, className: '', identity: '70341368306' });
+  unknown.url = gamSearchUrl('https://egam.com.br', zeroPrefixedEan);
+  assert.equal(inspectGamResults(unknown, zeroPrefixedEan).state, 'WAIT');
 });
 
 test('missing control remains unknown; missing/mismatched EAN and stale table never become a match or empty result', () => {

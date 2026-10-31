@@ -40,3 +40,15 @@ Arquivos publicados neste recorte: `src/lib/gam-browser-engine.js`, `tests/gam-s
 Verificações realizadas na árvore local: `npm.cmd test` passou com 375 testes; a rodada direcionada de `gam-search-only` e `gam-integration` passou com 17 testes; `npm.cmd run build` passou; `npm.cmd run lint` terminou com zero erros e 21 avisos já existentes. A revisão independente confirmou compatibilidade das dependências do leitor com o HEAD e não encontrou bloqueador novo no módulo. Esses conjuntos de testes se sobrepõem.
 
 Esta alteração publica a camada de leitura e seus testes. O runner de catálogo e outras integrações do aplicativo já presentes na árvore local não estão incluídos automaticamente no mesmo commit. O registro não afirma publicação de todo esse conjunto nem de um instalador.
+
+## Casos encontrados no teste de escala
+
+O lote seguinte de 250 EANs encontrou dois formatos adicionais. Um produto marcado como indisponível podia ter `---` no preço; isso acabava em timeout. Agora, identidade observada ou candidata conservadora com aviso explícito de indisponibilidade permite registrar `price: null` e indisponibilidade, mantendo o bloqueio comercial. Sem aviso explícito, preço ausente ou inválido continua impedindo uma captura válida.
+
+Outro produto foi apresentado pelo portal com os zeros iniciais removidos do código. A consulta continua exigindo EAN-13 válido. Somente um código único de 8 a 12 dígitos igual ao EAN pesquisado após remover seus zeros iniciais pode gerar `candidateEan`; `ean` permanece nulo. Não é tratado como EAN observado ou identidade confirmada. O código bruto permanece na row (`portalProductCode`), sem acrescentar campos ao contrato do checkpoint. Uma segunda identidade numérica na mesma célula impede a captura.
+
+As duas ocorrências foram conferidas no portal e repetidas pelo robô após a correção: indisponível sem preço ficou bloqueado; código abreviado ficou candidato, sem identidade confirmada e sem elegibilidade. Nenhum preço, código completo ou saldo foi inventado.
+
+Regressões desta ampliação: 18 testes GAM e 40 testes direcionados com integração, catálogo e checkpoints passaram, com dados sintéticos. Sintaxe, lint focal e build passaram. A suíte principal de 378 testes passou após a primeira correção; a regra posterior de código abreviado foi verificada pelas regressões direcionadas e revisão independente, sem atribuir à suíte anterior uma cobertura que ainda não tinha.
+
+As filas originais e suas falhas históricas foram preservadas. Continuações usam manifestos apenas dos itens com falha ou pendentes e novos checkpoints, pois alterações de código invalidam a retomada pelo hash antigo. Para acompanhar a cobertura, deduplicar por distribuidora e EAN e preferir o resultado da continuação. Esta seção não afirma conclusão integral das 1.000 consultas do teste de escala ainda em execução.

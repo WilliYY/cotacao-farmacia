@@ -56,17 +56,22 @@ export function inspectGamResults(snapshot, ean) {
   for (const row of snapshot.rows || []) {
     if (!Array.isArray(row.cells) || row.cells.length !== HEADERS.length) return { state: 'WAIT' };
     const merchandise = String(row.cells[2]);
-    const identities = merchandise.split(/\r?\n/).map(line => line.trim().match(/^(\d{13})\s*:\s*(.*)$/)).filter(Boolean);
+    const identities = merchandise.split(/\r?\n/).map(line => line.trim().match(/^(\d+)\s*:\s*(.*)$/)).filter(Boolean);
     if (identities.length !== 1) continue;
     const [match] = identities;
-    if (!match[2] || match[1] !== ean || !isValidEAN13(match[1])) continue;
-    const price = parseGamMoney(row.cells[7]);
-    if (price === null) return { state: 'WAIT' };
+    const observedIdentity = match[1] === ean && isValidEAN13(match[1]);
+    const candidateIdentity = /^0/.test(ean) && /^\d{8,12}$/.test(match[1]) && match[1] === ean.replace(/^0+/, '');
+    if (!match[2] || (!observedIdentity && !candidateIdentity)) continue;
     const unavailable = /avise-me quando chegar/i.test(merchandise) || String(row.className || '').split(/\s+/).includes('falta');
+    const price = parseGamMoney(row.cells[7]);
+    if (price === null && !unavailable) return { state: 'WAIT' };
     const name = match[2].replace(/\s*\(Avise-me quando chegar\)\s*/gi, ' ').trim();
     const parsed = parseSearchQuery(name);
     results.push({ source: 'GAM', supplierProductName: name, laboratory: String(row.cells[3]).trim(),
-      ean: match[1], eanEvidence: 'PORTAL_ROW', price, priceSourceLabel: 'Líquido + Imposto',
+      ean: observedIdentity ? match[1] : null,
+      eanEvidence: observedIdentity ? 'PORTAL_ROW' : 'LEADING_ZERO_REMOVAL_CANDIDATE',
+      ...(candidateIdentity ? { candidateEan: ean, portalProductCode: match[1] } : {}),
+      price, priceSourceLabel: 'Líquido + Imposto',
       stStatus: 'ST_DESCONHECIDO', commercialCondition: 'Custo com impostos; regime de ST nao discriminado pela tabela GAM',
       availability: unavailable ? 'indisponivel' : row.quantityEnabled === true ? 'disponivel' : 'disponibilidade nao confirmada',
       availabilityEvidence: unavailable ? 'AVISE_ME' : row.quantityEnabled === true ? 'PORTAL_QUANTITY_CONTROL' : 'UNKNOWN',
