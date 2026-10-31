@@ -340,7 +340,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
         nodeIntegration: false,
         contextIsolation: true,
         backgroundThrottling: false,
-        partition: `persist:wimifarma-supplier-${supplierId}-${getConnectorSessionIdentity(supplierId, { loginUrl, username, password, clientCode })}`
+        partition: `${process.env.CATALOGUE_AUDIT_READ_ONLY === 'true' ? '' : 'persist:'}wimifarma-supplier-${supplierId}-${getConnectorSessionIdentity(supplierId, { loginUrl, username, password, clientCode })}`
       }
     });
 
