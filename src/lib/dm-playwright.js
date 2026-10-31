@@ -132,13 +132,17 @@ export function evaluateDmGridEvidence(evidence = {}) {
   const refreshed = signatureChanged || requestCompleted;
   const rawResultCount = Number(evidence.rawResultCount) ||
     (Array.isArray(evidence.results) ? evidence.results.length : 0);
-  if (rawResultCount > 0 && refreshed) {
+  const isEanSearch = /^\d{13}$/.test(String(evidence.searchTerm || ''));
+  const hasExactEan = Array.isArray(evidence.results) &&
+    evidence.results.some(result => result.ean === evidence.searchTerm);
+  if (rawResultCount > 0 && refreshed && (!isEanSearch || hasExactEan)) {
     return { status: 'results' };
   }
 
   const elapsedMs = Math.max(0, Number(evidence.observedAt) - submittedAt);
   if (
     evidence.explicitlyEmpty === true &&
+    (!isEanSearch || rawResultCount === 0) &&
     elapsedMs >= 2500 &&
     Number(evidence.emptyStableMs) >= 750 &&
     refreshed

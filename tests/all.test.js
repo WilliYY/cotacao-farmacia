@@ -1,5 +1,6 @@
 import './audit-partition.test.js';
 import './gam-search-only.test.js';
+import './dm-ean-grid-evidence.test.js';
 import test from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
