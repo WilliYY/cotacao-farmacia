@@ -2,6 +2,12 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [Correção de logs] - 2026-11-02
+
+- Corrigido `Error: EPIPE: broken pipe, write` no processo principal do Electron quando o console herdado de outro programa é fechado. O logger trata falhas síncronas e eventos assíncronos de stdout/stderr, mantendo os registros em arquivo, a sanitização e os níveis existentes.
+- O transporte indisponível deixa de receber novas escritas; a outra saída continua funcionando. Erros diferentes de `EPIPE` preservam seu tratamento anterior, e o fallback de falha de arquivo usa a mesma proteção.
+- Validação: reprodução com pipe real fechado, seis regressões novas e 21 testes direcionados aprovados, incluindo auditoria somente leitura e integridade do banco. Nenhum portal ou pedido foi acionado nesta correção.
+
 ## [1.9.6] - 2026-10-09
 
 - Tela inicial abre diretamente a planilha Wimifarma na janela principal, com barra superior para Cotar, pesquisa/histórico, logins e atualização. O site usa sessão persistente própria, isolamento, sandbox e nenhum preload/Node.

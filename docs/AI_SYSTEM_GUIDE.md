@@ -375,6 +375,12 @@ As of 2026-10-31, the application opens the local quotation form directly. The a
 - Organization IPC shares the quotation coordinator/cancellation guard. `runSiteOrganization` requires a complete durable backup before mutation, revalidates every UUID/version/position, and stops on conflict/cancellation/uncertainty. Backups use project `data/backups` in source installations and `userData/backups` in packaged builds, avoiding writes inside the application archive. `site-sheet-client.js#deleteEmptyRow` reuses the existing CSRF-protected DELETE endpoint and post-reads to compare every remaining row, column, style and rule. No server code changes, automatic retry or automated rollback are involved.
 - Row UUIDs and data do not move: the website renumbers remaining rows after its existing soft deletion. The DELETE endpoint has no conditional version/CAS contract; a concurrent edit between preflight and deletion remains a documented risk. Operator preview and a period without other editors are required operational controls; neither PATCH nor DELETE is represented as atomic.
 
+### Console transport resilience (2026-11-02)
+
+`src/lib/logger.js` isolates console output failures from persistent logging. Its lazy console writer installs one error listener per used stdout/stderr stream, handles synchronous and asynchronous `EPIPE`, and stops writing to a disconnected, destroyed or ended stream. File output and existing database logging continue; the other console stream remains independent. Other errors retain existing handlers or remain observable when unhandled. Message sanitization, severity formatting and the read-only catalogue audit remain unchanged.
+
+`tests/logger-output.test.js` reproduces a closed parent pipe in a child process and verifies file-record continuity, independent outputs, file-error fallback, sanitization, listener reuse and preservation of non-EPIPE errors. Its logger fixtures mock filesystem/database dependencies, and the real pipe test starts no portal or supplier operation.
+
 ### Delivery Workflow
 - Every completed project change includes synchronized documentation, executable validation, a scoped Git commit, and a push of the current branch by default.
 - The staged diff must be reviewed before commit. Credentials, `.env`, databases, logs, caches, screenshots, and supplier-owned binaries stay local.

@@ -21,6 +21,33 @@ const LOG_LEVELS = {
 
 const currentLogLevel = LOG_LEVELS[process.env.LOG_LEVEL?.toLowerCase()] ?? LOG_LEVELS.info;
 
+const consoleOutputs = new Map();
+
+function writeToConsole(method, ...args) {
+  const outputName = method === 'log' ? 'stdout' : 'stderr';
+  const stream = process[outputName];
+  let output = consoleOutputs.get(outputName);
+  if (!output) {
+    output = { closed: false };
+    consoleOutputs.set(outputName, output);
+    stream?.on?.('error', error => {
+      if (error?.code === 'EPIPE') {
+        output.closed = true;
+      } else if (stream.listenerCount('error') === 1) {
+        // Preserve unhandled errors other than the disconnected console pipe.
+        throw error;
+      }
+    });
+  }
+  if (output.closed || stream?.destroyed || stream?.writableEnded) return;
+  try {
+    console[method](...args);
+  } catch (error) {
+    if (error?.code !== 'EPIPE') throw error;
+    output.closed = true;
+  }
+}
+
 function sanitize(message) {
   if (typeof message !== 'string') {
     try {
@@ -65,7 +92,7 @@ function writeToFile(level, sanitizedMsg) {
     }
     fs.appendFileSync(logFilePath, logLine);
   } catch (err) {
-    console.error('Failed to write to log file:', err);
+    writeToConsole('error', 'Failed to write to log file:', err);
   }
   
   // Write log to DB dynamically
@@ -76,28 +103,28 @@ export const logger = {
   debug: (msg) => {
     if (currentLogLevel <= LOG_LEVELS.debug) {
       const sanitized = sanitize(msg);
-      console.log(`\x1b[36m[DEBUG]\x1b[0m ${sanitized}`);
+      writeToConsole('log', `\x1b[36m[DEBUG]\x1b[0m ${sanitized}`);
       writeToFile('debug', sanitized);
     }
   },
   info: (msg) => {
     if (currentLogLevel <= LOG_LEVELS.info) {
       const sanitized = sanitize(msg);
-      console.log(`\x1b[32m[INFO]\x1b[0m ${sanitized}`);
+      writeToConsole('log', `\x1b[32m[INFO]\x1b[0m ${sanitized}`);
       writeToFile('info', sanitized);
     }
   },
   warn: (msg) => {
     if (currentLogLevel <= LOG_LEVELS.warn) {
       const sanitized = sanitize(msg);
-      console.warn(`\x1b[33m[WARN]\x1b[0m ${sanitized}`);
+      writeToConsole('warn', `\x1b[33m[WARN]\x1b[0m ${sanitized}`);
       writeToFile('warn', sanitized);
     }
   },
   error: (msg) => {
     if (currentLogLevel <= LOG_LEVELS.error) {
       const sanitized = sanitize(msg);
-      console.error(`\x1b[31m[ERROR]\x1b[0m ${sanitized}`);
+      writeToConsole('error', `\x1b[31m[ERROR]\x1b[0m ${sanitized}`);
       writeToFile('error', sanitized);
     }
   }
