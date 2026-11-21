@@ -289,7 +289,7 @@ if (!gotSingleInstanceLock) {
   });
 }
 
-app.whenReady().then(async () => {
+const appStartupTask = app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return;
   if (isLiveDiagnostic || isSantaCruzPrepareDiagnostic) {
     const diagnosticUserDataPath = app.getPath('userData');
@@ -366,14 +366,27 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('will-quit', async () => {
-  if (updateCheckIntervalId) clearInterval(updateCheckIntervalId);
-  updateCheckIntervalId = null;
-  try {
-    await closeDatabase();
-  } catch (err) {
-    logger.warn(`Error closing database on exit: ${err.message}`);
-  }
+let databaseQuitPending = false;
+let databaseClosedForQuit = false;
+app.on('will-quit', event => {
+  if (databaseClosedForQuit || !gotSingleInstanceLock || !app.isReady()) return;
+  event.preventDefault();
+  if (databaseQuitPending) return;
+  databaseQuitPending = true;
+  void (async () => {
+    try {
+      // Closing the loading window must not tear down SQLite during initialization.
+      if (!isDiagnosticMode) await appStartupTask.catch(() => {});
+      if (updateCheckIntervalId) clearInterval(updateCheckIntervalId);
+      updateCheckIntervalId = null;
+      await closeDatabase();
+    } catch (err) {
+      logger.warn(`Error closing database on exit: ${err.message}`);
+    } finally {
+      databaseClosedForQuit = true;
+      app.quit();
+    }
+  })();
 });
 
 const quoteRunCoordinator = createQuoteRunCoordinator();
