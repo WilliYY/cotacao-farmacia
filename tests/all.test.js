@@ -1227,7 +1227,7 @@ test('Santa Cruz Portable Automation', async (t) => {
     );
     const environment = createSantaCruzProcessEnvironment(
       {},
-      process.env,
+      { ...process.env, SANTACRUZ_RESTORE_FOCUS: 'false' },
       'puran',
       ['puran 25', 'puran']
     );
@@ -1242,7 +1242,8 @@ test('Santa Cruz Portable Automation', async (t) => {
         '--self-test'
       ], {
         env: environment,
-        timeout: 15000,
+        // This host needs about 18 s for PowerShell startup and 34 s for this self-test.
+        timeout: 60000,
         windowsHide: true
       }, (error, stdout, stderr) => {
         if (error) {
@@ -1447,39 +1448,102 @@ test('Santa Cruz Portable Automation', async (t) => {
     if (process.platform !== 'win32') return;
 
     const scriptPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'lib', 'santacruz-search.ps1');
+    const mutexName = `Local\\WimifarmaCotacaoSantaCruzTest-${process.pid}-${Date.now()}`;
+    const powershellLiteral = value => `'${value.replaceAll("'", "''")}'`;
+    // Execute only the production mutex functions and guard, never the GUI entry point.
+    const mutexFixture = `
+      $tokens = $null; $parseErrors = $null
+      $ast = [System.Management.Automation.Language.Parser]::ParseFile(${powershellLiteral(scriptPath)}, [ref]$tokens, [ref]$parseErrors)
+      if ($parseErrors.Count) { throw 'Santa Cruz script could not be parsed' }
+      $functions = @($ast.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+          $node.Name -in @('Enter-SantaCruzAutomationMutex', 'Exit-SantaCruzAutomationMutex')
+      }, $true))
+      if ($functions.Count -ne 2) { throw 'Santa Cruz mutex functions were not found' }
+      foreach ($function in $functions) {
+        . ([scriptblock]::Create($function.Extent.Text.Replace('Local\\WimifarmaCotacaoSantaCruz', ${powershellLiteral(mutexName)})))
+      }
+      $guard = @($ast.EndBlock.Statements | Where-Object {
+        $_ -is [System.Management.Automation.Language.IfStatementAst] -and
+          $_.Extent.Text.StartsWith('if (-not $DiscoveryOnly -and -not $StatusOnly -and -not (Enter-SantaCruzAutomationMutex))')
+      })
+      if ($guard.Count -ne 1) { throw 'Santa Cruz mutex guard was not found' }
+      $DiscoveryOnly = $false; $StatusOnly = $false
+      $script:SantaCruzAutomationMutex = $null; $script:SantaCruzAutomationMutexOwned = $false
+      function Write-SantaCruzTrace { param([string]$Message) [Console]::Error.WriteLine($Message) }
+      function Complete-SantaCruzResult {
+        param([string]$Status, [string]$Reason = '')
+        Exit-SantaCruzAutomationMutex
+        @{ status = $Status; reason = $Reason } | ConvertTo-Json -Compress
+        exit 0
+      }
+    `;
     const mutexHolder = spawn('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      "$mutex = New-Object System.Threading.Mutex($false, 'Local\\WimifarmaCotacaoSantaCruz'); " +
-        '$null = $mutex.WaitOne(); [Console]::Out.WriteLine("LOCKED"); [Console]::Out.Flush(); Start-Sleep -Seconds 20'
+      mutexFixture + `
+        if (-not (Enter-SantaCruzAutomationMutex)) { throw 'Isolated mutex was unavailable before the test' }
+        try {
+          [Console]::Out.WriteLine('LOCKED'); [Console]::Out.Flush()
+          $null = [Console]::In.ReadLine()
+        } finally { Exit-SantaCruzAutomationMutex }
+      `
     ], {
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe']
+      env: { ...process.env, SANTACRUZ_RESTORE_FOCUS: 'false' },
+      stdio: ['pipe', 'pipe', 'pipe']
     });
+
+    let holderStdout = '';
+    let holderStderr = '';
+    let holderError;
+    let holderExit = 'running';
+    mutexHolder.stdout.setEncoding('utf8');
+    mutexHolder.stderr.setEncoding('utf8');
+    mutexHolder.stdout.on('data', chunk => { holderStdout += chunk; });
+    mutexHolder.stderr.on('data', chunk => { holderStderr += chunk; });
+    mutexHolder.on('error', error => { holderError = error; });
+    const holderClosed = new Promise(resolve => mutexHolder.once('close', (code, signal) => {
+      holderExit = `code=${code}, signal=${signal}`;
+      resolve();
+    }));
+    const holderDiagnostics = () => `stdout=${JSON.stringify(holderStdout)}; stderr=${JSON.stringify(holderStderr)}; error=${holderError?.message || 'none'}; exit=${holderExit}`;
 
     try {
       await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('Mutex holder did not start')), 5000);
-        mutexHolder.once('error', reject);
-        mutexHolder.stdout.once('data', chunk => {
+        const finish = error => {
           clearTimeout(timer);
-          assert.match(String(chunk), /LOCKED/);
-          resolve();
-        });
+          mutexHolder.stdout.off('data', onData);
+          mutexHolder.off('error', onError);
+          mutexHolder.off('close', onClose);
+          if (error) reject(error);
+          else resolve();
+        };
+        const onData = () => {
+          if (holderStdout.split(/\r?\n/).includes('LOCKED')) finish();
+        };
+        const onError = error => finish(new Error(`Mutex holder failed to start: ${holderDiagnostics()}`, { cause: error }));
+        const onClose = () => finish(new Error(`Mutex holder exited before LOCKED: ${holderDiagnostics()}`));
+        // A trivial PowerShell cold start takes about 18 s on this host.
+        const timer = setTimeout(() => finish(new Error(`Mutex holder did not start within 60000 ms: ${holderDiagnostics()}`)), 60000);
+        mutexHolder.stdout.on('data', onData);
+        mutexHolder.once('error', onError);
+        mutexHolder.once('close', onClose);
       });
 
-      const output = await new Promise((resolve, reject) => {
+      const probeMutex = () => new Promise((resolve, reject) => {
         execFile('powershell.exe', [
           '-NoProfile',
           '-NonInteractive',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          scriptPath,
-          '--cleanup'
+          '-Command',
+          mutexFixture + `
+            . ([scriptblock]::Create($guard[0].Extent.Text))
+            Complete-SantaCruzResult 'available'
+          `
         ], {
-          timeout: 15000,
+          env: { ...process.env, SANTACRUZ_RESTORE_FOCUS: 'false' },
+          timeout: 60000,
           windowsHide: true
         }, (error, stdout, stderr) => {
           if (error) {
@@ -1490,13 +1554,35 @@ test('Santa Cruz Portable Automation', async (t) => {
         });
       });
 
+      const output = await probeMutex();
       const payloadLine = String(output).trim().split(/\r?\n/).findLast(line => line.trim().startsWith('{'));
       assert.ok(payloadLine, 'O processo bloqueado deve retornar um resultado JSON estruturado.');
       const payload = JSON.parse(payloadLine);
       assert.strictEqual(payload.status, 'busy');
       assert.match(payload.reason, /Outra cotacao ja esta controlando a Santa Cruz/);
+      assert.strictEqual(holderExit, 'running', 'O mutex deve permanecer retido ate a liberacao explicita.');
+      mutexHolder.stdin.end('\n');
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Mutex holder did not release: ${holderDiagnostics()}`)), 5000);
+        holderClosed.then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      assert.strictEqual(mutexHolder.exitCode, 0, holderDiagnostics());
+      const releasedOutput = await probeMutex();
+      const releasedPayloadLine = String(releasedOutput).trim().split(/\r?\n/).findLast(line => line.trim().startsWith('{'));
+      assert.ok(releasedPayloadLine, 'O processo liberado deve retornar um resultado JSON estruturado.');
+      assert.strictEqual(JSON.parse(releasedPayloadLine).status, 'available');
     } finally {
-      mutexHolder.kill();
+      if (mutexHolder.exitCode === null && mutexHolder.signalCode === null) mutexHolder.kill();
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Mutex holder did not stop: ${holderDiagnostics()}`)), 5000);
+        holderClosed.then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
     }
   });
 
