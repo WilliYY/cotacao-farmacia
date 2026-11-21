@@ -2,6 +2,14 @@
 
 Histórico estruturado de todas as alterações de engenharia realizadas no projeto.
 
+## [Verificação de funcionamento] - 2026-11-21
+
+- Corrigido o encerramento do Electron: o evento `will-quit` agora impede a saída enquanto aguarda a inicialização e o fechamento do SQLite. Requisições repetidas não iniciam fechamentos concorrentes; falhas no fechamento são registradas e não prendem a saída.
+- Adicionados seis testes de regressão do ciclo de encerramento e sua execução na suíte principal.
+- Ajustadas duas fixtures da Santa Cruz para a latência medida do PowerShell neste computador. O teste de mutex usa funções e barreira extraídas do script real, um mutex exclusivo e liberação explícita do processo de teste, sem executar o comando de limpeza da aplicação.
+- Validação local isolada: 454 testes principais e 150 do catálogo aprovados, sem falhas ou testes ignorados; lint e build aprovados. O aplicativo abriu, respondeu ao IPC, leu um banco vazio de teste e encerrou com código 0 no Electron instalado.
+- Nenhum pedido enviado ou dado comercial alterado. Portais reais não foram revalidados nesta checagem; a atualização da Santa Cruz permanece pendente. A auditoria de dependências encontrou 20 pacotes sinalizados (14 de severidade alta e 6 moderada), sem atualização automática de versões.
+
 ## [Correção de logs] - 2026-11-02
 
 - Corrigido `Error: EPIPE: broken pipe, write` no processo principal do Electron quando o console herdado de outro programa é fechado. O logger trata falhas síncronas e eventos assíncronos de stdout/stderr, mantendo os registros em arquivo, a sanitização e os níveis existentes.

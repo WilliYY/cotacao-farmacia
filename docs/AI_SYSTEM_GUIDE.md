@@ -381,6 +381,14 @@ As of 2026-10-31, the application opens the local quotation form directly. The a
 
 `tests/logger-output.test.js` reproduces a closed parent pipe in a child process and verifies file-record continuity, independent outputs, file-error fallback, sanitization, listener reuse and preservation of non-EPIPE errors. Its logger fixtures mock filesystem/database dependencies, and the real pipe test starts no portal or supplier operation.
 
+### Graceful application shutdown (2026-11-21)
+
+The main process stores its complete startup promise and synchronously prevents `will-quit` while database cleanup is pending. Normal shutdown waits for startup to settle, clears the update interval, awaits `closeDatabase()`, and then retries `app.quit()`. A pending flag deduplicates repeated requests and a completed flag permits the final exit. Diagnostic mode skips waiting for its own startup task; pre-ready and secondary instances skip database cleanup. Cleanup failures are logged before the final exit attempt. Keep the existing active-quotation cancellation guard in `before-quit`.
+
+`tests/app-shutdown.test.js` exercises cleanup ordering, repeated requests, closing during startup, failure handling, diagnostics, pre-ready exit, and secondary instances. The Santa Cruz fixtures in `tests/all.test.js` allow measured PowerShell startup latency and verify the production mutex primitives/guard in isolation, with an exclusive mutex and explicit holder release. They must not invoke the application's real cleanup or GUI automation.
+
+The 2026-11-21 local check passed 454 main tests and 150 catalogue tests, lint, build, and an isolated native Electron startup/database/exit check. This does not certify live supplier prices or portal sessions. Dependency audit findings require a separately validated maintenance change; do not apply force fixes or silently change the SheetJS distribution source.
+
 ### Delivery Workflow
 - Every completed project change includes synchronized documentation, executable validation, a scoped Git commit, and a push of the current branch by default.
 - The staged diff must be reviewed before commit. Credentials, `.env`, databases, logs, caches, screenshots, and supplier-owned binaries stay local.
