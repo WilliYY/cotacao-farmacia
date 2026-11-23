@@ -18,6 +18,7 @@ test('Name-only acquisition retries empty descriptions without changing the audi
     const source = fs.readFileSync(new URL(`../src/connectors/real/${file}`, import.meta.url), 'utf8');
     const calls = [];
     const context = vm.createContext({
+      process: { env: {} },
       SupplierConnector: class {}, getSupplierCredentials: async () => ({ username: 'test', password: 'test' }),
       normalizeAnbUrl: value => value, normalizeProfarmaUrl: value => value,
       getCombinationSearchFallback: () => '', getProfarmaRetryTerm: () => '',
@@ -30,7 +31,10 @@ test('Name-only acquisition retries empty descriptions without changing the audi
     const parsed = { name: 'lacto purga', dosage: '5mg', presentation: 'comprimido revestido', quantity: 12 };
     const before = { ...parsed };
     const results = await context.connector.searchProduct(parsed);
-    assert.deepEqual(calls, ['lacto purga 5mg comprimido revestido', 'lacto purga']);
+    const expectedTerms = className === 'ProfarmaRealConnector'
+      ? ['lacto purga 5mg', 'lacto purga 5mg comprimido revestido', 'lacto purga']
+      : ['lacto purga 5mg comprimido revestido', 'lacto purga'];
+    assert.deepEqual(calls, expectedTerms);
     assert.deepEqual(parsed, before);
     assert.equal(results[0].price, 3.5);
     assert.equal(results[0].searchFallback, 'NOME_SEM_METADADOS');
@@ -48,7 +52,7 @@ test('Name-only acquisition retries empty descriptions without changing the audi
         quantity: args[5] === 'lacto purga' ? 12 : 16, dosage: '5mg', presentation: 'comprimido', price: 3.5 }];
     };
     const mismatched = await context.connector.searchProduct(parsed);
-    assert.deepEqual(calls, ['lacto purga 5mg comprimido revestido', 'lacto purga']);
+    assert.deepEqual(calls, expectedTerms);
     assert.equal(mismatched[0].quantity, 12);
   }
 });
@@ -139,15 +143,15 @@ test('Electron collection rejects stalled, repeated and limited grids; terminal 
     const document = {
       body: { innerText: 'LOSARTANA' },
       querySelector: selector => selector === '#Promo' ? null : (terminal && index === pageIds.length - 1 ? null : next),
-      querySelectorAll: selector => selector.includes('th') || selector.includes('header-cell') ? headers.map(innerText => ({ innerText })) : [{ innerText: `${pageIds[index]} 2,70`, querySelector: () => ({}), querySelectorAll: cells }]
+      querySelectorAll: selector => selector.includes('th') || selector.includes('header-cell') ? headers.map(innerText => ({ innerText })) : [{ innerText: `${pageIds[index]} 2,70`, closest: () => ({ querySelectorAll: () => headers.map(innerText => ({ innerText })) }), querySelector: () => ({}), querySelectorAll: cells }]
     };
-    const context = vm.createContext({ document, Date: { now: () => clock }, setTimeout: callback => { clock += 100; callback(); }, supplierId: 2, includeDebugColumns: false, searchTerm: 'losartana', submittedSearchAt: 1 });
+    const context = vm.createContext({ process: { env: {} }, document, Date: { now: () => clock }, clearTimeout, setTimeout: callback => { clock += 100; callback(); }, supplierId: 2, includeDebugColumns: false, searchTerm: 'losartana', submittedSearchAt: 1 });
     vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, ''), context);
     const script = vm.runInContext('`' + template + '`', context);
     return vm.runInContext(script, context);
   };
   const complete = await run(['7896181915638', '7896422507738']);
-  assert.equal(complete.length, 2);
+  assert.equal(complete.length, 2, JSON.stringify(complete));
   const stalled = await run(['7896181915638'], false);
   assert.equal(stalled.failureCode, 'PAGINATION_INCOMPLETE');
   assert.equal(stalled.partialResults.length, 1);

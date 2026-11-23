@@ -72,12 +72,13 @@ export function applyAnbEanEvidence(results, searchTerm) {
 }
 
 export class ANBRealConnector extends SupplierConnector {
-  constructor() {
+  constructor({ credentialProvider = getSupplierCredentials } = {}) {
     super('ANB');
+    this.credentialProvider = credentialProvider;
   }
 
   async isAvailable() {
-    const creds = await getSupplierCredentials(1);
+    const creds = await this.credentialProvider(1);
     return !!(creds && creds.username && creds.password);
   }
 
@@ -85,7 +86,7 @@ export class ANBRealConnector extends SupplierConnector {
    * Performs autonomous browser-based search on ANB Farma portal.
    */
   async searchProduct(parsedQuery, options = {}) {
-    const creds = await getSupplierCredentials(1); // ANB supplierId = 1
+    const creds = await this.credentialProvider(1); // ANB supplierId = 1
     if (!creds || !creds.username || !creds.password) {
       logger.warn('Real credentials not configured for ANB Farma.');
       return [createLiveUnavailableResult('ANB', parsedQuery, 'credenciais nao configuradas')];
@@ -139,7 +140,7 @@ export class ANBRealConnector extends SupplierConnector {
           ? (res.searchFallback || 'ASSOCIACAO_POR_PRINCIPIO_ATIVO')
           : res.searchFallback,
         source: 'ANB',
-        capturedAt: new Date().toISOString()
+        capturedAt: Object.hasOwn(res, 'capturedAt') ? res.capturedAt : new Date().toISOString()
       }));
     } catch (error) {
       if (error?.name === 'AbortError') throw error;

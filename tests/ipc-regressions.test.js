@@ -149,7 +149,8 @@ test('Supplier credentials preserve the Santa Cruz local executable contract', (
   assert.throws(() => validateSupplierCredentials(3, 'C:\\Santa\0Cruz.exe', ...credentials));
   assert.throws(() => validateSupplierCredentials(1, 'C:\\supplier.exe', ...credentials));
   assert.throws(() => validateSupplierCredentials(1, 'javascript:alert(1)', ...credentials));
-  assert.throws(() => validateSupplierCredentials(5, '', ...credentials));
+  assert.equal(validateSupplierCredentials(5, 'https://egam.com.br/', ...credentials), 5);
+  assert.throws(() => validateSupplierCredentials(6, '', ...credentials));
 });
 
 test('Interrupted quotation remains a review item while preserving captured offers', () => {

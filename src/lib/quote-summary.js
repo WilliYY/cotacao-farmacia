@@ -5,6 +5,7 @@ const REVIEW_ITEM_STATUSES = new Set([
   'supplier_error',
   'supplier_timeout',
   'completed_with_timeout',
+  'completed_with_errors',
   'cancelled',
   'interrupted'
 ]);

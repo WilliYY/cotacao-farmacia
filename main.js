@@ -740,7 +740,7 @@ handleIpc('get-quote-details', async (event, quoteId) => {
 });
 
 // IPC Handler: Update Result Status
-handleIpc('update-result', async (event, resultId, fields) => {
+handleIpc('update-result', async (event, resultId, fields, learnSpelling = false) => {
   try {
     resultId = validatePositiveId(resultId);
     const quoteItemId = await updateQuoteResult(resultId, fields);
@@ -753,7 +753,7 @@ handleIpc('update-result', async (event, resultId, fields) => {
       quoteItemId,
       resultId
     );
-    if (fields?.reviewStatus === 'APROVADO' && item?.rawText && item?.normalizedName) {
+    if (learnSpelling === true && fields?.reviewStatus === 'APROVADO' && item?.rawText && item?.normalizedName) {
       const approvedCorrection = deriveApprovedCorrection(
         item.rawText,
         item.supplierProductName,

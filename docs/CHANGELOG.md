@@ -683,3 +683,14 @@ Histórico estruturado de todas as alterações de engenharia realizadas no proj
 - Refatorado `logger.js` com auto-rotação física de arquivos de log limitados a 2MB.
 - Atualizado o visualizador principal `App.jsx` com paleta escura premium, tabs de navegação e novas tabelas.
 - Atualizado `preload.js` e `main.js` para expor o barramento IPC de logs.
+
+## 22/11/2026 — Fila de catálogo e prévia local
+
+- Atualizado o Electron para 43.8.12. A instalação limpa no Windows, a consulta SQLite, a abertura do processo gráfico e a exportação de planilha passaram. O `npm audit` passou de 20 avisos para 7, um alto em `xlsx` e seis moderados na cadeia de empacotamento. A planilha identifica preço e data de captura ausentes.
+
+- Adicionada fila opt-in com `--large-queue --limit=5000`; o piloto de 1–250 produtos permanece disponível. A rodada identifica manifesto, contas e versão, mantém journal separado do banco comercial e exporta partes de até 50 produtos. Quatro fornecedores avançam em paralelo, cada um serialmente. Santa Cruz continua fora dessa fila.
+- Retomada por `--resume`, recuperação de lock órfão com proprietário local comprovadamente encerrado, tentativas transitórias limitadas e pausa somente do fornecedor que exige operador. Interrupção, tentativa ambígua e esgotamento permanecem explícitos; erro não vira ruptura ou saldo zero. O fd do journal permanece aberto e gravações simultâneas compartilham confirmação durável.
+- Disponibilizada prévia local por `scripts/preview-catalogue-for-wimifarma.mjs --report <relatório-ou-parte> --template <template> --site <repo-wimifarma-br> --output <arquivo-novo>`. O validador real da loja e os hashes das entradas acompanham a preparação. Não há envio ou publicação neste comando.
+- Separadas avaliação histórica (`eligibleAtCollection`), avaliação atual (`eligible`) e requisitos comerciais da loja (`storeEligible`). Identidade, preço da apresentação, unidade, condição, ST, disponibilidade e captura continuam exigindo evidência; uma decisão manual não renova preço ou estoque.
+- Regressões de inteligência cobrem `1.000 mg` versus `1 mg`, denominadores por ativo, Puran como marca, `c/24` versus dois pacotes e `25 x 0,7 mm`. A aprendizagem de grafia exige opt-in explícito na revisão; aprovação isolada não autoriza memorização.
+- Validação desta fila: seis testes aprovados e uma regressão adicional de cancelamento antes do portal. A simulação de 5.000 × 4 usa journal em memória; o persistidor real foi exercitado com 120 pares, interrupção e retomada: 123 chamadas, duas aberturas e 63 sincronizações, sem repetir sucesso. São ensaios isolados, sem consulta de portal real ou escrita em banco comercial; não demonstram tempo de produção ou validação comercial dos fornecedores.

@@ -4,12 +4,34 @@ import path from 'node:path';
 import { getConnectorSessionIdentity } from './connector-session.js';
 
 import {
+  isTrustedSupplierUrl,
+  assertTrustedSupplierLogin,
   isDirectDmProductMatch,
   parseDmParanaCard
 } from './electron-scraper.js';
 import { logger } from './logger.js';
 
 const SEARCH_SELECTOR = 'input[placeholder*="Digite o que deseja buscar"]';
+const dmSessions = new Map();
+const SESSION_IDLE_MS = 120_000;
+
+function closeDmSession(key, session) {
+  if (!session.closing) {
+    clearTimeout(session.idleTimer);
+    session.closing = (async () => {
+      await session.creating?.catch(() => {});
+      await session.context?.close();
+      session.closed = true;
+    })().finally(() => {
+      if (session.closed && !session.busy && dmSessions.get(key) === session) dmSessions.delete(key);
+    });
+  }
+  return session.closing;
+}
+
+export async function closeDmPlaywrightSessions() {
+  await Promise.all([...dmSessions].map(([key, session]) => closeDmSession(key, session)));
+}
 const USER_SELECTOR = [
   'input[name="cnpj"]',
   '#cnpj',
@@ -64,8 +86,8 @@ export function isDmSearchRequest(request, searchTerm) {
     if (!isDmPortalHostname(url.hostname)) return false;
     if (!['document', 'xhr', 'fetch'].includes(request.resourceType())) return false;
 
-    const requestEvidence = decodeURIComponent(`${url.pathname}${url.search} ${request.postData?.() || ''}`);
-    return normalize(requestEvidence).includes(normalize(searchTerm));
+    const searchValues = url.searchParams.getAll('search');
+    return searchValues.length === 1 && normalize(searchValues[0]) === normalize(searchTerm);
   } catch {
     return false;
   }
@@ -74,6 +96,16 @@ export function isDmSearchRequest(request, searchTerm) {
 function getPositiveTimeout(environment, name, fallback) {
   const value = Number.parseInt(environment?.[name], 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function isDmTerminalEmptySearchResponse(payload, request, searchTerm) {
+  const searchValues = new URL(request.url()).searchParams.getAll('search');
+  return searchValues.length === 1 && normalize(searchValues[0]) === normalize(searchTerm) &&
+    payload?.page === 1 &&
+    Array.isArray(payload.items) && payload.items.length === 0 &&
+    payload.total_items === 0 &&
+    Number.isInteger(payload.total_pages) && payload.total_pages >= 0 && payload.total_pages <= 1 &&
+    payload.has_next_page === false;
 }
 
 async function resolveUserDataDir(explicitDirectory) {
@@ -208,6 +240,31 @@ async function waitForLoginOrSearch(page, timeoutMs, signal) {
   );
 }
 
+export async function installDmNavigationGuard(context, onBlocked) {
+  await context.route('**/*', async route => {
+    const request = route.request();
+    if (request.isNavigationRequest() && !request.frame().parentFrame() &&
+        !isTrustedSupplierUrl(4, request.url())) {
+      onBlocked();
+      await route.abort('blockedbyclient');
+      return;
+    }
+    await route.continue();
+  });
+}
+
+export async function assertTrustedDmLogin(page) {
+  if (!isTrustedSupplierUrl(4, page.url())) {
+    throw createPlaywrightError('SUPPLIER_ORIGIN_BLOCKED', 'SUPPLIER_ORIGIN_BLOCKED');
+  }
+  await page.evaluate(`(() => {
+    const isTrustedSupplierUrl = ${isTrustedSupplierUrl.toString()};
+    const assertTrustedSupplierLogin = ${assertTrustedSupplierLogin.toString()};
+    assertTrustedSupplierLogin(document, location.href, 4,
+      Array.from(document.querySelectorAll('input, button')));
+  })()`);
+}
+
 export async function loginIfNeeded(page, credentials, timeoutMs, signal) {
   const entry = await waitForLoginOrSearch(page, timeoutMs, signal);
   if (entry.searchInput) return entry.searchInput;
@@ -223,7 +280,9 @@ export async function loginIfNeeded(page, credentials, timeoutMs, signal) {
     throw createPlaywrightError('PLAYWRIGHT_LAYOUT_CHANGED', 'DM login field was not found.');
   }
 
+  await assertTrustedDmLogin(page);
   await userInput.fill(credentials.username);
+  await assertTrustedDmLogin(page);
   await passwordInput.fill(credentials.password);
 
   const submitByRole = page.getByRole('button', { name: /^entrar$/i }).first();
@@ -234,6 +293,7 @@ export async function loginIfNeeded(page, credentials, timeoutMs, signal) {
     throw createPlaywrightError('PLAYWRIGHT_LAYOUT_CHANGED', 'DM login button was not found.');
   }
 
+  await assertTrustedDmLogin(page);
   await submit.click();
   return waitForSearchPage(page, timeoutMs, signal);
 }
@@ -243,19 +303,25 @@ async function readRawDmCards(page) {
     hasText: /^\s*pre[cç]o\s*final:\s*R\$/i
   });
 
-  return priceNodes.evaluateAll(nodes => nodes.map(priceNode => {
-    let card = priceNode;
-    while (card && card !== document.body) {
-      const cardText = card.innerText || '';
-      if (/EAN:\s*\d{13}/i.test(cardText) && card.querySelector('button')) break;
-      card = card.parentElement;
-    }
-    if (!card || card === document.body) return null;
+  const cards = await priceNodes.evaluateAll(nodes => nodes.map(priceNode => {
+    const boundary = priceNode.closest('[data-slot="card"], article, [role="listitem"], .card, mat-card');
+    if (!boundary) return { unparsed: true };
+    const normalizeName = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase().replace(/\s+/g, ' ').trim();
+    const card = boundary;
+    const cardText = card.innerText || '';
+    const eans = cardText.match(/\bEAN:\s*\d{13}\b/gi) || [];
+    const prices = cardText.match(/pre[cç]o\s*final:\s*R\$/gi) || [];
+    if (eans.length !== 1 || prices.length !== 1) return { unparsed: true };
+    const imageNames = Array.from(card.querySelectorAll('img[alt]'))
+      .map(image => (image.getAttribute('alt') || '').trim())
+      .filter(alt => alt && !/^brasil$/i.test(alt) && !/^logo/i.test(alt));
+    const headings = Array.from(card.querySelectorAll('h2, h3, h4'))
+      .map(heading => (heading.innerText || '').trim()).filter(Boolean);
+    const names = [...headings, ...imageNames];
+    if (new Set(names.map(normalizeName)).size !== 1) return { unparsed: true };
+    const name = names[0];
 
-    const productImage = Array.from(card.querySelectorAll('img[alt]')).find(image => {
-      const alt = (image.getAttribute('alt') || '').trim();
-      return alt && !/^brasil$/i.test(alt) && !/^logo/i.test(alt);
-    });
     const paragraphs = Array.from(card.querySelectorAll('p'))
       .map(paragraph => (paragraph.innerText || '').trim())
       .filter(Boolean);
@@ -267,8 +333,10 @@ async function readRawDmCards(page) {
     );
 
     return {
-      name: productImage?.getAttribute('alt')?.trim() || '',
+      name,
       laboratory,
+      sourceUrl: String(globalThis.location?.origin || ''),
+      capturedAt: new Date().toISOString(),
       text: card.innerText || '',
       hasBuyButton: Boolean(buyButton),
       buyButtonDisabled: Boolean(
@@ -278,6 +346,10 @@ async function readRawDmCards(page) {
       )
     };
   }).filter(Boolean));
+  if (cards.some(card => card.unparsed)) {
+    throw createPlaywrightError('PLAYWRIGHT_LAYOUT_CHANGED', 'DM product card boundary or evidence is ambiguous.');
+  }
+  return cards;
 }
 
 export async function extractDmPageResults(page, searchTerm) {
@@ -334,15 +406,21 @@ export async function waitForDmResults(page, searchTerm, timeoutMs, signal, evid
     if (signal?.aborted) throw createAbortError();
     const inputValue = await performDmSearchFieldAction(page, 'inputValue', undefined, deadline);
     const state = await getBodyState(page, getRemainingSearchTimeout(deadline));
-    const observedAt = Date.now();
-    if (state.explicitlyEmpty) {
-      if (!emptySince) emptySince = observedAt;
-    } else {
-      emptySince = 0;
-    }
     if (!state.loading) {
       const results = await extractDmPageResults(page, searchTerm);
       const signatureAfter = await getPageSignature(page);
+      const observedAt = Date.now();
+      const emptyResponse = evidence.emptySearchResponse?.();
+      const confirmedResponseEmpty = !signatureAfter &&
+        emptyResponse?.searchTerm === searchTerm &&
+        emptyResponse.at >= evidence.submittedAt &&
+        evidence.searchPageUrl && page.url() === evidence.searchPageUrl;
+      const explicitlyEmpty = state.explicitlyEmpty || confirmedResponseEmpty;
+      if (explicitlyEmpty) {
+        if (!emptySince) emptySince = observedAt;
+      } else {
+        emptySince = 0;
+      }
       const decision = evaluateDmGridEvidence({
         inputValue,
         searchTerm,
@@ -350,7 +428,7 @@ export async function waitForDmResults(page, searchTerm, timeoutMs, signal, evid
         signatureAfter,
         results,
         rawResultCount: signatureAfter ? 1 : 0,
-        explicitlyEmpty: state.explicitlyEmpty,
+        explicitlyEmpty,
         submittedAt: evidence.submittedAt,
         observedAt,
         emptyStableMs: emptySince ? observedAt - emptySince : 0,
@@ -366,7 +444,13 @@ export async function waitForDmResults(page, searchTerm, timeoutMs, signal, evid
       if (decision.status === 'results') {
         return { results, explicitlyEmpty: false, hasGridResults: true };
       }
-      if (decision.status === 'empty') return { results: [], explicitlyEmpty: true };
+      if (decision.status === 'empty') return {
+        results: [],
+        explicitlyEmpty: true,
+        emptyEvidence: confirmedResponseEmpty ? 'terminal-search-response-empty' : 'dom-empty-message'
+      };
+    } else {
+      emptySince = 0;
     }
     await page.waitForTimeout(Math.min(250, Math.max(0, deadline - Date.now())));
   }
@@ -487,7 +571,13 @@ export async function collectAllPages(page, searchTerm, signal, options = {}) {
   return results;
 }
 
-function getTracePath() {
+export function shouldCaptureDmTrace(environment) {
+  return environment.CATALOGUE_AUDIT_READ_ONLY !== 'true' &&
+    String(environment.DM_PLAYWRIGHT_TRACE || 'on-failure').toLowerCase() !== 'off';
+}
+
+function getTracePath(environment = process.env) {
+  if (!shouldCaptureDmTrace(environment)) return null;
   const directory = path.resolve(process.cwd(), 'logs', 'scraper-debug');
   fs.mkdirSync(directory, { recursive: true });
   const previousTraces = fs.readdirSync(directory)
@@ -509,15 +599,46 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
   const pageTimeoutMs = Math.min(getPositiveTimeout(environment, 'DM_PLAYWRIGHT_PAGE_TIMEOUT_MS', 30000), operationTimeoutMs);
   const searchTimeoutMs = Math.min(getPositiveTimeout(environment, 'DM_PLAYWRIGHT_SEARCH_TIMEOUT_MS', 12000), operationTimeoutMs);
   const channel = String(environment.DM_PLAYWRIGHT_CHANNEL || 'msedge').trim().toLowerCase();
+  const reuseSession = environment.SUPPLIER_SESSION_REUSE !== 'false';
+  const userDataDir = path.join(await resolveUserDataDir(options.userDataDir), getConnectorSessionIdentity(4, params));
+  const signature = JSON.stringify([channel, !showWindow]);
+  let session;
   let context;
+  let page;
+  let successful = false;
+  let listening = true;
+  let failureListener;
+  let responseListener;
   let traceStarted = false;
+  let originBlocked = false;
   let timeoutTriggered = false;
   let timeoutId;
   let abortHandler;
 
   if (signal?.aborted) throw createAbortError();
 
+  session = dmSessions.get(userDataDir);
+  if (session?.busy || session?.closing) {
+    throw createPlaywrightError('PLAYWRIGHT_SESSION_BUSY', 'DM Playwright session is already in use or closing.');
+  }
+  if (!session) {
+    session = { busy: true, signature, originBlocked: false };
+    dmSessions.set(userDataDir, session);
+  } else {
+    session.busy = true;
+    clearTimeout(session.idleTimer);
+  }
+
   try {
+    // A new document in the same browser did not reliably refresh repeated/empty searches.
+    // Relaunch the physical context while preserving its isolated profile and cookies.
+    if (!reuseSession || session.signature !== signature || session.originBlocked || session.page?.isClosed() ||
+        session.lastSearchTerm === normalize(params.searchTerm)) {
+      await closeDmSession(userDataDir, session);
+      session = { busy: true, signature, originBlocked: false };
+      dmSessions.set(userDataDir, session);
+    }
+    const reused = Boolean(session.context);
     let chromium;
     try {
       ({ chromium } = await import('playwright-core'));
@@ -525,15 +646,16 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
       throw createPlaywrightError('PLAYWRIGHT_UNAVAILABLE', 'playwright-core is not installed.', cause);
     }
 
-    const userDataDir = path.join(await resolveUserDataDir(options.userDataDir), getConnectorSessionIdentity(4, params));
-    try {
-      context = await chromium.launchPersistentContext(userDataDir, {
+    if (session.closing || signal?.aborted) throw createAbortError();
+    if (!session.context) try {
+      session.creating = chromium.launchPersistentContext(userDataDir, {
         channel,
         headless: !showWindow,
         locale: 'pt-BR',
         viewport: { width: 1440, height: 1000 },
         timeout: pageTimeoutMs
-      });
+      }).then(created => { session.context = created; return created; });
+      await session.creating;
     } catch (cause) {
       throw createPlaywrightError(
         'PLAYWRIGHT_UNAVAILABLE',
@@ -541,39 +663,75 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
         cause
       );
     }
+    context = session.context;
+    if (session.closing || signal?.aborted) throw createAbortError();
 
     context.setDefaultTimeout(pageTimeoutMs);
     context.setDefaultNavigationTimeout(pageTimeoutMs);
     timeoutId = setTimeout(() => {
       timeoutTriggered = true;
-      context?.close().catch(() => {});
+      closeDmSession(userDataDir, session).catch(() => {});
     }, operationTimeoutMs);
-    abortHandler = () => context?.close().catch(() => {});
+    abortHandler = () => closeDmSession(userDataDir, session).catch(() => {});
     signal?.addEventListener('abort', abortHandler, { once: true });
 
-    const page = context.pages()[0] || await context.newPage();
+    if (!reused) {
+      await installDmNavigationGuard(context, () => { session.originBlocked = true; });
+      session.page = context.pages()[0] || await context.newPage();
+    } else {
+      if (!isTrustedSupplierUrl(4, session.page.url())) {
+        session.originBlocked = true;
+        throw createPlaywrightError('SUPPLIER_ORIGIN_BLOCKED', 'SUPPLIER_ORIGIN_BLOCKED');
+      }
+      // Reuse the authenticated browser, never the previous mutable SPA or search field.
+      await session.page.close();
+      session.page = await context.newPage();
+    }
+    page = session.page;
+    page.on('popup', popup => popup.close().catch(() => {}));
+    page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
     let lastNetworkFailure = { at: 0, message: '' };
     let activeSearchTerm = '';
     let lastRelatedSearchResponseAt = 0;
-    page.on('requestfailed', request => {
-      if (isDmSearchRequest(request, activeSearchTerm)) {
+    let lastEmptySearchResponse = null;
+    let relatedSearchResponseSequence = 0;
+    failureListener = request => {
+      if (listening && isDmSearchRequest(request, activeSearchTerm)) {
         lastNetworkFailure = {
           at: Date.now(),
           message: request.failure()?.errorText || 'request failed'
         };
       }
-    });
-    page.on('response', response => {
+    };
+    page.on('requestfailed', failureListener);
+    responseListener = async response => {
       const request = response.request();
+      if (!listening || !isDmSearchRequest(request, activeSearchTerm)) return;
+      const responseSequence = ++relatedSearchResponseSequence;
+      lastEmptySearchResponse = null;
       if (
-        isDmSearchRequest(request, activeSearchTerm) &&
         response.status() < 400 &&
         response.status() >= 200
       ) {
-        lastRelatedSearchResponseAt = Date.now();
+        const responseAt = Date.now();
+        const responseSearchTerm = activeSearchTerm;
+        lastRelatedSearchResponseAt = responseAt;
+        if (response.status() < 300 && typeof response.json === 'function') {
+          try {
+            const payload = await response.json();
+            if (
+              listening && responseSequence === relatedSearchResponseSequence &&
+              isDmTerminalEmptySearchResponse(payload, request, responseSearchTerm)
+            ) {
+              lastEmptySearchResponse = { at: responseAt, searchTerm: responseSearchTerm };
+            }
+          } catch {
+            // Non-JSON or incomplete responses cannot confirm an empty search.
+          }
+        }
       }
-    });
-    page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
+    };
+    page.on('response', responseListener);
 
     try {
       await page.goto(params.loginUrl, { waitUntil: 'domcontentloaded', timeout: pageTimeoutMs });
@@ -586,27 +744,33 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
     }
 
     await loginIfNeeded(page, params, pageTimeoutMs, signal);
-    const traceMode = String(environment.DM_PLAYWRIGHT_TRACE || 'on-failure').toLowerCase();
-    if (traceMode !== 'off') {
+    if (shouldCaptureDmTrace(environment)) {
       await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
       traceStarted = true;
     }
 
     let searchState = { results: [], explicitlyEmpty: false };
+    const searchPageUrl = page.url();
+    // Opt-in diagnostic for portals that search reactively while Enter changes routes.
+    const submitOnInput = String(environment.DM_SEARCH_SUBMIT_MODE || '').toLowerCase() === 'input';
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (signal?.aborted) throw createAbortError();
       const searchDeadline = Date.now() + Math.min(searchTimeoutMs, pageTimeoutMs);
       await performDmSearchFieldAction(page, 'fill', '', searchDeadline);
       await page.waitForTimeout(Math.min(250, getRemainingSearchTimeout(searchDeadline)));
       const signatureBefore = await getPageSignature(page);
-      await performDmSearchFieldAction(page, 'fill', params.searchTerm, searchDeadline);
       const submittedAt = Date.now();
       activeSearchTerm = params.searchTerm;
-      await performDmSearchFieldAction(page, 'press', 'Enter', searchDeadline);
+      await performDmSearchFieldAction(page, 'fill', params.searchTerm, searchDeadline);
+      if (!submitOnInput) {
+        await performDmSearchFieldAction(page, 'press', 'Enter', searchDeadline);
+      }
       searchState = await waitForDmResults(page, params.searchTerm, searchTimeoutMs, signal, {
         deadline: searchDeadline,
         signatureBefore,
         submittedAt,
+        searchPageUrl,
+        emptySearchResponse: () => lastEmptySearchResponse,
         networkFailureAt: () => lastNetworkFailure.at,
         networkFailureMessage: () => lastNetworkFailure.message,
         relatedResponseAt: () => lastRelatedSearchResponseAt
@@ -616,8 +780,13 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
     }
 
     if (searchState.explicitlyEmpty) {
+      logger.info(`DM Playwright empty search confirmed: ${searchState.emptyEvidence}.`);
       if (traceStarted) await context.tracing.stop();
       traceStarted = false;
+      if (signal?.aborted || timeoutTriggered || session.closing) throw createAbortError();
+      session.lastSearchTerm = normalize(params.searchTerm);
+      session.lastSearchEmpty = true;
+      successful = true;
       return [];
     }
     if (!searchState.hasGridResults) {
@@ -630,7 +799,7 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
     });
     if (traceStarted) {
       if (String(environment.DM_PLAYWRIGHT_TRACE || '').toLowerCase() === 'always') {
-        const tracePath = getTracePath();
+        const tracePath = getTracePath(environment);
         await context.tracing.stop({ path: tracePath });
         logger.info(`DM Playwright trace saved to: ${tracePath}`);
       } else {
@@ -638,15 +807,23 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
       }
       traceStarted = false;
     }
+    if (signal?.aborted || timeoutTriggered || session.closing) throw createAbortError();
+    session.lastSearchTerm = normalize(params.searchTerm);
+    session.lastSearchEmpty = results.length === 0;
+    successful = true;
     return results;
   } catch (error) {
+    originBlocked ||= session.originBlocked;
+    if (originBlocked || String(error.message || '').includes('SUPPLIER_ORIGIN_BLOCKED')) {
+      throw createPlaywrightError('SUPPLIER_ORIGIN_BLOCKED', 'SUPPLIER_ORIGIN_BLOCKED');
+    }
     if (signal?.aborted) throw createAbortError();
     if (timeoutTriggered) {
       throw createPlaywrightError('PLAYWRIGHT_TIMEOUT', 'DM Playwright scraping session timed out.', error);
     }
     if (traceStarted && context) {
       try {
-        const tracePath = getTracePath();
+        const tracePath = getTracePath(environment);
         await context.tracing.stop({ path: tracePath });
         logger.warn(`DM Playwright failure trace saved to: ${tracePath}`);
       } catch (traceError) {
@@ -655,8 +832,23 @@ export async function scrapeDmParanaWithPlaywright(params, options = {}) {
     }
     throw error;
   } finally {
+    listening = false;
+    if (page && reuseSession) {
+      if (failureListener) page.off('requestfailed', failureListener);
+      if (responseListener) page.off('response', responseListener);
+    }
     if (timeoutId) clearTimeout(timeoutId);
     if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
-    await context?.close().catch(() => {});
+    try {
+      if (!successful || !reuseSession || session.lastSearchEmpty || session.closing) await closeDmSession(userDataDir, session);
+    } finally {
+      session.busy = false;
+      if (session.closing) {
+        if (session.closed && dmSessions.get(userDataDir) === session) dmSessions.delete(userDataDir);
+      } else {
+        session.idleTimer = setTimeout(() => { closeDmSession(userDataDir, session).catch(() => {}); }, SESSION_IDLE_MS);
+        session.idleTimer.unref();
+      }
+    }
   }
 }

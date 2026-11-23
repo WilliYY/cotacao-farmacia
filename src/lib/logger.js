@@ -2,13 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 
-dotenv.config();
+const readOnlyCatalogueAudit = process.env.CATALOGUE_AUDIT_READ_ONLY === 'true';
+if (!readOnlyCatalogueAudit) dotenv.config();
 
 const logDir = './logs';
 const logFilePath = path.join(logDir, 'app.log');
 
 // Ensure log directory exists
-if (!fs.existsSync(logDir)) {
+if (!readOnlyCatalogueAudit && !fs.existsSync(logDir)) {
   fs.mkdirSync(logDir, { recursive: true });
 }
 
@@ -19,7 +20,9 @@ const LOG_LEVELS = {
   error: 3
 };
 
-const currentLogLevel = LOG_LEVELS[process.env.LOG_LEVEL?.toLowerCase()] ?? LOG_LEVELS.info;
+const currentLogLevel = readOnlyCatalogueAudit
+  ? Number.POSITIVE_INFINITY
+  : LOG_LEVELS[process.env.LOG_LEVEL?.toLowerCase()] ?? LOG_LEVELS.info;
 
 const consoleOutputs = new Map();
 

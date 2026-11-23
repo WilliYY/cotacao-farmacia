@@ -1667,7 +1667,8 @@ test('Profarma Novo Pedido Parser', async (t) => {
       '73.4%', '15,74', '-', '-', '21,70', '140', 'MEDLEY GENERICO', 'Generico', 'Nao'
     ], true);
     assert.strictEqual(withoutSt.price, 4.19);
-    assert.strictEqual(withoutSt.stStatus, 'SEM_ST');
+    assert.strictEqual(withoutSt.stStatus, 'ST_DESCONHECIDO');
+    assert.strictEqual(withoutSt.stAmount, null);
 
     const extendedRelease = parseProfarmaTableRow([
       'Pex', '7890000000020', 'GLIFAGE XR 500MG 30CPR', '0', '12,50',
@@ -1825,7 +1826,7 @@ test('Farmacia Popular & Reference Brand Intelligence', async (t) => {
       true
     );
 
-    const audited = auditQuoteResult(parseSearchQuery('Selopress 100mg 30 comp'), {
+    const combinationResult = {
       source: 'ANB',
       supplierProductName: 'SELOPRESS METOPROLOL 100MG + HIDROCLOROTIAZIDA 12,5MG 30 COMPRIMIDOS',
       dosage: '100mg',
@@ -1835,8 +1836,12 @@ test('Farmacia Popular & Reference Brand Intelligence', async (t) => {
       availability: 'disponivel',
       ean: '7890000000099',
       quantity: 30
-    });
+    };
+    const audited = auditQuoteResult(parseSearchQuery('Selopress 100/12,5mg 30 comp'), combinationResult);
     assert.notStrictEqual(audited.status, AUDIT_STATUS.BLOCKED, audited.summary);
+    const incomplete = auditQuoteResult(parseSearchQuery('Selopress 100mg 30 comp'), combinationResult);
+    assert.strictEqual(incomplete.status, AUDIT_STATUS.BLOCKED);
+    assert.match(incomplete.summary, /Doses por principio ativo/);
   });
 
   await t.test('keeps every known program and reference ingredient in the matching catalog', () => {
@@ -2476,8 +2481,9 @@ test('Live Quote Source Safety', async (t) => {
       }
     ]);
 
-    assert.strictEqual(responses[0].results[0].ean, '7897595901316');
-    assert.strictEqual(responses[0].results[0].searchFallback, 'EAN_CONFIRMADO_ENTRE_DISTRIBUIDORAS');
+    assert.strictEqual(responses[0].results[0].ean, null);
+    assert.strictEqual(responses[0].results[0].candidateEan, '7897595901316');
+    assert.strictEqual(responses[0].results[0].searchFallback, 'EAN_CANDIDATO_ENTRE_DISTRIBUIDORAS');
     assert.match(responses[0].results[0].eanEvidenceNote, /Profarma/);
     assert.strictEqual(responses[2].results[0].ean, null);
   });
@@ -3340,11 +3346,16 @@ test('Quote Auditor - Result Integrity Checks', async (t) => {
     };
 
     for (const query of [
-      'hidrocloro olmesartana 20mg 30 comp',
-      'olmesartana hidroclorotiazida 20mg 30 comp'
+      'hidrocloro 12,5mg olmesartana 20mg 30 comp',
+      'olmesartana 20mg hidroclorotiazida 12,5mg 30 comp'
     ]) {
       const audit = auditQuoteResult(parseSearchQuery(query), associationResult);
       assert.strictEqual(audit.status, AUDIT_STATUS.OK, `${query}: ${audit.summary}`);
+    }
+    for (const query of ['hidrocloro olmesartana 20mg 30 comp', 'olmesartana hidroclorotiazida 20mg 30 comp']) {
+      const incomplete = auditQuoteResult(parseSearchQuery(query), associationResult);
+      assert.strictEqual(incomplete.status, AUDIT_STATUS.BLOCKED);
+      assert.match(incomplete.summary, /Doses por principio ativo/);
     }
   });
 

@@ -25,7 +25,7 @@ async function capturePartition(env, supplierId = 1, overrides = {}) {
     }
   }
   const scrapePortal = vm.runInNewContext(`${source}\nscrapePortal`, {
-    URL, fakeElectron: { BrowserWindow }, process: { env },
+    URL, setTimeout, clearTimeout, fakeElectron: { BrowserWindow }, process: { env },
     logger: { info() {}, warn() {}, error() {} }, getConnectorSessionIdentity
   });
   const account = { ...credentials, ...overrides };

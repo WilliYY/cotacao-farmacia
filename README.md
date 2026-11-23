@@ -218,3 +218,33 @@ Qualquer item exibido na tabela pode ser revisado manualmente clicando em **✏�
 - Os indicadores de ST, auditoria, estoque e recomendação permanecem visíveis tanto no painel quanto na tabela detalhada.
 - O histórico completo fica recolhido por padrão, pode ser aberto por um único botão e aceita busca pelos medicamentos cotados.
 - Em telas menores, a tabela vira uma sequência de cartões com os rótulos de cada coluna, sem esconder o preço final ou a origem.
+
+### Fila persistente de catálogo: operação opt-in (22/11/2026)
+
+A auditoria da DM Paraná usa Playwright por padrão. Ela digita o EAN e aguarda o resultado correspondente. Na ANB, a auditoria usa a condição que o portal já apresenta.
+
+Para conferir o custo de uma apresentação, inclua no produto a quantidade de compra pretendida, por exemplo `"requestedQuantity": 1`. O campo é separado de “30 comprimidos” ou “100 mL”, que descrevem o conteúdo da apresentação. A prévia compara a condição observada com a condição já aprovada na loja. PIX, boleto e descontos diferentes seguem para revisão. Um valor sem unidade de venda confirmada fica registrado só como observação.
+
+A coleta grande usa `--large-queue`. Sem essa opção, o piloto continua aceitando de 1 a 250 produtos. A fila aceita de 1 a 5.000 produtos, seleciona os primeiros `--limit` do manifesto e valida todos os EANs do arquivo, inclusive duplicidades. ANB, Profarma, DM Paraná e GAM avançam em paralelo, com uma consulta ativa por fornecedor. Santa Cruz permanece fora desta fila e da validação comercial desta entrega.
+
+```powershell
+npm run audit:catalogue -- --large-queue --input="D:\CAMINHO\manifesto.json" --output="D:\Codex-outputs\cotacao\rodada\resumo.json" --database="C:\CAMINHO\cotador-st.db" --suppliers=ANB,Profarma,DM,GAM --limit=5000
+```
+
+O SQLite informado continua somente para leitura de contas. Os resultados ficam separados: `resumo.json` contém os totais por fornecedor; `resumo.json.queue.jsonl` é o journal incremental; `resumo.json.batches/0001.json` em diante contém relatórios no formato legado, com até 50 produtos por parte. Para 5.000 produtos são 100 partes. Cada parte reúne os fornecedores selecionados; o resumo não substitui um relatório de parte na prévia.
+
+Para interromper, use `Ctrl+C`. Para retomar, repita o mesmo comando acrescentando `--resume`. Preserve manifesto, fornecedores, limite, contas, código/runtime e saída: a identidade da rodada é validada antes de reutilizar resultados. Resultados concluídos não são consultados novamente. Capturas antigas permanecem históricas e têm a elegibilidade reavaliada; a retomada não renova `capturedAt`. Uma coleta nova ou uma identidade alterada exige outra saída.
+
+Falhas transitórias têm até três tentativas com espera limitada. Login, CAPTCHA ou ação de operador pausa somente a fonte afetada. Erro técnico não significa produto não encontrado nem estoque zero. Um encerramento abrupto após a reserva pode consumir uma tentativa ambígua; cancelamento explícito devolve esse orçamento. O resumo mantém erros, pendências e esgotamento visíveis. Saída de processo `2` indica rodada incompleta ou com erros. Locks vivos ou de proprietário desconhecido são recusados; não remova à mão um lock de processo em uso.
+
+Para preparar uma prévia local, use uma parte ou um relatório piloto, um template revisado e a cópia local do Wimifarma BR com suas dependências disponíveis. O arquivo de saída deve ser novo:
+
+O template deve seguir o manifesto de importação aprovado na versão 1, com até 50 produtos. Nome, marca e apresentação devem coincidir com o cadastro aprovado. A prévia mantém em revisão produto não consultado, falha, ausência de oferta, captura vencida ou anterior à aprovada, condição mínima diferente de uma apresentação, origem/imposto não confirmados e desvio de preço. Esses casos não propõem zerar valores anteriores; confira os motivos em `review` e as contagens antes de qualquer etapa posterior.
+
+```powershell
+node scripts/preview-catalogue-for-wimifarma.mjs --report "D:\Codex-outputs\cotacao\rodada\resumo.json.batches\0001.json" --template "D:\CAMINHO\template.json" --site "C:\Users\Williany\Desktop\wimifarma-br" --output "D:\Codex-outputs\cotacao\rodada\previa-0001.json"
+```
+
+`eligibleAtCollection` registra a avaliação histórica da observação. `eligible` considera a idade na avaliação atual. `storeEligible` acrescenta exigências comerciais, como condição, quantidade mínima, origem e ST confirmados. Esses indicadores não dispensam o validador real da loja nem a conferência humana. A CLI de prévia carrega esse validador, registra hashes das entradas e grava somente um arquivo local; não publica, envia pedidos ou altera o catálogo comercial.
+
+A inteligência tem regressões para pontuação de dosagem, denominador de cada ativo, marca Puran, quantidade de pacotes e dimensões de materiais. Esses ensaios não validam preços ou portais. Aprovar uma oferta não deve ensinar uma correção automaticamente: memorizar grafia depende da escolha explícita **Memorizar correção de grafia nas próximas buscas**. Aprendizagem de texto não fornece evidência de preço, imposto ou estoque.

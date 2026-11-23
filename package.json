@@ -16,9 +16,12 @@
     "diagnose:santacruz:discover": "powershell -NoProfile -ExecutionPolicy Bypass -File src/lib/santacruz-search.ps1 --discover-only",
     "diagnose:santacruz:status": "powershell -NoProfile -ExecutionPolicy Bypass -File src/lib/santacruz-search.ps1 --status-only",
     "package": "electron-builder",
-    "test": "node --test --test-concurrency=1 tests/all.test.js tests/dm-browser-engine.test.js tests/backend-data-regressions.test.js tests/connector-regressions.test.js tests/ipc-regressions.test.js tests/site-quotation.test.js tests/site-quote-runner.test.js tests/site-sheet-client.test.js tests/search-intelligence-regressions.test.js tests/site-intelligence.test.js tests/site-sheet-organization.test.js tests/site-row-selection.test.js tests/site-sheet-surface.test.js tests/logger-output.test.js tests/app-shutdown.test.js",
+    "test": "node --experimental-vm-modules --test --test-concurrency=1 tests/all.test.js tests/dm-browser-engine.test.js tests/backend-data-regressions.test.js tests/connector-regressions.test.js tests/ipc-regressions.test.js tests/site-quotation.test.js tests/site-quote-runner.test.js tests/site-sheet-client.test.js tests/search-intelligence-regressions.test.js tests/site-intelligence.test.js tests/site-sheet-organization.test.js tests/site-row-selection.test.js tests/site-sheet-surface.test.js tests/logger-output.test.js tests/app-shutdown.test.js",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "audit:catalogue": "electron scripts/catalogue-audit.mjs",
+    "preview:wimifarma": "node scripts/preview-catalogue-for-wimifarma.mjs",
+    "test:catalogue": "node --experimental-vm-modules --test --test-concurrency=1 tests/anb-stock-parser.test.js tests/audit-partition.test.js tests/catalogue-audit-adapters.test.js tests/catalogue-audit-checkpoint.test.js tests/catalogue-audit-logging.test.js tests/catalogue-audit-queue.test.js tests/catalogue-audit-startup.test.js tests/catalogue-audit.test.js tests/catalogue-auth-failure.test.js tests/catalogue-commercial-safety.test.js tests/catalogue-diagnostics.test.js tests/counter-identity-regressions.test.js tests/dm-card-boundaries.test.js tests/gam-integration.test.js tests/identity-safety-regressions.test.js tests/wimifarma-preview.test.js tests/scraper-origin-artifacts.test.js tests/scraper-initial-navigation.test.js tests/gam-search-only.test.js tests/export-evidence.test.js tests/manual-spelling-review.test.js tests/anb-catalogue-read-only.test.js tests/profarma-search.test.js tests/dm-commercial-evidence.test.js"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
@@ -36,7 +39,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "concurrently": "^10.0.3",
-    "electron": "43.5.0",
+    "electron": "43.8.12",
     "electron-builder": "^26.15.3",
     "oxlint": "^1.71.0",
     "vite": "^8.1.1",

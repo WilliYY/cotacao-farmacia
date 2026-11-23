@@ -3,6 +3,7 @@ import {
   ACTIVE_INGREDIENTS,
   REFERENCE_BRAND_NAMES,
   extractActiveIngredients,
+  normalizeCounterWriting,
   normalizePharmaceuticalText,
   resolveReferenceBrandName
 } from './pharmaceutical-context.js';
@@ -13,11 +14,25 @@ export const INPUT_STATUS = Object.freeze({
   NEEDS_INFO: 'NEEDS_INFO'
 });
 
+// Synthetic counter examples reviewed against deterministic identity rules.
+// No prices, supplier observations or customer data are learned here.
+export const COUNTER_WRITING_EXAMPLES = Object.freeze([
+  { originalText: 'Losartana 50 miligramas caixa com 30 comprimidos', category: 'medicamento', equivalentText: 'losartana 50mg 30cp', expected: { name: 'losartana', dosage: '50mg', quantity: 30 } },
+  { originalText: 'Puran 88 µg 30 comprimidos', category: 'medicamento', equivalentText: 'puran 88mcg 30cp', expected: { requestedBrand: 'puran', dosage: '88mcg', quantity: 30 } },
+  { originalText: 'Fralda G c/24 2 pacotes', category: 'higiene_material', expected: { dosage: '', quantity: 24, requestedQuantity: 2, size: 'g' } },
+  { originalText: 'Agulha 25 x 0,7 mm cx c/100', category: 'higiene_material', expected: { dosage: '', quantity: 100, dimensions: '25x0.7mm' } },
+  { originalText: 'losartana 50mg 30cp', category: 'medicamento', forbiddenText: 'losartana 100mg 30cp' },
+  { originalText: 'levotiroxina 25mcg 30cp', category: 'medicamento', forbiddenText: 'levotiroxina 25mg 30cp' },
+  { originalText: 'amoxicilina 250mg/5ml suspensao 60ml', category: 'medicamento', forbiddenText: 'amoxicilina 250mg/ml suspensao 60ml' },
+  { originalText: 'Fralda G c/24', category: 'higiene_material', forbiddenText: 'Fralda M c/24' }
+].map(example => Object.freeze({ ...example, source: 'AUDITORIA_SINTETICA_2026_11_22', review: 'DETERMINISTIC_REGRESSION', expected: example.expected ? Object.freeze(example.expected) : undefined })));
+
 const PRESENTATION_WORDS = new Set([
   'cap', 'caps', 'capsula', 'capsulas', 'comp', 'comprimido', 'comprimidos', 'cp', 'cpr', 'cps',
   'amp', 'ampola', 'ampolas', 'creme', 'frasco', 'gel', 'gota', 'gotas', 'gts', 'pom', 'pomada',
   'sol', 'solucao', 'spray', 'susp', 'suspensao', 'un', 'und', 'unidade', 'unidades',
-  'xarope', 'xrp', 'xr', 'lp', 'retard'
+  'xarope', 'xrp', 'xr', 'lp', 'retard',
+  'envelope', 'envelopes', 'env', 'envs', 'flac', 'flacs', 'flaconete', 'flaconetes'
 ]);
 const IMMEDIATELY_TRUSTED_CORRECTION_SOURCES = new Set([
   'MANUAL_REVIEW',
@@ -44,10 +59,12 @@ const COMMON_STRENGTHS_MG = new Map([
 ]);
 
 function extractRawName(value) {
-  return normalizePharmaceuticalText(value)
+  return normalizeCounterWriting(value)
     .replace(/\b\d{13}\b/g, ' ')
+    .replace(/\b(?:cx\s+)?c\s*\/\s*(?=\d)/g, ' ')
     .replace(/\b\d{1,3}\s*(?:capsulas?|caps?|comprimidos?|comp|cp|cpr|cps|un|und|unidades?)\b/g, ' ')
     .replace(/\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|ui|%)(?:\s*\/\s*(?:(?:\d+(?:\.\d+)?)\s*)?(?:ml|dose))?\b/g, ' ')
+    .replace(/\bcx\s+c\/\d+\b/g, ' ')
     .replace(/\b\d+(?:\.\d+)?\b/g, ' ')
     .split(/\s+/)
     .filter(Boolean)
@@ -87,7 +104,10 @@ function normalizeLearnedAliases(learnedAliases = []) {
     const source = String(row?.source || '').trim().toUpperCase();
     const trusted = IMMEDIATELY_TRUSTED_CORRECTION_SOURCES.has(source) &&
       Number(row?.confidence ?? 0) >= 0.9;
-    if (alias && canonicalName && trusted) aliases.set(alias, canonicalName);
+    if (alias && canonicalName && trusted) {
+      if (aliases.has(alias) && aliases.get(alias) !== canonicalName) aliases.set(alias, null);
+      else if (!aliases.has(alias)) aliases.set(alias, canonicalName);
+    }
   }
   return aliases;
 }
@@ -111,9 +131,17 @@ function resolveName(rawText, previousMedication, learnedAliases) {
   const rawName = extractRawName(rawText);
   const parsed = parseSearchQuery(rawText);
   const parsedName = parsed.name;
+  if (parsed.category === 'higiene_material') return { rawName: '', canonicalName: parsedName };
   if (!rawName) return { rawName, canonicalName: parsedName };
 
+  // A reference brand is an independent request restriction. Learning its
+  // ingredient may expand discovery, but cannot replace the requested product.
+  if (parsed.requestedBrand) return { rawName, canonicalName: parsedName };
   const learned = learnedAliases.get(rawName);
+  if (learned === null) {
+    return { rawName, canonicalName: rawName, needsInfo: true,
+      suggestion: 'Correcoes aprovadas conflitantes. Confirme o principio ativo ou a marca.' };
+  }
   if (learned) {
     return { rawName, canonicalName: learned, correctionType: 'LEARNED_ALIAS' };
   }
@@ -185,7 +213,7 @@ function getConfirmedCombinationText(canonicalText) {
 }
 
 function replaceNameAndStrength(rawText, rawName, canonicalName, strength = '') {
-  const normalized = normalizePharmaceuticalText(rawText);
+  const normalized = normalizeCounterWriting(rawText);
   let next = rawName && normalized.includes(rawName)
     ? normalized.replace(rawName, canonicalName)
     : normalized;
@@ -197,9 +225,22 @@ function replaceNameAndStrength(rawText, rawName, canonicalName, strength = '') 
 }
 
 function buildPlan(originalText, searchText, resolution, extra = {}) {
-  const parsed = parseSearchQuery(searchText);
+  const codes = [...searchText.matchAll(/\b\d{13,14}\b/g)].map(match => match[0]);
+  const validatedCode = codes.length === 1 && isValidGtin(codes[0]) ? codes[0] : '';
+  const parsed = parseSearchQuery(validatedCode?.length === 14
+    ? searchText.replace(validatedCode, '')
+    : searchText);
+  if (validatedCode) parsed.ean = validatedCode;
   parsed.originalTerms = searchText;
   parsed.originalInput = originalText;
+  const originalParsed = parseSearchQuery(originalText);
+  parsed.requestedBrand = originalParsed.requestedBrand || parsed.requestedBrand;
+  if (originalParsed.numericAmbiguity) {
+    parsed.numericAmbiguity = true;
+    parsed.confidence = 0;
+    parsed.confidenceStatus = originalParsed.confidenceStatus;
+    parsed.refinementSuggestion = originalParsed.refinementSuggestion;
+  }
 
   const textChanged = normalizePharmaceuticalText(originalText) !==
     normalizePharmaceuticalText(searchText);
@@ -216,11 +257,11 @@ function buildPlan(originalText, searchText, resolution, extra = {}) {
     originalText,
     searchText,
     parsed,
-    status: corrected ? INPUT_STATUS.CORRECTED : INPUT_STATUS.READY,
+    status: (parsed.numericAmbiguity || parsed.dosageAmbiguity) ? INPUT_STATUS.NEEDS_INFO : corrected ? INPUT_STATUS.CORRECTED : INPUT_STATUS.READY,
     correctionType: extra.expandedFrom
       ? 'MULTI_STRENGTH'
       : (corrected ? resolution.correctionType : ''),
-    correctionMessage,
+    correctionMessage: (parsed.numericAmbiguity || parsed.dosageAmbiguity) ? parsed.refinementSuggestion : correctionMessage,
     alias: resolution.rawName || '',
     canonicalName: resolution.canonicalName || parsed.name,
     ...extra
@@ -301,5 +342,45 @@ export function analyzeQuoteBatch(rawTextList, options = {}) {
     }
   }
 
-  return plans;
+  const uniquePlans = [];
+  const seenCodes = new Map();
+  const sourceIndexes = new Map();
+  (rawTextList || []).forEach((value, inputIndex) => {
+    const text = String(value || '').trim();
+    if (!sourceIndexes.has(text)) sourceIndexes.set(text, []);
+    sourceIndexes.get(text).push(inputIndex);
+  });
+  const usedIndexes = new Map();
+  for (const plan of plans) {
+    const code = plan.parsed.ean;
+    const inputCodes = plan.searchText.match(/\b\d{13,14}\b/g) || [];
+    if (!code || !isValidGtin(code) || inputCodes.length !== 1 || plan.expandedFrom) {
+      uniquePlans.push(plan);
+      continue;
+    }
+    // Keep all explicit restrictions, including manufacturer and package count.
+    const description = normalizePharmaceuticalText(plan.searchText.replace(/\b\d{13,14}\b/g, ' '));
+    const key = `${code.padStart(14, '0')}|${description}`;
+    const used = usedIndexes.get(plan.originalText) || 0;
+    const inputIndex = sourceIndexes.get(plan.originalText)[used];
+    usedIndexes.set(plan.originalText, used + 1);
+    const reference = { inputIndex, originalText: plan.originalText };
+    if (seenCodes.has(key)) {
+      seenCodes.get(key).sourceInputs.push(reference);
+    } else {
+      plan.sourceInputs = [reference];
+      seenCodes.set(key, plan);
+      uniquePlans.push(plan);
+    }
+  }
+  return uniquePlans;
+}
+
+function isValidGtin(code) {
+  if (!/^\d{13,14}$/.test(code) || /^0+$/.test(code)) return false;
+  let sum = 0;
+  for (let index = code.length - 2, weight = 3; index >= 0; index--, weight = 4 - weight) {
+    sum += Number(code[index]) * weight;
+  }
+  return (10 - sum % 10) % 10 === Number(code.at(-1));
 }

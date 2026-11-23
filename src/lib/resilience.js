@@ -147,7 +147,7 @@ export function classifyPortalFailure(value, overrides = {}) {
       code = FAILURE_CODES.CREDENTIALS_MISSING;
     } else if (/captcha|recaptcha|verificacao manual|challenge/.test(text)) {
       code = FAILURE_CODES.CAPTCHA_REQUIRED;
-    } else if (/playwright_auth_rejected|login.*(rejeitad|inval|expir)|unauthori[sz]ed|forbidden|\b401\b|\b403\b/.test(text)) {
+    } else if (/playwright_auth_rejected|rejected the configured login credentials|login.*(rejeitad|inval|expir)|unauthori[sz]ed|forbidden|\b401\b|\b403\b/.test(text)) {
       code = FAILURE_CODES.AUTH_REQUIRED;
     } else if (/nao (foi )?localizad|not installed|not-installed|aplicativo.*ausente/.test(text)) {
       code = FAILURE_CODES.APP_NOT_INSTALLED;

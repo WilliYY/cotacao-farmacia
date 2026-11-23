@@ -62,6 +62,7 @@ export function generateExcelBuffer(quoteData) {
   const reviewRows = [];
 
   const mapToExcelRow = (item, res) => {
+    const captured = res.capturedAt ? new Date(res.capturedAt) : null;
     let recommendationText = '';
     const reasonText = res.ignoreReason || res.auditSummary || res.notes || '-';
 
@@ -94,7 +95,7 @@ export function generateExcelBuffer(quoteData) {
       'Laboratório': res.laboratory || '-',
       'Dosagem': res.dosage || '-',
       'Apresentação': res.presentation || '-',
-      'Preço Caixa': res.price ? `R$ ${res.price.toFixed(2).replace('.', ',')}` : 'R$ 0,00',
+      'Preço Caixa': Number.isFinite(res.price) && res.price > 0 ? `R$ ${res.price.toFixed(2).replace('.', ',')}` : 'Não informado',
       'ST': res.stStatus || '-',
       'Disponibilidade': res.availability || '-',
       'Auditoria': res.auditStatus || 'OK',
@@ -102,7 +103,7 @@ export function generateExcelBuffer(quoteData) {
       'Status Recomendação': res.recommendationStatus || '-',
       'Recomendação': recommendationText,
       'Motivo/Notas': reasonText,
-      'Data/Hora Captura': new Date(res.capturedAt || Date.now()).toLocaleString('pt-BR'),
+      'Data/Hora Captura': captured && Number.isFinite(captured.getTime()) ? captured.toLocaleString('pt-BR') : 'Não informada',
       'Fonte': res.notes ? `${res.source} (Modificado)` : res.source
     };
   };

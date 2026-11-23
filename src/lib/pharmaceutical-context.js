@@ -145,10 +145,18 @@ const EXTENDED_RELEASE_PRESENTATIONS = ['xr', 'acao prolongada', 'liberacao prol
 
 export function normalizePharmaceuticalText(value) {
   return String(value || '')
+    .replace(/[µμ]g/gi, 'mcg')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/(\d),(\d)/g, '$1.$2')
+    .replace(/\b\d[\d.,]*\d/g, token => {
+      // Brazilian grouped thousands are never decimal milligrams. The planner
+      // separately requests confirmation when a dot-only spelling is ambiguous.
+      if (/^[1-9]\d{0,2}(?:\.\d{3})+(?:,\d+)?$/.test(token)) {
+        return token.replace(/\./g, '').replace(',', '.');
+      }
+      return token.replace(',', '.');
+    })
     .replace(/[^a-z0-9+.%/]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -167,8 +175,17 @@ function expandIngredientToken(token) {
   return candidates.length === 1 ? candidates[0] : token;
 }
 
+export function normalizeCounterWriting(value) {
+  return normalizePharmaceuticalText(value)
+    .replace(/(\d)\s*miligrama?s?\b/g, '$1mg')
+    .replace(/(\d)\s*micrograma?s?\b/g, '$1mcg')
+    .replace(/(\d)\s*mililitros?\b/g, '$1ml')
+    .replace(/(\d)\s*gramas?\b/g, '$1g')
+    .replace(/\b(?:caixa|cx)\s+(?:com|contendo)\s*(\d+)\b/g, 'cx c/$1');
+}
+
 export function expandMedicationAliases(value) {
-  let normalized = normalizePharmaceuticalText(value);
+  let normalized = normalizeCounterWriting(value);
   for (const [pattern, replacement] of PHRASE_ALIASES) {
     normalized = normalized.replace(pattern, replacement);
   }
@@ -449,34 +466,63 @@ function normalizeComparableDose(value, unit) {
   return `${unit}:${number}`;
 }
 
+export function extractDoseComponents(value) {
+  const text = expandMedicationAliases(value);
+  const components = [];
+  const occupied = [];
+  const add = (match, number, unit, denominator, denominatorUnit, offset = 0) => {
+    const dose = normalizeComparableDose(number, unit);
+    const [family, normalized] = dose.split(':');
+    const divisor = Number(denominator || 1);
+    components.push({
+      index: match.index + offset,
+      end: match.index + match[0].length,
+      numerator: Number(number), unit,
+      denominator: denominatorUnit ? divisor : null,
+      denominatorUnit: denominatorUnit || '',
+      family: denominatorUnit ? family + '_per_' + denominatorUnit : family,
+      value: divisor > 0 ? Number(normalized) / divisor : NaN,
+      text: number + unit + (denominatorUnit ? '/' + (denominator || '') + denominatorUnit : '')
+    });
+  };
+  const compact = /(\d+(?:\.\d+)?)\s*[+/]\s*(\d+(?:\.\d+)?)\s*(mcg|mg|g|ui)\b(?:\s*\/\s*(?:(\d+(?:\.\d+)?)\s*)?(ml|dose|g)\b)?/g;
+  for (const match of text.matchAll(compact)) {
+    occupied.push([match.index, match.index + match[0].length]);
+    add(match, match[1], match[3], match[4], match[5]);
+    add(match, match[2], match[3], match[4], match[5], 0.5);
+  }
+  const explicit = /(\d+(?:\.\d+)?)\s*(mcg|mg|g|ui|%)(?![a-z])(?:\s*\/\s*(?:(\d+(?:\.\d+)?)\s*)?(ml|dose|g)\b)?/g;
+  for (const match of text.matchAll(explicit)) {
+    if (occupied.some(([from, to]) => match.index >= from && match.index < to)) continue;
+    // A topical tube's grams describe its package, not a second active dose.
+    if (match[2] === 'g' && !match[4] && components.length > 0 &&
+        /\b(?:creme|pomada|gel|tubo|bisnaga)\b/.test(text.slice(0, match.index))) continue;
+    add(match, match[1], match[2], match[3], match[4]);
+  }
+  const ingredientNames = getIngredientsWithReference(text);
+  const ingredientText = ingredientNames.every(ingredient => !text.includes(ingredient))
+    ? (resolveReferenceBrandName(text) || text) : text;
+  const ingredients = ingredientNames
+    .map(ingredient => ({ ingredient, index: ingredientText.indexOf(ingredient) }))
+    .filter(entry => entry.index >= 0)
+    .sort((left, right) => left.index - right.index);
+  return components.sort((left, right) => left.index - right.index)
+    .map((component, index) => ({ ...component,
+      ingredient: ingredients.length === components.length ? ingredients[index].ingredient : ''
+    }));
+}
+
 function extractOrderedComparableDoses(value) {
-  const normalized = normalizePharmaceuticalText(value).replace(/,/g, '.');
-  const doses = [];
-  const occupiedRanges = [];
-  const compactPattern = /(\d+(?:\.\d+)?)\s*[+/]\s*(\d+(?:\.\d+)?)\s*(mcg|mg|g|ui)\b/g;
-
-  for (const match of normalized.matchAll(compactPattern)) {
-    occupiedRanges.push([match.index, match.index + match[0].length]);
-    doses.push({ index: match.index, value: normalizeComparableDose(match[1], match[3]) });
-    doses.push({ index: match.index + 0.5, value: normalizeComparableDose(match[2], match[3]) });
-  }
-
-  for (const match of normalized.matchAll(/(\d+(?:\.\d+)?)\s*(mcg|mg|g|ui)\b/g)) {
-    const index = match.index;
-    if (occupiedRanges.some(([start, end]) => index >= start && index < end)) continue;
-    doses.push({ index, value: normalizeComparableDose(match[1], match[2]) });
-  }
-
-  return doses
-    .filter(dose => dose.value)
-    .sort((left, right) => left.index - right.index)
-    .map(dose => dose.value);
+  return extractDoseComponents(value).map(dose => dose.family + ':' + dose.value);
 }
 
 function extractIngredientDosePairs(value) {
   const normalized = expandMedicationAliases(value).replace(/,/g, '.');
-  const ingredients = getIngredientsWithReference(normalized)
-    .map(ingredient => ({ ingredient, index: normalized.indexOf(ingredient) }))
+  const ingredientNames = getIngredientsWithReference(normalized);
+  const ingredientText = ingredientNames.every(ingredient => !normalized.includes(ingredient))
+    ? (resolveReferenceBrandName(normalized) || normalized) : normalized;
+  const ingredients = ingredientNames
+    .map(ingredient => ({ ingredient, index: ingredientText.indexOf(ingredient) }))
     .filter(entry => entry.index >= 0)
     .sort((left, right) => left.index - right.index);
   const doses = extractOrderedComparableDoses(normalized);
@@ -487,7 +533,7 @@ function extractIngredientDosePairs(value) {
 export function ingredientDosagePairsMatch(queryText, resultText) {
   const queryPairs = extractIngredientDosePairs(queryText);
   const resultPairs = extractIngredientDosePairs(resultText);
-  if (!queryPairs) return true;
+  if (!queryPairs) return extractDoseComponents(queryText).length === 0 || getIngredientsWithReference(queryText).length < 2;
   if (!resultPairs) return false;
   if (queryPairs.size !== resultPairs.size) return false;
   return [...queryPairs].every(([ingredient, dose]) => resultPairs.get(ingredient) === dose);

@@ -38,12 +38,13 @@ export function getProfarmaRetryTerm(searchTerm) {
 }
 
 export class ProfarmaRealConnector extends SupplierConnector {
-  constructor() {
+  constructor({ credentialProvider = getSupplierCredentials } = {}) {
     super('Profarma');
+    this.credentialProvider = credentialProvider;
   }
 
   async isAvailable() {
-    const creds = await getSupplierCredentials(2);
+    const creds = await this.credentialProvider(2);
     return !!(creds && creds.username && creds.password);
   }
 
@@ -51,7 +52,7 @@ export class ProfarmaRealConnector extends SupplierConnector {
    * Performs autonomous browser-based search on Profarma portal.
    */
   async searchProduct(parsedQuery, options = {}) {
-    const creds = await getSupplierCredentials(2); // Profarma supplierId = 2
+    const creds = await this.credentialProvider(2); // Profarma supplierId = 2
     if (!creds || !creds.username || !creds.password) {
       logger.warn('Real credentials not configured for Profarma.');
       return [createLiveUnavailableResult('Profarma', parsedQuery, 'credenciais nao configuradas')];
@@ -63,7 +64,11 @@ export class ProfarmaRealConnector extends SupplierConnector {
       parsedQuery.presentation,
       parsedQuery.packageSize
     ].filter(Boolean).join(' ');
-    logger.info(`Initiating autonomous portal search on Profarma for: "${searchTerm}"`);
+    // Acquire candidates without presentation terms; keep the original request for matching.
+    const compactTerm = !parsedQuery.ean && parsedQuery.name
+      ? [parsedQuery.name, parsedQuery.dosage].filter(Boolean).join(' ')
+      : searchTerm;
+    logger.info(`Initiating autonomous portal search on Profarma for: "${compactTerm}"`);
 
     try {
       const portalUrl = normalizeProfarmaUrl(creds.url);
@@ -76,7 +81,11 @@ export class ProfarmaRealConnector extends SupplierConnector {
         term,
         { signal: options.signal }
       );
-      let results = await runSearch(searchTerm);
+      let results = await runSearch(compactTerm);
+      if (compactTerm !== searchTerm && shouldRetryProductName(parsedQuery, results)) {
+        logger.info(`Profarma returned no compatible products for name and dose; retrying the full description: "${searchTerm}"`);
+        results = await runSearch(searchTerm);
+      }
       const retryTerm = !parsedQuery.ean && results.length === 0
         ? getProfarmaRetryTerm(searchTerm)
         : '';
@@ -92,7 +101,7 @@ export class ProfarmaRealConnector extends SupplierConnector {
         results = await runSearch(combinationFallback);
       }
       const nameFallback = shouldRetryProductName(parsedQuery, results) && parsedQuery.name &&
-        ![searchTerm, retryTerm, combinationFallback].includes(parsedQuery.name) ? parsedQuery.name : '';
+        ![compactTerm, searchTerm, retryTerm, combinationFallback].includes(parsedQuery.name) ? parsedQuery.name : '';
       if (nameFallback) {
         logger.info(`Profarma returned no compatible products for the full description; retrying by name: "${nameFallback}"`);
         results = await runSearch(nameFallback);
@@ -104,7 +113,8 @@ export class ProfarmaRealConnector extends SupplierConnector {
           ? (res.searchFallback || 'ASSOCIACAO_POR_PRINCIPIO_ATIVO')
           : res.searchFallback,
         source: 'Profarma',
-        capturedAt: new Date().toISOString()
+        sourceUrl: res.sourceUrl || (process.env.CATALOGUE_AUDIT_READ_ONLY === 'true' ? null : portalUrl),
+        capturedAt: res.capturedAt || new Date().toISOString()
       }));
     } catch (error) {
       if (error?.name === 'AbortError') throw error;

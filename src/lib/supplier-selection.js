@@ -2,7 +2,8 @@ export const SUPPLIER_NAMES = Object.freeze([
   'ANB',
   'Profarma',
   'Santa Cruz',
-  'DM Paraná'
+  'DM Paraná',
+  'GAM'
 ]);
 
 export function createDeselectedSupplierSelection() {

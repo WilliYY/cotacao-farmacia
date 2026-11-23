@@ -1,6 +1,8 @@
 import { fuzzyMatch, parseSearchQuery } from './parser.js';
 import {
   combinationMatches,
+  extractDoseComponents,
+  expandMedicationAliases,
   ingredientDosagePairsMatch,
   normalizePharmaceuticalText,
   presentationsMatch
@@ -19,56 +21,17 @@ function normalizeText(value) {
 
 export function getDosageNumber(dosageStr) {
   if (!dosageStr) return null;
-  const match = String(dosageStr).match(/(\d+(?:[.,]\d+)?)/);
+  const match = normalizeText(dosageStr).match(/(\d+(?:[.,]\d+)?)/);
   return match ? parseFloat(match[1].replace(',', '.')) : null;
 }
 
-function normalizeDosagePart(value, unit) {
-  const number = Number.parseFloat(String(value).replace(',', '.'));
-  const normalizedUnit = String(unit || '').toLowerCase();
-  if (!Number.isFinite(number)) return null;
-  if (normalizedUnit === 'g') return { family: 'mass', value: number * 1000 };
-  if (normalizedUnit === 'mg') return { family: 'mass', value: number };
-  if (normalizedUnit === 'mcg') return { family: 'mass', value: number / 1000 };
-  if (normalizedUnit === '%') return { family: 'concentration', value: number };
-  return { family: normalizedUnit, value: number };
-}
-
 function extractDosageParts(value) {
-  const text = normalizeText(value).replace(/,/g, '.');
-  const massPerVolumePattern = /(\d+(?:\.\d+)?)\s*(mcg|mg|g)\s*\/\s*(?:(\d+(?:\.\d+)?)\s*)?ml\b/g;
-  const parts = [];
-  const add = (number, unit) => {
-    const part = normalizeDosagePart(number, unit);
-    if (!part) return;
-    if (!parts.some(existing => existing.family === part.family && Math.abs(existing.value - part.value) < 0.000001)) {
-      parts.push(part);
-    }
-  };
-
-  for (const match of text.matchAll(massPerVolumePattern)) {
-    const numerator = normalizeDosagePart(match[1], match[2]);
-    const denominator = Number.parseFloat(match[3] || '1');
-    if (numerator && Number.isFinite(denominator) && denominator > 0) {
-      const concentration = {
-        family: 'mass_per_volume',
-        value: numerator.value / denominator
-      };
-      if (!parts.some(existing =>
-        existing.family === concentration.family &&
-        Math.abs(existing.value - concentration.value) < 0.000001
-      )) {
-        parts.push(concentration);
-      }
-    }
-  }
-  const textWithoutMassPerVolume = text.replace(massPerVolumePattern, ' ');
-  for (const match of textWithoutMassPerVolume.matchAll(/(\d+(?:\.\d+)?)\s*[+/]\s*(\d+(?:\.\d+)?)\s*(mcg|mg|g|ml|ui)\b/g)) {
-    add(match[1], match[3]);
-    add(match[2], match[3]);
-  }
-  for (const match of textWithoutMassPerVolume.matchAll(/(\d+(?:\.\d+)?)\s*(mcg|mg|g|ml|ui|%)(?=\s|$|[+/])/g)) {
-    add(match[1], match[2]);
+  const text = expandMedicationAliases(value);
+  const components = extractDoseComponents(text);
+  const parts = components.map(({ family, value: amount }) => ({ family, value: amount }));
+  for (const match of text.matchAll(/(\d+(?:\.\d+)?)\s*ml\b/g)) {
+    if (components.some(component => match.index >= Math.floor(component.index) && match.index < component.end)) continue;
+    parts.push({ family: 'ml', value: Number(match[1]) });
   }
   return parts;
 }
@@ -137,12 +100,27 @@ function pickPrimaryReason(blocks, warnings) {
   return blocks[0] || warnings[0] || '';
 }
 
+function requestedAttributesMatch(parsed, resultText) {
+  const normalized = ' ' + normalizeText(resultText) + ' ';
+  if (parsed.requestedBrand && !normalized.includes(' ' + parsed.requestedBrand + ' ')) return false;
+  const described = parseSearchQuery(resultText);
+  if (parsed.size && parsed.size !== described.size) return false;
+  if (parsed.dimensions && parsed.dimensions !== described.dimensions) return false;
+  return !parsed.numericAmbiguity && !parsed.dosageAmbiguity;
+}
+
+function matchesRequestedName(parsed, description) {
+  return (typeof parsed.originalTerms === 'string' && parsed.originalTerms.trim().toLowerCase() === String(description).trim().toLowerCase()) ||
+    fuzzyMatch(parsed.name, description);
+}
+
 export function productIdentityMatches(parsed, result = {}) {
   const supplierProductName = String(result.supplierProductName || result.name || '').trim();
-  if (!parsed?.name || !supplierProductName || !fuzzyMatch(parsed.name, supplierProductName)) {
+  if (!parsed?.name || !supplierProductName || !matchesRequestedName(parsed, supplierProductName)) {
     return false;
   }
 
+  if (!requestedAttributesMatch(parsed, supplierProductName)) return false;
   const parsedResult = parseSearchQuery(supplierProductName);
   const resultDosage = result.dosage || parsedResult.dosage;
   const resultPresentation = result.presentation || parsedResult.presentation;
@@ -169,6 +147,7 @@ export function productIdentityMatches(parsed, result = {}) {
 
 export function explicitProductEvidenceMatches(parsed, offer) {
   const description = String(offer.supplierProductName || offer.name || '');
+  if (!requestedAttributesMatch(parsed, description)) return false;
   const described = parseSearchQuery(description);
   const doses = [parsed.isCombination ? parsed.originalTerms : parsed.dosage,
     described.isCombination ? description : described.dosage, offer.dosage].filter(Boolean);
@@ -213,6 +192,12 @@ export function auditQuoteResult(parsed, result) {
   );
   const eanIsOnlyIdentity = exactEanMatch && !String(parsed.name || '').trim();
 
+  if (parsed.numericAmbiguity) blocks.push('Pontuacao numerica da dose precisa de confirmacao');
+  if (parsed.dosageAmbiguity) blocks.push('Doses por principio ativo precisam de confirmacao');
+  if (!eanIsOnlyIdentity && !requestedAttributesMatch({ ...parsed, numericAmbiguity: false, dosageAmbiguity: false }, supplierProductName)) {
+    blocks.push('Marca, tamanho ou dimensoes solicitadas nao conferem');
+  }
+
   if (!result.source) {
     warnings.push('Fonte da captura nao informada');
   }
@@ -231,9 +216,9 @@ export function auditQuoteResult(parsed, result) {
 
   if (result.liveFailureReason || result.failureCode) {
     // A falha tecnica ja explica por que estoque e preco nao foram confirmados.
-  } else if (!availability) {
+  } else if (!availability || /nao confirmad|unknown|desconhecid|consulta/.test(availability)) {
     blocks.push('Disponibilidade nao confirmada pelo fornecedor');
-  } else if (!availability.startsWith('dispon')) {
+  } else if (availability !== 'disponivel') {
     blocks.push('Produto sem estoque no fornecedor');
   }
 
@@ -253,7 +238,9 @@ export function auditQuoteResult(parsed, result) {
     warnings.push('EAN nao retornado pelo fornecedor');
   }
 
-  if (result.searchFallback === 'EAN_CONFIRMADO_ENTRE_DISTRIBUIDORAS') {
+  if (result.candidateEan) {
+    warnings.push('EAN candidato de outra distribuidora exige revisao; identidade nao confirmada');
+  } else if (result.searchFallback === 'EAN_CONFIRMADO_ENTRE_DISTRIBUIDORAS') {
     warnings.push('EAN confirmado pelo produto exato retornado por outra distribuidora');
   } else if (result.searchFallback === 'EAN_CONFIRMADO_PELA_BUSCA_EXATA') {
     warnings.push('EAN confirmado pela busca exata de resultado unico no fornecedor');
@@ -261,7 +248,7 @@ export function auditQuoteResult(parsed, result) {
     warnings.push('Fornecedor pesquisado novamente pelo nome confirmado em outra distribuidora');
   }
 
-  if (!eanIsOnlyIdentity && parsed.name && supplierProductName && !fuzzyMatch(parsed.name, supplierProductName)) {
+  if (!eanIsOnlyIdentity && parsed.name && supplierProductName && !matchesRequestedName(parsed, supplierProductName)) {
     blocks.push('Produto encontrado nao confere com a busca');
   }
 

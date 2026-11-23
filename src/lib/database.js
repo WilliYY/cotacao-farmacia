@@ -45,7 +45,8 @@ const CANONICAL_SUPPLIER_NAMES = new Map([
   [1, 'ANB'],
   [2, 'Profarma'],
   [3, 'Santa Cruz'],
-  [4, 'DM Paraná']
+  [4, 'DM Paraná'],
+  [5, 'GAM']
 ]);
 
 const CANONICAL_SUPPLIER_IDS = new Map(
@@ -1129,6 +1130,33 @@ export async function getAllSupplierCredentials() {
     }
   }
   return rows;
+}
+
+export async function readOnlySupplierAccounts(filename, supplierNames, { openDatabase = open } = {}) {
+  if (!path.isAbsolute(filename) || !Array.isArray(supplierNames) || supplierNames.some(name => !CANONICAL_SUPPLIER_IDS.has(name))) {
+    throw new Error('Banco absoluto e fornecedores conhecidos obrigatorios');
+  }
+  const connection = await openDatabase({ filename, driver: sqlite3.Database, mode: sqlite3.OPEN_READONLY });
+  try {
+    const placeholders = supplierNames.map(() => '?').join(',');
+    if (!placeholders) return [];
+    const rows = await connection.all(`SELECT c.supplierId, c.url, c.username, c.password, c.clientCode, s.name AS supplierName
+      FROM SupplierCredentials c JOIN Supplier s ON s.id = c.supplierId
+      WHERE s.active = 1 AND s.name IN (${placeholders}) ORDER BY s.id`, ...supplierNames);
+    const accounts = [];
+    for (const row of rows) {
+      if (!row.username || !row.password) continue;
+      if (row.password.startsWith('dpapi:') && (await getSafeStorage()).storageMode !== 'dpapi') {
+        throw new Error('CREDENTIALS_UNREADABLE');
+      }
+      let password;
+      try { password = await decryptStoredPassword(row.password); } catch { throw new Error('CREDENTIALS_UNREADABLE'); }
+      if (!password) continue;
+      accounts.push({ supplier: row.supplierName, canonicalSupplierId: CANONICAL_SUPPLIER_IDS.get(row.supplierName),
+        credentials: { url: row.url, username: row.username, password, clientCode: row.clientCode } });
+    }
+    return accounts;
+  } finally { await connection.close(); }
 }
 
 export async function closeDatabase() {

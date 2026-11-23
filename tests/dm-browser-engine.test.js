@@ -294,28 +294,42 @@ test('DM login waits for a form rendered after DOMContentLoaded', async t => {
 
   try {
     const page = await browser.newPage();
-    await page.setContent(`
+    await page.route('**/*', route => {
+      if (route.request().url() !== 'https://portal.dmparana.com.br/login') return route.abort();
+      return route.fulfill({ contentType: 'text/html', body: `
       <main id="app"></main>
       <script>
         setTimeout(() => {
           document.querySelector('#app').innerHTML = ` + "`" + `
-            <input name="cnpj" />
-            <input type="password" />
-            <button type="submit">Entrar</button>
+            <form method="post" action="/login">
+              <input name="cnpj" />
+              <input type="password" />
+              <button type="submit">Entrar</button>
+            </form>
           ` + "`" + `;
-          document.querySelector('button').addEventListener('click', () => {
+          document.querySelector('form').addEventListener('submit', event => {
+            event.preventDefault();
             document.querySelector('#app').innerHTML =
               '<input placeholder="Digite o que deseja buscar" />';
           });
         }, 300);
       </script>
-    `);
+    ` });
+    });
+    await page.goto('https://portal.dmparana.com.br/login', { waitUntil: 'domcontentloaded' });
 
     const searchInput = await loginIfNeeded(page, {
       username: 'cnpj',
       password: 'senha'
     }, 2_000);
     assert.strictEqual(await searchInput.isVisible(), true);
+    assert.strictEqual(page.url(), 'https://portal.dmparana.com.br/login');
+    const untrustedPage = await browser.newPage();
+    await untrustedPage.setContent('<form method="post" action="/login"><input name="cnpj" /><input type="password" /><button type="submit">Entrar</button></form>');
+    await assert.rejects(() => loginIfNeeded(untrustedPage, { username: 'cnpj', password: 'senha' }, 2_000), { code: 'SUPPLIER_ORIGIN_BLOCKED' });
+    assert.strictEqual(await untrustedPage.locator('[name="cnpj"]').inputValue(), '');
+    assert.strictEqual(await untrustedPage.locator('[type="password"]').inputValue(), '');
+    await untrustedPage.close();
   } finally {
     await browser.close();
   }

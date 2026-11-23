@@ -1,4 +1,4 @@
-export const QUOTE_SUPPLIERS = Object.freeze(['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná']);
+export const QUOTE_SUPPLIERS = Object.freeze(['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná', 'GAM']);
 
 export function isAllowedApplicationUrl(url, allowedUrl) {
   try {
@@ -54,7 +54,7 @@ export function validateQuoteInput(rawTextList, activeSuppliers = QUOTE_SUPPLIER
 
 export function validateSupplierCredentials(supplierId, url, username, password, clientCode = '') {
   const id = validatePositiveId(supplierId);
-  if (id > 4 || [url, username, password, clientCode].some(value => typeof value !== 'string')) {
+  if (id > 5 || [url, username, password, clientCode].some(value => typeof value !== 'string')) {
     throw new Error('Credenciais ou distribuidora invalidas.');
   }
   const address = url.trim();
@@ -71,6 +71,9 @@ export function validateSupplierCredentials(supplierId, url, username, password,
     }
     if (!parsed || !['https:', 'http:'].includes(parsed.protocol)) {
       throw new Error('Informe um endereco HTTP ou HTTPS para a distribuidora.');
+    }
+    if (id === 5 && (!['https://egam.com.br', 'https://www.egam.com.br'].includes(parsed.origin) || parsed.username || parsed.password)) {
+      throw new Error('Use somente o portal HTTPS oficial da GAM.');
     }
   }
   return id;

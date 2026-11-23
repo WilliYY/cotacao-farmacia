@@ -7,6 +7,7 @@ import { ANBRealConnector } from './real/anb-real.js';
 import { ProfarmaRealConnector } from './real/profarma-real.js';
 import { SantaCruzRealConnector } from './real/santacruz-real.js';
 import { DmParanaRealConnector } from './real/dm-parana-real.js';
+import { GamRealConnector } from './real/gam-real.js';
 
 import { logger } from '../lib/logger.js';
 
@@ -23,7 +24,8 @@ const realRegistry = [
   new ANBRealConnector(),
   new ProfarmaRealConnector(),
   new SantaCruzRealConnector(),
-  new DmParanaRealConnector()
+  new DmParanaRealConnector(),
+  new GamRealConnector()
 ];
 
 logger.info(`Connector Registry loaded. Mock: ${mockRegistry.length} suppliers. Real: ${realRegistry.length} suppliers.`);

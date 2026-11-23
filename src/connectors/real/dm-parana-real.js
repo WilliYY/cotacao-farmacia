@@ -26,19 +26,21 @@ export function normalizeDmParanaUrl(url) {
 }
 
 export class DmParanaRealConnector extends SupplierConnector {
-  constructor() {
+  constructor({ credentialProvider } = {}) {
     super('DM Paraná');
+    this.credentialProvider = credentialProvider || (async () => {
+      const supplierId = await getSupplierIdByName('DM Paraná');
+      return supplierId ? getSupplierCredentials(supplierId) : null;
+    });
   }
 
   async isAvailable() {
-    const supplierId = await getSupplierIdByName('DM Paraná');
-    const credentials = supplierId ? await getSupplierCredentials(supplierId) : null;
+    const credentials = await this.credentialProvider(4);
     return !!(credentials?.username && credentials?.password);
   }
 
   async searchProduct(parsedQuery, options = {}) {
-    const supplierId = await getSupplierIdByName('DM Paraná');
-    const credentials = supplierId ? await getSupplierCredentials(supplierId) : null;
+    const credentials = await this.credentialProvider(4);
     if (!credentials?.username || !credentials?.password) {
       logger.warn('Real credentials not configured for DM Parana.');
       return [createLiveUnavailableResult('DM Paraná', parsedQuery, 'credenciais nao configuradas')];
@@ -71,7 +73,7 @@ export class DmParanaRealConnector extends SupplierConnector {
           ? (result.searchFallback || 'ASSOCIACAO_POR_PRINCIPIO_ATIVO')
           : result.searchFallback,
         source: 'DM Paraná',
-        capturedAt: new Date().toISOString()
+        capturedAt: Object.hasOwn(result, 'capturedAt') ? result.capturedAt : new Date().toISOString()
       }));
     } catch (error) {
       if (error?.name === 'AbortError') throw error;

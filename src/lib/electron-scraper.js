@@ -1,6 +1,231 @@
 import { logger } from './logger.js';
 import { getConnectorSessionIdentity } from './connector-session.js';
 
+export function isTrustedSupplierUrl(supplierId, value) {
+  const origins = { 1: 'https://pedido.anbfarma.com.br', 2: 'https://pedido.profarma.com.br', 4: 'https://portal.dmparana.com.br' };
+  try {
+    const url = new URL(value);
+    return Boolean(origins[supplierId]) && url.origin === origins[supplierId] && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+export function assertTrustedSupplierLogin(document, currentUrl, supplierId, controls = []) {
+  const fail = () => {
+    const error = new Error('SUPPLIER_ORIGIN_BLOCKED');
+    error.code = 'SUPPLIER_ORIGIN_BLOCKED';
+    throw error;
+  };
+  if (!isTrustedSupplierUrl(supplierId, currentUrl)) fail();
+  for (const control of controls.filter(Boolean)) {
+    const form = control.form || control.closest?.('form');
+    const action = control.getAttribute?.('formaction') ?? form?.getAttribute('action');
+    if (action !== undefined && action !== null) {
+      let target;
+      try { target = new URL(action || currentUrl, document.baseURI || currentUrl).href; } catch { fail(); }
+      if (!isTrustedSupplierUrl(supplierId, target)) fail();
+    }
+  }
+}
+
+export function installSupplierNavigationGuard(webContents, supplierId, onBlocked) {
+  const block = () => {
+    const error = new Error('SUPPLIER_ORIGIN_BLOCKED');
+    error.code = 'SUPPLIER_ORIGIN_BLOCKED';
+    onBlocked(error);
+  };
+  const guard = (event, url) => {
+    if (!isTrustedSupplierUrl(supplierId, event.url || url)) {
+      event.preventDefault();
+      block();
+    }
+  };
+  webContents.on('will-navigate', guard);
+  webContents.on('will-redirect', guard);
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (!isTrustedSupplierUrl(supplierId, url)) block();
+    return { action: 'deny' };
+  });
+  return () => {
+    webContents.removeListener?.('will-navigate', guard);
+    webContents.removeListener?.('will-redirect', guard);
+    webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  };
+}
+
+export function createPortalSessionCache({ idleMs = 120_000, schedule = setTimeout, cancel = clearTimeout } = {}) {
+  const sessions = new Map();
+  const busy = () => Object.assign(new Error('SUPPLIER_SESSION_BUSY'), { code: 'SUPPLIER_SESSION_BUSY' });
+  const discard = (key, entry) => {
+    cancel(entry.timer);
+    if (!entry.window.isDestroyed()) entry.window.destroy();
+    if (sessions.get(key) === entry) sessions.delete(key);
+  };
+  return {
+    acquire(key, create, reuse = true) {
+      let entry = sessions.get(key);
+      if (entry?.active) throw busy();
+      if (entry && (!reuse || entry.window.isDestroyed())) { discard(key, entry); entry = null; }
+      const reused = Boolean(entry);
+      if (!entry) {
+        entry = { window: create(), active: false, timer: null };
+        sessions.set(key, entry);
+      }
+      cancel(entry.timer);
+      if (entry.idleGuard) {
+        entry.window.webContents.removeListener?.('will-navigate', entry.idleGuard);
+        entry.window.webContents.removeListener?.('will-redirect', entry.idleGuard);
+      }
+      entry.active = true;
+      let released = false;
+      return { window: entry.window, reused, lastSearchTerm: entry.lastSearchTerm, lastHadRows: entry.lastHadRows,
+        lastOnlyRequestedEan: entry.lastOnlyRequestedEan,
+        release(healthy = false, metadata = {}) {
+        if (released) return;
+        released = true;
+        if (!healthy || !reuse || entry.window.isDestroyed()) { discard(key, entry); return; }
+        entry.lastSearchTerm = metadata.searchTerm;
+        entry.lastHadRows = metadata.hadRows === true;
+        entry.lastOnlyRequestedEan = metadata.onlyRequestedEan === true;
+        entry.active = false;
+        entry.idleGuard = event => event.preventDefault();
+        entry.window.webContents.on('will-navigate', entry.idleGuard);
+        entry.window.webContents.on('will-redirect', entry.idleGuard);
+        entry.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+        entry.timer = schedule(() => discard(key, entry), idleMs);
+        entry.timer?.unref?.();
+      } };
+    },
+    close() {
+      if ([...sessions.values()].some(entry => entry.active)) throw busy();
+      for (const [key, entry] of sessions) discard(key, entry);
+    }
+  };
+}
+
+const portalSessions = createPortalSessionCache();
+export function closePortalSessions() { portalSessions.close(); }
+
+export function canResumePortalDocument(lease, supplierId, searchTerm, currentUrl) {
+  // Repeating a query or following an empty grid needs a new document to prove freshness.
+  return lease.reused && lease.lastHadRows === true && lease.lastSearchTerm !== searchTerm &&
+    /^\d{13}$/.test(lease.lastSearchTerm || '') && /^\d{13}$/.test(searchTerm) &&
+    (supplierId !== 2 || lease.lastOnlyRequestedEan === true) &&
+    isTrustedSupplierUrl(supplierId, currentUrl);
+}
+
+export function getReadyPortalPathname(currentUrl) {
+  try {
+    const url = new URL(currentUrl);
+    return ['https:', 'http:'].includes(url.protocol) ? url.pathname : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getAnbCatalogNavigation(document, currentUrl) {
+  if (document.querySelector('#Promo, #inputPP, input[data-placeholder*="Pesquisar"], input[placeholder*="Pesquisar"]')) {
+    return { state: 'READY' };
+  }
+  const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  try {
+    const current = new URL(currentUrl);
+    for (const anchor of document.querySelectorAll('a[href]')) {
+      if (normalize(anchor.innerText || anchor.textContent) !== 'produtos') continue;
+      const target = new URL(anchor.getAttribute('href'), current);
+      if (target.origin !== current.origin || !/\/produtos(?:\/|$)/i.test(target.pathname)) continue;
+      if (target.pathname === current.pathname) return { state: 'WAIT' };
+      return { state: 'NAVIGATE', url: target.href };
+    }
+  } catch { /* A transient or incomplete document must not select an order action. */ }
+  return { state: 'WAIT' };
+}
+
+export function requiresRecaptchaIntervention(document) {
+  const box = document.querySelector('.recaptcha-checkbox, [role="checkbox"]');
+  if (!box || box.getAttribute('aria-checked') === 'true') return false;
+  const rect = box.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+export function isSafeDialogDismissal(labels = []) {
+  const values = labels.map(value => String(value || '').normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim());
+  if (/pedido|carrinho|compra|comprar|finaliz|enviar|adicion|checkout|order|pagar|payment/.test(values.join(' '))) return false;
+  return values.some(value => ['x', '×', 'close', 'clear', 'fechar', 'fechar janela', 'fechar modal'].includes(value) ||
+    /(^|\s)(?:close|fa-times)(?:\s|$)/.test(value));
+}
+
+export function getSafeDialogDismissTarget(element, canDismiss) {
+  const target = element.closest('button, [role="button"], a') || element;
+  if (String(target.tagName || '').toLowerCase() !== 'button' ||
+      target.getAttribute('type') !== 'button' || target.disabled || target.getAttribute('aria-disabled') === 'true') return null;
+  const labels = node => [node.innerText, node.textContent, node.getAttribute('aria-label'),
+    node.getAttribute('title'), node.className && String(node.className)];
+  return canDismiss([...labels(element), ...labels(target)]) ? target : null;
+}
+
+export function submitVerifiedProductSearch(document, supplierId) {
+  const input = document.querySelector('#inputPP, input[data-placeholder*="Pesquisar"], input[placeholder*="Pesquisar"], input[placeholder*="buscando"], input[placeholder*="Digite o que deseja buscar"]');
+  if (!input) return { state: 'UNAVAILABLE' };
+  const wrapper = input.closest('[role="search"], .MuiInputBase-root, mat-form-field, .mat-form-field') || input.parentElement;
+  const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const knownSearchPath = 'M232.49,215.51,185,168a92.12,92.12,0,1,0-17,17l47.53,47.54a12,12,0,0,0,17-17ZM44,112a68,68,0,1,1,68,68A68.07,68.07,0,0,1,44,112Z';
+  const candidates = Array.from(wrapper?.querySelectorAll('button') || []).filter(button => {
+    if (button.disabled || button.getAttribute('type') !== 'button') return false;
+    const rect = button.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const labels = [button.innerText, button.getAttribute('aria-label'), button.getAttribute('title'),
+      button.querySelector('mat-icon, .mat-icon')?.textContent].map(normalize);
+    if (/pedido|carrinho|compra|comprar|finaliz|enviar|adicion|checkout|order|pagar/.test(labels.join(' '))) return false;
+    const namedSearch = labels.some(label => /^(buscar|pesquisar|procurar|search|search products|buscar produtos|pesquisar produtos|manage_search)$/.test(label));
+    const searchIcon = button.querySelector('svg[data-testid="SearchIcon"], svg[data-icon="search"], .fa-search, .glyphicon-search');
+    const path = button.querySelector('svg path')?.getAttribute('d')?.replace(/\s+/g, '');
+    return namedSearch || Boolean(searchIcon) || path === knownSearchPath;
+  });
+  if (candidates.length === 1) {
+    candidates[0].click();
+    return { state: 'SUBMITTED_BUTTON' };
+  }
+  // ANB's observed catalogue input has an explicit Angular key handler and no order form.
+  if (candidates.length === 0 && supplierId === 1 && input.id === 'inputPP' && !input.closest('form')) {
+    input.focus();
+    for (const type of ['keydown', 'keyup']) input.dispatchEvent(new document.defaultView.KeyboardEvent(type,
+      { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
+    return { state: 'SUBMITTED_INPUT' };
+  }
+  return { state: 'UNAVAILABLE' };
+}
+
+export function inspectAnbCommercialCondition(document, configured = '', expected = '', select = false) {
+  const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const desired = normalize(configured);
+  const target = normalize(expected) || desired;
+  const fail = reason => ({ state: 'FAILED', reason: `Commercial condition: ${reason}` });
+  const field = document.querySelector('#Promo');
+  if (!field) return target ? fail('selector is unavailable; review ANB configuration.') : { state: 'NO_PROMO_FIELD' };
+  const value = field.querySelector('.mat-select-value-text, .mat-select-value');
+  const label = normalize(value?.innerText || value?.textContent || field.value || field.innerText);
+  const hasValue = label && !label.includes('selecione') && !label.includes('escolha');
+  if (!target) return { state: 'PROMO_SELECTED', expected: hasValue ? label : '', useDefault: true };
+  if (hasValue && (!target || label === target)) return { state: 'PROMO_SELECTED', expected: label };
+  if (hasValue && expected) return fail('selected value differs from the requested option; review ANB selection.');
+  const options = Array.from(document.querySelectorAll('mat-option, .mat-option'));
+  if (!options.length) return { state: 'OVERLAY_CLOSED' };
+  if (!select) return { state: 'OVERLAY_OPEN' };
+  const matches = options.filter(option => {
+    const text = normalize(option.innerText || option.textContent);
+    return text && !text.includes('selecione') && !text.includes('escolha') &&
+      option.getAttribute('aria-disabled') !== 'true' && !option.disabled && (!target || text === target);
+  });
+  if (matches.length !== 1) return fail(matches.length ? 'options are ambiguous; configure an exact unique ANB condition.' : 'requested option was not found; review ANB configuration.');
+  const option = matches[0];
+  const selected = normalize(option.innerText || option.textContent);
+  option.click();
+  return { state: 'SELECTION_PENDING', expected: selected };
+}
+
 export function serializeRedactedDiagnostic(document, secrets = []) {
   const clone = document.documentElement.cloneNode(true);
   for (const field of clone.querySelectorAll('input, textarea, select')) {
@@ -148,7 +373,7 @@ export function parseAnbTableRow(headers, columns) {
     .replace(/\s+/g, ' ')
     .trim();
   const normalizedHeaders = Array.isArray(headers) ? headers.map(normalize) : [];
-  const cols = Array.isArray(columns) ? columns.map(value => String(value || '').trim()) : [];
+  const cols = Array.isArray(columns) ? columns.map(value => String(value ?? '').trim()) : [];
   const findIndex = predicate => normalizedHeaders.findIndex(predicate);
   const nameIndex = findIndex(value => value === 'nome' || value.includes('descricao'));
   const stIndex = findIndex(value => /^st\.?$/.test(value));
@@ -162,11 +387,17 @@ export function parseAnbTableRow(headers, columns) {
   if (!name || finalPrice <= 0) return null;
 
   const stAmount = parsePositiveCurrency(cols[stIndex]);
-  const stockText = normalize(cols[stockIndex]);
-  const stockNumber = Number.parseInt(stockText.replace(/\D/g, ''), 10);
-  const available = !stockText.includes('avise') &&
-    !stockText.includes('indispon') &&
-    (!Number.isFinite(stockNumber) || stockNumber > 0);
+  const rawAvailability = cols[stockIndex] || '';
+  const stockText = normalize(rawAvailability);
+  const stockNumber = /^[+-]?\s*\d+$/.test(stockText) ? Number(stockText.replace(/\s/g, '')) : NaN;
+  const stockQuantity = normalizedHeaders[stockIndex] === 'estoque' &&
+    normalizedHeaders.filter(value => value.includes('estoque')).length === 1 &&
+    Number.isSafeInteger(stockNumber) && stockNumber >= 0 ? stockNumber : null;
+  const available = (Number.isSafeInteger(stockNumber) && stockNumber > 0) ||
+    stockText === 'disponivel' || stockText === 'em estoque';
+  const unavailable = (Number.isSafeInteger(stockNumber) && stockNumber <= 0) ||
+    /\b(?:sem estoque|indisponivel|nao disponivel|nao ha estoque|esgotado|avise(?:-me)?)\b/.test(stockText) ||
+    /^0+\s+unidades?$/.test(stockText);
   const normalizedName = normalize(name);
   const parsedProduct = parseSupplierProductIdentity(name);
   const presentation = parsedProduct.presentation || inferProductPresentation(normalizedName);
@@ -182,7 +413,9 @@ export function parseAnbTableRow(headers, columns) {
     price: Number(finalPrice.toFixed(2)),
     stAmount: Number(stAmount.toFixed(2)),
     stStatus: stAmount > 0 ? 'COM_ST' : 'SEM_ST',
-    availability: available ? 'disponivel' : 'sem estoque',
+    availability: available ? 'disponivel' : unavailable ? 'sem estoque' : 'desconhecido',
+    rawAvailability,
+    stockQuantity,
     ean,
     packaging: name,
     quantity,
@@ -209,18 +442,36 @@ export function parseDmParanaCard(cardData = {}) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
   };
 
-  const finalPriceMatch = text.match(/pre[cç]o\s*final:\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d+|\d+(?:[.,]\d+)?)/i);
-  if (!finalPriceMatch) return null;
+  const finalPrices = [...text.matchAll(/pre[cç]o\s*final:\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d+|\d+(?:[.,]\d+)?)/gi)];
+  const eans = [...text.matchAll(/\bEAN:\s*(\d{13})\b/gi)];
+  if (finalPrices.length !== 1 || eans.length !== 1) return null;
+  const finalPriceMatch = finalPrices[0];
 
   const finalPrice = parseCurrency(finalPriceMatch[1]);
   if (finalPrice <= 0) return null;
 
   const stMatch = text.match(/\bST:\s*R\$\s*(\d{1,3}(?:\.\d{3})*,\d+|\d+(?:[.,]\d+)?)/i);
-  const stAmount = parseCurrency(stMatch?.[1]);
+  const stAmount = stMatch ? parseCurrency(stMatch[1]) : null;
   const normalizedText = normalize(text);
   const normalizedName = normalize(name);
   const explicitStExempt = ['cosmet', 'dermocosmet', 'perfum', 'shampoo', 'sabonete', 'higiene']
     .some(term => normalizedName.includes(term));
+  const readCommercialLabel = label => {
+    const matches = text.split(/\r?\n/).map(line => {
+      const colon = line.indexOf(':');
+      return colon >= 0 && normalize(line.slice(0, colon)).trim() === label
+        ? line.slice(colon + 1).trim() : null;
+    }).filter(value => value !== null);
+    return matches.length === 1 && matches[0] ? matches[0] : null;
+  };
+  const commercialCondition = readCommercialLabel('condicao comercial');
+  const commercialConditionConfirmed = Boolean(commercialCondition) &&
+    !/^(?:-|n\/a|nao informad[ao]|nao confirmad[ao]|desconhecid[ao]|livre|padrao|default|unknown|unconfirmed)$/i.test(normalize(commercialCondition));
+  const minimumText = readCommercialLabel('minimo (apresentacoes)');
+  const minimumNumber = /^\d+$/.test(minimumText || '') ? Number(minimumText) : null;
+  const minimumQuantity = Number.isSafeInteger(minimumNumber) && minimumNumber > 0 ? minimumNumber : null;
+  const priceUnitConfirmed = normalize(readCommercialLabel('unidade de preco')) === 'apresentacao';
+  const observedCurrency = readCommercialLabel('moeda');
   const hasActiveBuyButton = cardData.hasBuyButton === true && cardData.buyButtonDisabled !== true;
   const available = hasActiveBuyButton &&
     !normalizedText.includes('sem estoque') &&
@@ -229,7 +480,7 @@ export function parseDmParanaCard(cardData = {}) {
   const parsedProduct = parseSupplierProductIdentity(name);
   const quantity = Number(parsedProduct.quantity) > 0 ? Number(parsedProduct.quantity) : 1;
   const dosage = parsedProduct.dosage || '';
-  const ean = text.match(/EAN:\s*(\d{13})/i)?.[1] || '';
+  const ean = eans[0][1];
   const presentation = parsedProduct.presentation || inferProductPresentation(normalizedName);
 
   return {
@@ -238,29 +489,34 @@ export function parseDmParanaCard(cardData = {}) {
     dosage,
     presentation,
     price: Number(finalPrice.toFixed(2)),
-    stAmount: Number(stAmount.toFixed(2)),
-    stStatus: stAmount > 0 ? 'COM_ST' : (explicitStExempt ? 'ST_ISENTO' : 'SEM_ST'),
+    stAmount: stAmount === null ? null : Number(stAmount.toFixed(2)),
+    stStatus: stAmount === null ? 'ST_DESCONHECIDO' : stAmount > 0 ? 'COM_ST' : (explicitStExempt ? 'ST_ISENTO' : 'SEM_ST'),
     availability: available ? 'disponivel' : 'sem estoque',
     ean,
     packaging: name,
     quantity,
     unitPrice: quantity > 0 ? Number((finalPrice / quantity).toFixed(4)) : finalPrice,
-    priceSourceLabel: 'Preço final: R$'
+    priceSourceLabel: 'Preço final: R$',
+    commercialCondition: commercialCondition || '', commercialConditionConfirmed,
+    minimumQuantity, minimumQuantityConfirmed: minimumQuantity !== null,
+    priceUnit: priceUnitConfirmed ? 'PURCHASE_PRESENTATION' : 'UNCONFIRMED', priceUnitConfirmed,
+    currency: !observedCurrency || /^(?:BRL|R\$)$/i.test(observedCurrency) ? 'BRL' : observedCurrency,
+    ...(typeof cardData.sourceUrl === 'string' && cardData.sourceUrl ? { sourceUrl: cardData.sourceUrl } : {}),
+    ...(typeof cardData.capturedAt === 'string' ? { capturedAt: cardData.capturedAt } : {})
   };
 }
 
-export function parseProfarmaTableRow(columns, hasQuantityInput = false, headers) {
+export function parseProfarmaTableRow(columns, hasQuantityInput = false, headers, observedUrl) {
   const cols = Array.isArray(columns) ? columns.map(value => String(value || '').trim()) : [];
   if (cols.length < 5) return null;
 
   const parseCurrency = (value) => {
-    const match = String(value || '').match(/-?\d{1,3}(?:\.\d{3})*,\d+|-?\d+(?:[.,]\d+)?/);
-    if (!match) return 0;
-    let clean = match[0];
-    if (clean.includes('.') && clean.includes(',')) clean = clean.replace(/\./g, '').replace(',', '.');
-    else clean = clean.replace(',', '.');
-    const parsed = Number.parseFloat(clean);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    const text = String(value ?? '').trim().replace(/^R\$\s*/, '');
+    if (!/^(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?$/.test(text) && !/^\d+\.\d{2}$/.test(text)) return null;
+    const clean = text.includes(',') || /^\d{1,3}(?:\.\d{3})+$/.test(text)
+      ? text.replace(/\./g, '').replace(',', '.') : text;
+    const parsed = Number(clean);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
   };
   const normalize = (value) => String(value || '')
     .normalize('NFD')
@@ -280,10 +536,29 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false, headers
   const finalPrice = parseCurrency(priceText);
   if (finalPrice <= 0) return null;
 
-  const stAmount = cols.length >= 9 ? parseCurrency(cols[8]) : 0;
+  const stAmount = cols.length >= 9 ? parseCurrency(cols[8]) : null;
   const category = cols[12] || '';
   const normalizedCategory = normalize(category);
-  const stExempt = ['cosmet', 'dermocosmet', 'perfum', 'higiene'].some(term => normalizedCategory.includes(term));
+  const commercialCell = label => {
+    if (!Array.isArray(headers) || headers.length !== cols.length) return '';
+    const indexes = headers.map((header, index) => normalize(header).trim().replace(/\s+/g, ' ') === label ? index : -1).filter(index => index >= 0);
+    return indexes.length === 1 ? cols[indexes[0]] : '';
+  };
+  const condition = commercialCell('condicao comercial');
+  const conditionConfirmed = Boolean(condition && !/[\r\n]/.test(condition) && /[a-z]/i.test(normalize(condition)) &&
+    !['-', '--', 'n/a', 'nao informado', 'nao informada', 'nao consta', 'desconhecido', 'desconhecida', 'livre', 'padrao'].includes(normalize(condition).trim()));
+  const minimumText = commercialCell('minimo (apresentacoes)');
+  const minimum = /^[1-9]\d*$/.test(minimumText) && Number.isSafeInteger(Number(minimumText)) ? Number(minimumText) : null;
+  const unit = commercialCell('unidade de preco');
+  const unitConfirmed = ['apresentacao', 'por apresentacao'].includes(normalize(unit).trim());
+  let sourceUrl = null;
+  try {
+    const observed = new URL(observedUrl);
+    if (observed.origin === 'https://pedido.profarma.com.br' && !observed.username && !observed.password) sourceUrl = observed.origin;
+  } catch { /* No observed page means no source evidence. */ }
+  const observedStAmount = headers === undefined ? stAmount : parseCurrency(commercialCell('st (r$)'));
+  const stExempt = headers === undefined ? ['cosmet', 'dermocosmet', 'perfum', 'higiene'].some(term => normalizedCategory.includes(term))
+    : normalize(commercialCell('regime de st')).trim() === 'isento';
   const available = hasQuantityInput &&
     !quantityText.includes('avise') &&
     !quantityText.includes('indispon');
@@ -299,8 +574,14 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false, headers
     dosage,
     presentation,
     price: Number(finalPrice.toFixed(2)),
-    stAmount: Number(stAmount.toFixed(2)),
-    stStatus: stAmount > 0 ? 'COM_ST' : (stExempt ? 'ST_ISENTO' : 'SEM_ST'),
+    stAmount: observedStAmount === null ? null : Number(observedStAmount.toFixed(2)),
+    stStatus: observedStAmount === null ? (stExempt ? 'ST_ISENTO' : 'ST_DESCONHECIDO')
+      : observedStAmount > 0 ? 'COM_ST' : (stExempt ? 'ST_ISENTO' : 'SEM_ST'),
+    commercialCondition: condition, commercialConditionConfirmed: conditionConfirmed,
+    minimumQuantity: minimum, minimumQuantityConfirmed: minimum !== null,
+    priceUnit: unitConfirmed ? 'PURCHASE_PRESENTATION' : unit || 'UNCONFIRMED', priceUnitConfirmed: unitConfirmed,
+    currency: commercialCell('moeda') || 'BRL',
+    sourceUrl,
     availability: available ? 'disponivel' : 'sem estoque',
     ean,
     packaging: name,
@@ -313,9 +594,14 @@ export function parseProfarmaTableRow(columns, hasQuantityInput = false, headers
 
 /**
  * Headless/Headed Scraping Engine using Electron's BrowserWindow.
- * Bypasses bot detection by using the app's native Chrome engine.
+ * Uses the app's native browser; challenges require operator intervention.
  */
 export async function scrapePortal(supplierId, loginUrl, username, password, clientCode, searchTerm, options = {}) {
+  if (!isTrustedSupplierUrl(supplierId, loginUrl)) {
+    const error = new Error('SUPPLIER_ORIGIN_BLOCKED');
+    error.code = 'SUPPLIER_ORIGIN_BLOCKED';
+    throw error;
+  }
   const showWindow = process.env.SHOW_SCRAPER_WINDOW !== 'false';
   const includeDebugColumns = process.env.DEBUG_SCRAPER_COLUMNS === 'true';
   const scraperTimeoutMs = Number.parseInt(process.env.SCRAPER_TIMEOUT_MS || '300000', 10);
@@ -329,31 +615,26 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
   }
 
   const { BrowserWindow } = await import('electron');
+  const partition = `${process.env.CATALOGUE_AUDIT_READ_ONLY === 'true' ? '' : 'persist:'}wimifarma-supplier-${supplierId}-${getConnectorSessionIdentity(supplierId, { loginUrl, username, password, clientCode })}`;
+  const lease = portalSessions.acquire(`${partition}:${showWindow}`, () => new BrowserWindow({
+    width: 1024, height: 768, show: showWindow, skipTaskbar: !showWindow,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, backgroundThrottling: false, partition }
+  }), process.env.SUPPLIER_SESSION_REUSE !== 'false' && [1, 2].includes(supplierId));
 
   return new Promise((resolve, reject) => {
-    let win = new BrowserWindow({
-      width: 1024,
-      height: 768,
-      show: showWindow,
-      skipTaskbar: !showWindow,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        backgroundThrottling: false,
-        partition: `${process.env.CATALOGUE_AUDIT_READ_ONLY === 'true' ? '' : 'persist:'}wimifarma-supplier-${supplierId}-${getConnectorSessionIdentity(supplierId, { loginUrl, username, password, clientCode })}`
-      }
-    });
+    let win = lease.window;
 
     let portalFetchFailureAt = 0;
     let portalFetchFailureMessage = '';
 
-    win.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    const onConsoleMessage = (event, level, message, line, sourceId) => {
       logger.info(`[BROWSER CONSOLE] ${message}`);
       if (isPortalFetchFailureMessage(message)) {
         portalFetchFailureAt = Date.now();
         portalFetchFailureMessage = String(message || 'Falha de rede no portal');
       }
-    });
+    };
+    win.webContents.on('console-message', onConsoleMessage);
 
     let hasResolved = false;
     let pollInterval = null;
@@ -370,6 +651,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
     }, Number.isFinite(scraperTimeoutMs) && scraperTimeoutMs > 0 ? scraperTimeoutMs : 300000);
 
     const saveDebugArtifacts = async (name) => {
+      if (process.env.CATALOGUE_AUDIT_READ_ONLY === 'true') return;
       try {
         const fs = await import('node:fs');
         const path = await import('node:path');
@@ -397,36 +679,49 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
       }
     };
 
-    const saveDebugArtifactsBounded = (name) => Promise.race([
+    const saveDebugArtifactsBounded = (name) => process.env.CATALOGUE_AUDIT_READ_ONLY === 'true' ? Promise.resolve() : Promise.race([
       saveDebugArtifacts(name),
       new Promise(resolveArtifacts => setTimeout(resolveArtifacts, 2000))
     ]);
 
-    const cleanup = () => {
+    const cleanup = (healthy = false, hadRows = false, onlyRequestedEan = false) => {
       clearTimeout(timeoutId);
       if (pollInterval) clearInterval(pollInterval);
       if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
       if (win) {
         try {
-          win.webContents.removeAllListeners('console-message');
-          win.removeAllListeners();
+          win.webContents.removeListener?.('console-message', onConsoleMessage);
+          win.webContents.removeListener?.('did-finish-load', runStateMachine);
+          win.webContents.removeListener?.('did-fail-load', onDidFailLoad);
+          win.removeListener?.('closed', onWindowClosed);
+          removeNavigationGuard();
         } catch {
           // Best effort cleanup.
         }
-        if (!win.isDestroyed()) {
-          win.destroy();
-        }
+        lease.release(healthy === true && !signal?.aborted && !win.isDestroyed() && isTrustedSupplierUrl(supplierId, win.getURL()), { searchTerm, hadRows, onlyRequestedEan });
         win = null;
       }
     };
 
-    abortHandler = () => {
+    const removeNavigationGuard = installSupplierNavigationGuard(win.webContents, supplierId, error => {
       if (hasResolved) return;
       hasResolved = true;
       cleanup();
-      const error = new Error('Scraping session aborted by quotation timeout.');
-      error.name = 'AbortError';
       reject(error);
+    });
+
+    abortHandler = () => {
+      if (hasResolved) return;
+      hasResolved = true;
+      const finish = () => {
+        cleanup();
+        const error = new Error('Scraping session aborted by quotation timeout.');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      if (process.env.DEBUG_SCRAPER_COLUMNS === 'true') {
+        saveDebugArtifactsBounded(`interrupted_supplier_${supplierId}`).finally(finish);
+      } else finish();
     };
     signal?.addEventListener('abort', abortHandler, { once: true });
     if (signal?.aborted) {
@@ -441,40 +736,44 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
     let typedSearch = false;
     let lastPromoClickTime = 0;
     let promoOpenAttempts = 0;
+    let expectedCommercialCondition = '';
+    let promoSelectionAttempts = 0;
     let dmGridRetries = 0;
     let stateMachineRunning = false;
+    let hasTrustedDocument = false;
 
     const runStateMachine = async () => {
       if (hasResolved || stateMachineRunning || !win || win.isDestroyed()) return;
       stateMachineRunning = true;
 
       const currentUrl = win.getURL();
-      let pathname = '';
-      try {
-        pathname = new URL(currentUrl).pathname;
-      } catch (e) {
-        pathname = currentUrl;
-      }
+      const pathname = getReadyPortalPathname(currentUrl);
 
       try {
-        // Auto-check reCAPTCHA checkbox if it exists on the page
+        if (!hasTrustedDocument && (currentUrl === '' || currentUrl === 'about:blank') &&
+            win.webContents.isLoadingMainFrame()) return;
+        if (!isTrustedSupplierUrl(supplierId, currentUrl)) {
+          const error = new Error('SUPPLIER_ORIGIN_BLOCKED');
+          error.code = 'SUPPLIER_ORIGIN_BLOCKED';
+          throw error;
+        }
+        if (win.webContents.isLoadingMainFrame()) return;
+        hasTrustedDocument = true;
+        if (pathname === null) return;
+        // Observe challenges; completing CAPTCHA always belongs to the operator.
+        let manualCaptcha = false;
         try {
           const frames = win.webContents.getAllWebFrames();
           const recaptchaFrame = frames.find(f => f.url && f.url.includes('recaptcha'));
           if (recaptchaFrame) {
-            await recaptchaFrame.executeJavaScript(`
-              (() => {
-                const cb = document.querySelector('.recaptcha-checkbox-border');
-                if (cb && !cb.classList.contains('recaptcha-checkbox-checked')) {
-                  cb.click();
-                  console.log('[BROWSER] Clicked reCAPTCHA checkbox.');
-                }
-              })()
-            `).catch(() => {});
+            manualCaptcha = await recaptchaFrame.executeJavaScript(
+              `(${requiresRecaptchaIntervention.toString()})(document)`
+            ).catch(() => false);
           }
         } catch (recaptchaErr) {
           // ignore iframe check errors
         }
+        if (manualCaptcha) throw new Error('CAPTCHA verification requires manual intervention in the supplier portal.');
 
         // --- 1. LOGIN FLOW ---
         const hasPasswordInput = await win.webContents.executeJavaScript(`
@@ -487,8 +786,13 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
           const loginSubmitted = await win.webContents.executeJavaScript(`
             (async () => {
+              const isTrustedSupplierUrl = ${isTrustedSupplierUrl.toString()};
+              const assertTrustedSupplierLogin = ${assertTrustedSupplierLogin.toString()};
+              const verifyLogin = (controls = []) => assertTrustedSupplierLogin(document, location.href, ${Number(supplierId)}, controls);
+              verifyLogin();
               const wait = ms => new Promise(r => setTimeout(r, ms));
               const setInputValue = (input, value) => {
+                verifyLogin([input]);
                 input.focus();
                 const nativeProto = window.HTMLInputElement && window.HTMLInputElement.prototype;
                 const setter = Object.getOwnPropertyDescriptor(input.constructor.prototype, 'value')?.set ||
@@ -521,6 +825,13 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                               document.querySelector('input[id*="txtSenha"]');
 
               if (userInp && passInp) {
+                const btn = document.querySelector('button[type="submit"]') ||
+                            document.querySelector('input[type="submit"]') ||
+                            document.querySelector('.btn-primary') ||
+                            document.querySelector('button') ||
+                            document.querySelector('input[value*="Entrar"]') ||
+                            document.querySelector('input[id*="btnEntrar"]');
+                verifyLogin([userInp, passInp, btn]);
                 setInputValue(userInp, ${JSON.stringify(username)});
 
                 await wait(200);
@@ -535,23 +846,22 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
                 await wait(300);
 
-                const btn = document.querySelector('button[type="submit"]') || 
-                            document.querySelector('input[type="submit"]') ||
-                            document.querySelector('.btn-primary') ||
-                            document.querySelector('button') ||
-                            document.querySelector('input[value*="Entrar"]') ||
-                            document.querySelector('input[id*="btnEntrar"]');
                 if (btn) {
+                  verifyLogin([userInp, passInp, btn]);
                   btn.click();
                 } else {
                   const form = userInp.closest('form');
+                  verifyLogin([userInp, passInp]);
                   if (form) form.submit();
                 }
                 return true;
               }
               return false;
             })();
-          `).catch(() => {});
+          `).catch(error => {
+            if (String(error.message || '').includes('SUPPLIER_ORIGIN_BLOCKED')) throw error;
+            return false;
+          });
           if (!loginSubmitted) injectedLogin = false;
           return;
         }
@@ -609,29 +919,13 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
               'button, [role="button"], a, mat-icon, .mat-icon, .close, [aria-label], [title]'
             ));
 
-            const closeEl = closeCandidates.find((el) => {
-              if (!isVisible(el)) return false;
-              const label = [
-                el.innerText,
-                el.textContent,
-                el.getAttribute('aria-label'),
-                el.getAttribute('title'),
-                el.className && String(el.className)
-              ].filter(Boolean).join(' ').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().trim();
+            const canDismiss = ${isSafeDialogDismissal.toString()};
+            const resolveDismiss = ${getSafeDialogDismissTarget.toString()};
+            const closeTarget = closeCandidates.filter(isVisible)
+              .map(el => resolveDismiss(el, canDismiss)).find(Boolean);
 
-              return label === 'x' ||
-                label === '×' ||
-                label === 'close' ||
-                label === 'fechar' ||
-                label.includes(' close') ||
-                label.includes('fechar') ||
-                label.includes('times') ||
-                label.includes('mat-icon') && (label.includes('close') || label.includes('clear'));
-            });
-
-            if (closeEl) {
-              const clickTarget = closeEl.closest('button, [role="button"], a') || closeEl;
-              clickTarget.click();
+            if (closeTarget) {
+              closeTarget.click();
               return true;
             }
 
@@ -643,6 +937,17 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
         if (closedBlockingOverlay) {
           logger.info('Closed blocking overlay or modal before continuing search.');
           return;
+        }
+
+        if (supplierId === 1 && !hasPasswordInput) {
+          const catalogue = await win.webContents.executeJavaScript(
+            `(${getAnbCatalogNavigation.toString()})(document, location.href)`
+          );
+          if (catalogue.state === 'NAVIGATE') {
+            await win.loadURL(catalogue.url);
+            return;
+          }
+          if (catalogue.state !== 'READY') return;
         }
 
         // --- 2. SEARCH & EXTRACTION FLOW ---
@@ -681,7 +986,18 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           }
 
           // Check promotions select state
-          const promoState = await win.webContents.executeJavaScript(`
+          const anbAuditReadOnly = supplierId === 1 && process.env.CATALOGUE_AUDIT_READ_ONLY === 'true';
+          const anbConfiguredCondition = anbAuditReadOnly ? '' : process.env.ANB_COMMERCIAL_CONDITION || '';
+          const anbCondition = supplierId === 1 ? await win.webContents.executeJavaScript(`
+            (${inspectAnbCommercialCondition.toString()})(document, ${JSON.stringify(anbConfiguredCondition)}, ${JSON.stringify(expectedCommercialCondition)})
+          `) : null;
+          if (anbCondition?.state === 'FAILED') throw Object.assign(new Error(anbCondition.reason),
+            anbAuditReadOnly ? { code: 'ANB_DEFAULT_CONDITION_REQUIRED' } : {});
+          if (anbCondition?.expected) expectedCommercialCondition = anbCondition.expected;
+          if (submittedSearch && anbCondition && !['PROMO_SELECTED', 'NO_PROMO_FIELD'].includes(anbCondition.state)) {
+            throw new Error('Commercial condition: ANB selection changed during search; review prices.');
+          }
+          const promoState = anbCondition?.state || await win.webContents.executeJavaScript(`
             (() => {
               const promoInp = document.querySelector('#Promo');
               if (promoInp) {
@@ -712,6 +1028,23 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
               return 'NO_PROMO_FIELD';
             })()
           `);
+
+          if (anbAuditReadOnly) {
+            const blocked = () => Object.assign(new Error('Commercial condition: ANB default search is unavailable; read-only audit will not open or select promotions.'),
+              { code: 'ANB_DEFAULT_CONDITION_REQUIRED' });
+            if (!['PROMO_SELECTED', 'NO_PROMO_FIELD'].includes(promoState)) throw blocked();
+            const defaultSearchReady = await win.webContents.executeJavaScript(`
+              (() => {
+                const field = document.querySelector('#inputPP') ||
+                  document.querySelector('input[data-placeholder*="Pesquisar"]') ||
+                  document.querySelector('input[placeholder*="Pesquisar"]') ||
+                  document.querySelector('input[placeholder*="buscando"]') ||
+                  document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
+                return !!field && !field.disabled;
+              })()
+            `);
+            if (!defaultSearchReady) throw blocked();
+          }
 
           if (!submittedSearch && promoState === 'OVERLAY_CLOSED') {
             const now = Date.now();
@@ -759,6 +1092,15 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           if (!submittedSearch && promoState === 'OVERLAY_OPEN') {
             promoOpenAttempts = 0;
             logger.info('Promotion dropdown is open. Selecting the configured commercial condition...');
+            if (supplierId === 1) {
+              if (++promoSelectionAttempts > 3) throw new Error('Commercial condition: ANB selection could not be confirmed; review the portal.');
+              const selection = await win.webContents.executeJavaScript(`
+                (${inspectAnbCommercialCondition.toString()})(document, ${JSON.stringify(process.env.ANB_COMMERCIAL_CONDITION || '')}, ${JSON.stringify(expectedCommercialCondition)}, true)
+              `);
+              if (selection.state === 'FAILED') throw new Error(selection.reason);
+              if (selection.expected) expectedCommercialCondition = selection.expected;
+              return;
+            }
             await win.webContents.executeJavaScript(`
               (() => {
                 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -843,36 +1185,11 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                       .join('||'))()
                   `).catch(() => '');
                   logger.info('Submitting product search...');
-                  await win.webContents.executeJavaScript(`
-                    (() => {
-                      const searchInp = document.querySelector('#inputPP') || 
-                                        document.querySelector('input[data-placeholder*="Pesquisar"]') ||
-                                        document.querySelector('input[placeholder*="Pesquisar"]') ||
-                                        document.querySelector('input[placeholder*="buscando"]') ||
-                                        document.querySelector('input[placeholder*="Digite o que deseja buscar"]');
-                      if (searchInp) {
-                        searchInp.focus();
-                        const inputRect = searchInp.getBoundingClientRect();
-                        const nearbyButton = Array.from(document.querySelectorAll('button')).find(button => {
-                          const rect = button.getBoundingClientRect();
-                          return rect.width > 0 && rect.height > 0 &&
-                            Math.abs(rect.top - inputRect.top) < 20 &&
-                            rect.left >= inputRect.right - 10 && rect.left <= inputRect.right + 120;
-                        });
-                        if (nearbyButton) {
-                          nearbyButton.click();
-                          return;
-                        }
-
-                        searchInp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
-                        searchInp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
-                      }
-                    })()
-                  `).catch(() => {});
-                  if (supplierId === 4 || supplierId === 2) {
-                    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ENTER' });
-                    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ENTER' });
-                    win.webContents.sendInputEvent({ type: 'char', keyCode: '\r' });
+                  const submitted = await win.webContents.executeJavaScript(
+                    `(${submitVerifiedProductSearch.toString()})(document, ${JSON.stringify(supplierId)})`
+                  );
+                  if (!['SUBMITTED_BUTTON', 'SUBMITTED_INPUT'].includes(submitted.state)) {
+                    throw new Error('Verified product search action is unavailable; supplier portal layout requires review.');
                   }
                   return;
                 }
@@ -948,10 +1265,10 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 if (portalFetchFailed && elapsed >= 3000) {
                   hasResolved = true;
                   clearInterval(pollInterval);
+                  cleanup();
                   reject(new Error(
                     `Supplier portal request failed during search: ${portalFetchFailureMessage || 'Failed to fetch'}`
                   ));
-                  setTimeout(cleanup, 2000);
                   return;
                 }
                 const inputMatches = String(dmGridState.inputValue).trim().toLowerCase() === String(searchTerm).trim().toLowerCase();
@@ -959,8 +1276,8 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                   logger.info('DM confirmed an empty product grid after a stable retry.');
                   hasResolved = true;
                   clearInterval(pollInterval);
+                  cleanup(true);
                   resolve([]);
-                  setTimeout(cleanup, 2000);
                   return;
                 }
                 if (!dmGridState.explicitlyEmpty && (!inputMatches || !dmGridState.hasDirectMatch)) {
@@ -1098,6 +1415,8 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                         const parsedCard = parseDmParanaCardFn({
                           name,
                           laboratory,
+                          sourceUrl: String(globalThis.location?.origin || ''),
+                          capturedAt: new Date().toISOString(),
                           text: card.innerText || '',
                           hasBuyButton: !!buyButton,
                           buyButtonDisabled: !!buyButton?.disabled || buyButton?.getAttribute('aria-disabled') === 'true'
@@ -1126,7 +1445,11 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                           ].filter(Boolean).join(' ').trim().toLowerCase();
                           return label === '+' || /adicionar|incrementar|aumentar|quantidade/.test(label);
                         });
-                        const parsedRow = parseProfarmaRow(cols, hasQuantityControl, headers);
+                        const productTable = row.closest('table, .table, mat-table, .mat-table');
+                        const productHeaders = productTable ? Array.from(productTable.querySelectorAll('th, mat-header-cell'))
+                          .map(header => (header.innerText || header.textContent || '').trim()) : [];
+                        const parsedRow = parseProfarmaRow(cols, hasQuantityControl, productHeaders,
+                          ${process.env.CATALOGUE_AUDIT_READ_ONLY === 'true'} ? String(globalThis.location?.href || '') : undefined);
                         if (!parsedRow) throw new Error('PROFARMA_PRICE_UNRESOLVED: Preço Final ausente, inválido ou cabeçalho não comprovado.');
                         if (!parsedRow || !parsedRow.ean || visitedEans.has(parsedRow.ean)) continue;
                         visitedEans.add(parsedRow.ean);
@@ -1145,7 +1468,9 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                         visitedEans.add(dedupeKey);
                         results.push({
                           ...parsedRow,
-                          commercialCondition: selectedCommercialCondition,
+                          sourceUrl: String(globalThis.location?.origin || ''),
+                          capturedAt: new Date().toISOString(),
+                          commercialCondition: parsedRow.commercialCondition ?? selectedCommercialCondition,
                           debugColumns: ${includeDebugColumns ? 'cols' : 'undefined'}
                         });
                         continue;
@@ -1315,7 +1640,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 if (results.length > 0) {
                   logger.info(`Scraping completed successfully. Found ${results.length} items.`);
                   const finish = () => {
-                    cleanup();
+                    cleanup(true, results.length > 0, results.every(result => result.ean === searchTerm));
                     resolve(results);
                   };
                   if (process.env.DEBUG_SCRAPER_COLUMNS === 'true') {
@@ -1326,7 +1651,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
                 } else {
                   logger.warn('No items found or parsing returned empty list.');
                   saveDebugArtifactsBounded(`empty_results_supplier_${supplierId}`).finally(() => {
-                    cleanup();
+                    cleanup(true);
                     resolve([]);
                   });
                 }
@@ -1335,9 +1660,16 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
           }
         }
       } catch (err) {
+        if (String(err.message || '').includes('SUPPLIER_ORIGIN_BLOCKED')) {
+          err.message = 'SUPPLIER_ORIGIN_BLOCKED';
+          err.code = 'SUPPLIER_ORIGIN_BLOCKED';
+        }
         logger.error(`Error during state machine run: ${err.message}`);
         hasResolved = true;
         clearInterval(pollInterval);
+        if (process.env.DEBUG_SCRAPER_COLUMNS === 'true') {
+          await saveDebugArtifactsBounded(`error_supplier_${supplierId}`);
+        }
         cleanup();
         reject(err);
       } finally {
@@ -1349,7 +1681,7 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
 
     win.webContents.on('did-finish-load', runStateMachine);
 
-    win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    const onDidFailLoad = (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
       logger.error(`Page load failed: ${errorDescription} (${errorCode})`);
       if (isMainFrame && !hasResolved) {
         hasResolved = true;
@@ -1357,8 +1689,17 @@ export async function scrapePortal(supplierId, loginUrl, username, password, cli
         cleanup();
         reject(new Error(`Supplier portal page failed to load: ${errorDescription}`));
       }
-    });
+    };
+    win.webContents.on('did-fail-load', onDidFailLoad);
+    const onWindowClosed = () => {
+      if (hasResolved) return;
+      hasResolved = true;
+      cleanup();
+      reject(Object.assign(new Error('SUPPLIER_WINDOW_CLOSED'), { code: 'SUPPLIER_WINDOW_CLOSED' }));
+    };
+    win.on('closed', onWindowClosed);
 
-    win.loadURL(loginUrl);
+    if (canResumePortalDocument(lease, supplierId, searchTerm, win.getURL())) void runStateMachine();
+    else win.loadURL(loginUrl);
   });
 }

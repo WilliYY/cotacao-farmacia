@@ -9,13 +9,14 @@ import {
   createLiveUnavailableResult
 } from '../connectors/real/live-result.js';
 import { logger } from './logger.js';
+import { supplierSearchLimiter } from './supplier-search-limiter.js';
 import {
   getSupplierIncidentReason,
   getSupplierRecoveryDelayMs,
   isSupplierPermanentlyBlocked
 } from './resilience.js';
 
-dotenv.config();
+if (process.env.CATALOGUE_AUDIT_READ_ONLY !== 'true') dotenv.config();
 
 const MAX_LIVE_CAPTURE_AGE_MS = 5 * 60 * 1000;
 const DEFAULT_CONNECTOR_TIMEOUT_MS = 5 * 60 * 1000;
@@ -23,6 +24,8 @@ const DEFAULT_SANTACRUZ_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_QUOTE_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CONNECTOR_ABORT_SETTLE_GRACE_MS = 3_000;
 const DEFAULT_SANTACRUZ_ABORT_SETTLE_GRACE_MS = 20_000;
+// Registry connectors are singletons; quarantine survives the end of a batch.
+const pendingSupplierCleanup = new WeakMap();
 
 export function isFreshLiveCapture(result, now = Date.now(), maxAgeMs = MAX_LIVE_CAPTURE_AGE_MS) {
   const capturedAt = Date.parse(result?.capturedAt || '');
@@ -176,7 +179,8 @@ export async function callWithRetry(connector, parsedQuery, options = {}) {
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     try {
       if (options.signal?.aborted) throw createAbortError();
-      const results = await connector.searchProduct(parsedQuery, { signal: options.signal });
+      const results = await supplierSearchLimiter.run(connector.supplierName,
+        () => connector.searchProduct(parsedQuery, { signal: options.signal }), { signal: options.signal });
       if (options.signal?.aborted) throw createAbortError();
       if (attempt <= retries && shouldRetryLiveResults(results)) {
         logger.warn(`Transient live failure for ${connector.supplierName}; retrying once.`);
@@ -298,9 +302,12 @@ function applyEanReferenceToResult(result, referenceContext, fallbackCode) {
   const supplierLabel = referenceContext.suppliers.join(', ');
   return {
     ...result,
-    ean: referenceContext.targetEan,
-    searchFallback: result.searchFallback || fallbackCode,
-    eanEvidenceNote: `EAN ${referenceContext.targetEan} confirmado pelo produto exato retornado por ${supplierLabel}`
+    // Pharmaceutical similarity does not prove the barcode of this supplier's item.
+    candidateEan: returnedEan ? undefined : referenceContext.targetEan,
+    searchFallback: returnedEan ? (result.searchFallback || fallbackCode) : 'EAN_CANDIDATO_ENTRE_DISTRIBUIDORAS',
+    eanEvidenceNote: returnedEan
+      ? `EAN ${returnedEan} retornado pelo fornecedor`
+      : `EAN candidato ${referenceContext.targetEan} de ${supplierLabel}; revisar fabricante e identidade no fornecedor`
   };
 }
 
@@ -338,7 +345,7 @@ async function retryEmptyEanSuppliers(
     originalTerms: referenceContext.primary.supplierProductName || referenceContext.primary.name
   };
 
-  return Promise.all(supplierResponses.map(async response => {
+  const settledFallbacks = await Promise.allSettled(supplierResponses.map(async response => {
     if ((response.results || []).length > 0) return response;
     const connector = activeConnectors.find(item => item.supplierName === response.supplier);
     if (!connector) return response;
@@ -349,11 +356,13 @@ async function retryEmptyEanSuppliers(
       supplier: response.supplier,
       message: `EAN confirmado por outra distribuidora; tentando ${response.supplier} pelo nome exato.`
     });
-    const fallbackResults = await callConnectorWithRecovery(
+    const fallbackResults = await runSupplierSearch(
       connector,
       fallbackQuery,
       supplierIncidents[response.supplier],
       {
+        ...options,
+        ignoreCachedResults: true,
         signal: options.signal,
         timeoutMs: options.connectorTimeoutMs?.[response.supplier],
         totalTimeoutReason: options.totalTimeoutReason,
@@ -369,9 +378,19 @@ async function retryEmptyEanSuppliers(
       .filter(Boolean);
     return { ...response, results: confirmedResults };
   }));
+  const rejected = settledFallbacks.find(response => response.status === 'rejected');
+  if (rejected) throw rejected.reason;
+  return settledFallbacks.map(response => response.value);
 }
 
 export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
+  if (pendingSupplierCleanup.has(connector)) {
+    return Promise.resolve([createLiveUnavailableResult(connector.supplierName, parsedQuery,
+      'consulta anterior ainda esta encerrando; a sessao nao pode ser reutilizada', {
+        failureCode: 'PORTAL_CLEANUP_PENDING', retryable: false, blocksQuote: true,
+        operatorAction: 'Aguarde o encerramento da consulta anterior e inicie outro lote.'
+      })]);
+  }
   const timeoutMs = getConnectorTimeoutMs(connector.supplierName, options);
   const abortSettleGraceMs = getConnectorAbortSettleGraceMs(connector.supplierName, options);
   const timeoutMinutes = Math.max(1, Math.ceil(timeoutMs / 60_000));
@@ -425,10 +444,21 @@ export function callConnectorWithTimeout(connector, parsedQuery, options = {}) {
           new Promise(resolve => setTimeout(() => resolve(false), abortSettleGraceMs))
         ]);
         if (!connectorSettled) {
+          const cleanup = connectorPromise.then(() => {}, () => {});
+          pendingSupplierCleanup.set(connector, cleanup);
+          void cleanup.then(() => {
+            if (pendingSupplierCleanup.get(connector) === cleanup) pendingSupplierCleanup.delete(connector);
+          });
           logger.warn(
-            `${connector.supplierName} did not confirm cleanup within ${abortSettleGraceMs}ms; releasing the quotation safely.`
+            `${connector.supplierName} did not confirm cleanup within ${abortSettleGraceMs}ms; quarantining its session.`
           );
         }
+      } else if (connectorPromise) {
+        const cleanup = connectorPromise.then(() => {}, () => {});
+        pendingSupplierCleanup.set(connector, cleanup);
+        void cleanup.then(() => {
+          if (pendingSupplierCleanup.get(connector) === cleanup) pendingSupplierCleanup.delete(connector);
+        });
       }
 
       finish([createLiveUnavailableResult(connector.supplierName, parsedQuery, reason, {
@@ -513,6 +543,41 @@ export async function callConnectorWithRecovery(connector, parsedQuery, incident
   });
 }
 
+async function runSupplierSearch(connector, parsedQuery, incident, options) {
+  const context = options.batchContext;
+  const supplier = connector.supplierName;
+  const execute = async () => {
+    const currentIncident = context?.supplierIncidents[supplier] || incident;
+    let results;
+    let cached = false;
+    if (isSupplierPermanentlyBlocked(currentIncident)) {
+      results = [{ ...createLiveUnavailableResult(supplier, parsedQuery,
+        getSupplierIncidentReason(currentIncident), { failureCode: currentIncident.failureCode,
+          operatorAction: currentIncident.operatorAction, blocksQuote: true }), supplierIncidentSkipped: true }];
+    } else if (!options.ignoreCachedResults && Object.hasOwn(options.cachedSupplierResults || {}, supplier)) {
+      results = options.cachedSupplierResults[supplier];
+      cached = true;
+    } else {
+      await options.onSupplierStarting?.(supplier);
+      results = await callConnectorWithRecovery(connector, parsedQuery, currentIncident, options);
+    }
+    context?.recordSupplierResults(supplier, results, options.onProgress);
+    await options.onSupplierResults?.(supplier, results, { cached });
+    return results;
+  };
+  try {
+    return context ? await context.supplierQueue.run(supplier, execute, options.signal) : await execute();
+  } catch (error) {
+    if (error.name !== 'AbortError') throw error;
+    const cancelled = options.signal?.reason === 'USER_CANCELLED';
+    return [createLiveUnavailableResult(supplier, parsedQuery,
+      cancelled ? 'cotacao cancelada pelo usuario' : 'tempo limite total da cotacao excedido', {
+        failureCode: cancelled ? 'USER_CANCELLED' : 'TIMEOUT', timedOut: !cancelled,
+        retryable: !cancelled, blocksQuote: false
+      })];
+  }
+}
+
 export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Profarma', 'Santa Cruz', 'DM Paraná'], options = {}) {
   logger.info(`Processing search query: "${rawText}" with suppliers: ${activeSuppliers.join(', ')}`);
   
@@ -546,11 +611,12 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
     if (connector) {
       logger.debug(`Calling connector for ${connector.supplierName}...`);
       searchPromises.push(
-        callConnectorWithRecovery(
+        runSupplierSearch(
           connector,
           parsed,
           supplierIncidents[connector.supplierName],
           {
+            ...options,
             signal: options.signal,
             timeoutMs: options.connectorTimeoutMs?.[connector.supplierName],
             totalTimeoutReason: options.totalTimeoutReason,
@@ -583,7 +649,10 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
         supplierIncidentSkipped: true
       };
     });
-  let supplierResponses = await Promise.all(searchPromises);
+  const settledResponses = await Promise.allSettled(searchPromises);
+  const rejected = settledResponses.find(response => response.status === 'rejected');
+  if (rejected) throw rejected.reason;
+  let supplierResponses = settledResponses.map(response => response.value);
   supplierResponses = corroborateEanSupplierResponses(parsed, supplierResponses);
   supplierResponses = await retryEmptyEanSuppliers(
     parsed,
@@ -712,6 +781,7 @@ export async function processQuoteQuery(rawText, activeSuppliers = ['ANB', 'Prof
       capturedAt: res.capturedAt || new Date().toISOString(),
       source: res.source,
       ean: res.ean || null,
+      candidateEan: res.candidateEan || null,
       packaging: res.packaging || `${qty} ${res.presentation || parsed.presentation || 'unidades'}`,
       quantity: qty,
       unitPrice: unitPrice,

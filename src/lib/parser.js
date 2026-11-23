@@ -2,6 +2,8 @@ import {
   canonicalizeMedicationName,
   expandMedicationAliases,
   extractActiveIngredients,
+  extractDoseComponents,
+  REFERENCE_BRAND_NAMES,
   isCombinationRequest,
   normalizePharmaceuticalText,
   resolveReferenceBrandName
@@ -55,6 +57,14 @@ const SYNONYMS = {
   abs: 'absorvente',
   fralda: 'fralda',
   fraldas: 'fralda',
+  env: 'envelope',
+  envs: 'envelope',
+  envelope: 'envelope',
+  envelopes: 'envelope',
+  flac: 'flaconete',
+  flacs: 'flaconete',
+  flaconete: 'flaconete',
+  flaconetes: 'flaconete',
   amp: 'ampola',
   ampola: 'ampola',
   ampolas: 'ampola',
@@ -123,7 +133,24 @@ export function parseSearchQuery(rawText) {
     };
   }
 
-  const cleaned = expandMedicationAliases(rawText);
+  const cleaned = expandMedicationAliases(rawText).replace(/\bunid\.?(?=\s|$)/g, 'unidade');
+  const isNonMedication = /\b(?:shampoo|condicionador|desodorante|absorventes?|fraldas?|tintura|tinta|agulhas?|seringas?|luvas?|compressas?|gazes?|ataduras?|esparadrapo|sabonetes?|oleo\s+(?:capilar|corporal)|creme\s+dental)\b/.test(cleaned);
+  const numericAmbiguity = (String(rawText).match(/\b\d[\d.,]*/g) || []).some(number =>
+    /^[1-9]\d{0,2}(?:\.\d{3})+$/.test(number) ||
+    ((number.match(/[.,]/g) || []).length > 1 &&
+      !/^[1-9]\d{0,2}(?:\.\d{3})+(?:,\d+)?$/.test(number)));
+  const requestedMatch = cleaned.match(/\b(\d+)\s*(cx|caixas?|pacotes?|pct|frascos?)\b/);
+  const requestedQuantity = requestedMatch ? Number(requestedMatch[1]) : 1;
+  const requestedUnit = requestedMatch
+    ? (/^(?:cx|caixa)/.test(requestedMatch[2]) ? 'caixa' : /^(?:pct|pacote)/.test(requestedMatch[2]) ? 'pacote' : 'frasco')
+    : '';
+  const contentMatch = cleaned.match(/\bc\s*\/\s*(\d+)\b/);
+  const dimensions = isNonMedication ? cleaned.match(/\b(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*mm\b/) : null;
+  const size = /\bfraldas?\b/.test(cleaned) ? cleaned.match(/\b(?:xxg|xg|gg|rn|p|m|g)\b/)?.[0] || '' : '';
+  const requestedBrand = [...REFERENCE_BRAND_NAMES.keys()]
+    .sort((left, right) => right.length - left.length)
+    .find(brand => (' ' + cleaned + ' ').includes(' ' + brand + ' ')) || '';
+  const doseComponents = isNonMedication ? [] : extractDoseComponents(cleaned);
   
   // 1. Extract EAN (usually 13 digits) and validate check digit
   const eanMatch = cleaned.match(/\b(\d{13})\b/);
@@ -131,11 +158,20 @@ export function parseSearchQuery(rawText) {
   const ean = isValidEAN13(matchedEan) ? matchedEan : '';
 
   // 2. Extract dosage (e.g. 500mg, 250mcg, 20mg, 10ml, 50g, etc.)
-  const dosageMatch = cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ui)\s*\/\s*(?:\d+(?:[.,]\d+)?\s*)?ml)/i) ||
+  let dosageMatch = cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ui)\s*\/\s*(?:\d+(?:[.,]\d+)?\s*)?ml)/i) ||
                       cleaned.match(/(\d+(?:[.,]\d+)?\s*%)/i) ||
                       cleaned.match(/((?:\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui)?\s*[+/]\s*)+\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) ||
                       cleaned.match(/(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|ui))\b/i) ||
                       cleaned.match(/\b(\d{1,4})\b(?!\s*(?:capsulas?|caps?|comprimidos?|comp?s?|cprs?|cps?|gotas?|gts|ampolas?|amps?|unidades?|unds?|envelopes?|env?s?|tablets?|tbls?|flaconetes?|flac?s?))/i);
+  if (doseComponents.length > 0) {
+    const first = doseComponents[0];
+    const last = doseComponents.at(-1);
+    const text = cleaned.slice(first.index, last.end);
+    dosageMatch = Object.assign([text, text], { index: first.index });
+  } else if (isNonMedication || (requestedMatch && dosageMatch?.index === requestedMatch.index) ||
+      (contentMatch && dosageMatch?.index >= contentMatch.index && dosageMatch.index < contentMatch.index + contentMatch[0].length)) {
+    dosageMatch = null;
+  }
   let dosage = '';
   if (dosageMatch) {
     dosage = dosageMatch[0].replace(/\s+/g, '').toLowerCase();
@@ -145,15 +181,18 @@ export function parseSearchQuery(rawText) {
       dosage = isMcgMed ? dosage + 'mcg' : dosage + 'mg';
     }
   }
+  if (doseComponents.length > 0 && !doseComponents.every(dose => dose.end === doseComponents[0].end)) {
+    dosage = doseComponents.map(dose => dose.text).join('+');
+  }
   let packageSize = '';
   const dosageStart = dosageMatch?.index ?? -1;
   const dosageEnd = dosageStart >= 0 ? dosageStart + dosageMatch[0].length : -1;
   for (const match of cleaned.matchAll(/(\d+(?:[.,]\d+)?)\s*(mg|mcg|g|ml|ui|%)(?=\s|$|[+/])/gi)) {
     const measurementStart = match.index ?? -1;
     const measurementEnd = measurementStart + match[0].length;
-    const overlapsDosage = dosageStart >= 0 &&
-      measurementStart < dosageEnd &&
-      measurementEnd > dosageStart;
+    const overlapsDosage = doseComponents.length > 0
+      ? doseComponents.some(dose => measurementStart < dose.end && measurementEnd > Math.floor(dose.index))
+      : dosageStart >= 0 && measurementStart < dosageEnd && measurementEnd > dosageStart;
     const unit = match[2].toLowerCase();
     if (!overlapsDosage && (unit === 'g' || unit === 'ml')) {
       packageSize = `${match[1].replace(',', '.')}${unit}`;
@@ -184,6 +223,9 @@ export function parseSearchQuery(rawText) {
     }
   }
 
+  if (contentMatch) quantity = Number(contentMatch[1]);
+  if (requestedMatch && !qtyMatch && !contentMatch) quantity = 1;
+
   // 4. Resolve presentation if not extracted via qtyMatch
   if (!presentation) {
     const words = cleaned.split(/\s+/);
@@ -212,6 +254,10 @@ export function parseSearchQuery(rawText) {
   }
   const packagingBoxMatches = [...cleaned.matchAll(/\bcx\.?(?=\s+\d{1,3}\s*(?:capsulas?|caps?|comprimidos?|comp?s?|cprs?|cps?|gotas?|gts|ampolas?|amps?|unidades?|unds?|envelopes?|env?s?|tablets?|tbls?|flaconetes?|flac?s?)\b)/gi)];
   const descriptionTokenRanges = [
+    ...doseComponents.map(dose => [Math.floor(dose.index), dose.end]),
+    ...(requestedMatch ? [[requestedMatch.index, requestedMatch.index + requestedMatch[0].length]] : []),
+    ...(contentMatch ? [[contentMatch.index, contentMatch.index + contentMatch[0].length]] : []),
+    ...[...cleaned.matchAll(/\bcx\.?(?=\s+c\s*\/\s*\d)/g)].map(match => [match.index, match.index + match[0].length]),
     ...coatedTabletMatches.map(match => {
       const start = match.index + match[0].lastIndexOf(match[1]);
       return [start, start + match[1].length];
@@ -269,6 +315,10 @@ export function parseSearchQuery(rawText) {
   if (!name && words.length > 0 && !matchedEan) {
     name = canonicalizeMedicationName(words[0]);
   }
+  if (isNonMedication) {
+    const categoryWord = cleaned.match(/\b(?:shampoo|condicionador|desodorante|absorventes?|fraldas?|tintura|tinta)\b/)?.[0];
+    if (categoryWord && !(' ' + name + ' ').includes(' ' + categoryWord + ' ')) name = categoryWord + ' ' + name;
+  }
   const normalizedCleaned = canonicalizeMedicationName(cleaned);
   if (normalizedCleaned.includes('absorvente') && normalizedCleaned.includes('higienico')) {
     name = 'absorvente higienico';
@@ -281,7 +331,7 @@ export function parseSearchQuery(rawText) {
   let confidenceStatus = 'ALTA';
   let refinementSuggestion = '';
 
-  const isCosmeticOrHygiene = COSMETIC_KEYWORDS.some(kw => cleaned.includes(kw));
+  const isCosmeticOrHygiene = isNonMedication || COSMETIC_KEYWORDS.some(kw => cleaned.includes(kw));
 
   // Determine if search query is extremely vague (single word matching category)
   const isVague = Object.keys(VAGUE_SUGGESTIONS).some(key => cleaned === key || cleaned === key + 's');
@@ -308,7 +358,32 @@ export function parseSearchQuery(rawText) {
     }
   }
 
+  const combination = isCombinationRequest(rawText);
+  const componentCount = extractActiveIngredients(name).length ||
+    extractActiveIngredients(resolveReferenceBrandName(name)).length;
+  const dosageAmbiguity = combination && componentCount > 1 && doseComponents.length !== componentCount;
+  if (dosageAmbiguity) {
+    confidence = 0;
+    confidenceStatus = 'DESCRICAO_INSUFICIENTE';
+    refinementSuggestion = 'Informe a dose e a unidade de cada principio ativo da associacao, incluindo o denominador da concentracao.';
+  }
+  if (numericAmbiguity) {
+    confidence = 0;
+    confidenceStatus = 'DESCRICAO_INSUFICIENTE';
+    refinementSuggestion = 'Pontuacao numerica ambigua: confirme a dose sem separador de milhar ou com virgula decimal.';
+  }
+
   return {
+    doseComponents,
+    dosageAmbiguity,
+    numericAmbiguity,
+    requestedQuantity,
+    requestedUnit,
+    packageQuantity: quantity,
+    requestedBrand,
+    size,
+    dimensions: dimensions ? dimensions[1] + 'x' + dimensions[2] + 'mm' : '',
+    category: isNonMedication ? 'higiene_material' : 'medicamento',
     name,
     dosage,
     presentation: presentation || (isCosmeticOrHygiene ? 'cosmético' : ''),
@@ -317,7 +392,7 @@ export function parseSearchQuery(rawText) {
     ean,
     originalTerms: rawText,
     activeIngredients: extractActiveIngredients(name),
-    isCombination: isCombinationRequest(rawText),
+    isCombination: combination,
     confidence,
     confidenceStatus,
     refinementSuggestion

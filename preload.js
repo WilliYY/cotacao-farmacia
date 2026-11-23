@@ -16,7 +16,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   getHistory: () => ipcRenderer.invoke('get-history'),
   getQuoteDetails: (quoteId) => ipcRenderer.invoke('get-quote-details', quoteId),
-  updateResult: (resultId, fields) => ipcRenderer.invoke('update-result', resultId, fields),
+  updateResult: (resultId, fields, learnSpelling = false) => ipcRenderer.invoke('update-result', resultId, fields, learnSpelling),
   exportExcel: (quoteId) => ipcRenderer.invoke('export-excel', quoteId),
   onGitUpdateAvailable: (callback) => {
     const listener = (event, data) => callback(data);

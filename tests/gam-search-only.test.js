@@ -141,9 +141,18 @@ test('observed unavailable GAM layout completes with confirmed identity and expl
   assert.equal(offer.price, null);
   assert.equal(offer.availability, 'indisponivel');
   assert.equal(offer.stockQuantity, null);
-  const summary = summarizeCatalogueOffer(offer, { ean }, 'GAM');
+  const observedOnly = summarizeCatalogueOffer(offer, { ean }, 'GAM');
+  assert.equal(observedOnly.observedEan, ean);
+  assert.equal(observedOnly.identityConfirmed, false);
+  const summary = summarizeCatalogueOffer(offer, { ean, name: 'OLEO CAPILAR E CORPORAL SINTETICO 100 ML 1 UNID' }, 'GAM');
   assert.equal(summary.identityConfirmed, true);
   assert.equal(summary.price, null);
+  const cosmetic = parseSearchQuery(offer.supplierProductName);
+  assert.equal(cosmetic.category, 'higiene_material');
+  assert.equal(cosmetic.dosage, '');
+  assert.equal(cosmetic.packageSize, '100ml');
+  const differentVolume = summarizeCatalogueOffer(offer, { ean, name: 'OLEO CAPILAR E CORPORAL SINTETICO 200 ML 1 UNID' }, 'GAM');
+  assert.equal(differentVolume.identityConfirmed, false);
   assert.equal(summary.availability, 'unavailable');
   assert.equal(summary.eligible, false);
   assert.equal(summary.eligibleAtCollection, false);
@@ -270,7 +279,15 @@ test('Electron engine uses only the observed GET search route and destroys its i
     destroy() { this.destroyed = true; }
     async loadURL(url) { this.current = url; navigations.push(url); }
   }
-  const rows = await scrapeGamPortal({ username: 'synthetic', password: 'synthetic' }, ean, { runtime: { BrowserWindow: FakeWindow }, timeoutMs: 1000 });
+  const previousReuse = process.env.SUPPLIER_SESSION_REUSE;
+  process.env.SUPPLIER_SESSION_REUSE = 'false';
+  let rows;
+  try {
+    rows = await scrapeGamPortal({ username: 'synthetic', password: 'synthetic' }, ean, { runtime: { BrowserWindow: FakeWindow }, timeoutMs: 1000 });
+  } finally {
+    if (previousReuse === undefined) delete process.env.SUPPLIER_SESSION_REUSE;
+    else process.env.SUPPLIER_SESSION_REUSE = previousReuse;
+  }
   assert.equal(rows[0].ean, ean);
   assert.deepEqual(navigations, ['https://egam.com.br/egam/login', snapshot().url]);
   assert.equal(instance.destroyed, true);

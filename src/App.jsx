@@ -732,6 +732,7 @@ function App() {
   const [editSTStatus, setEditSTStatus] = useState('COM_ST');
   const [editAvailability, setEditAvailability] = useState('disponível');
   const [editReviewStatus, setEditReviewStatus] = useState('PENDENTE');
+  const [learnSpelling, setLearnSpelling] = useState(false);
   const [editNotes, setEditNotes] = useState('');
   const [editEan, setEditEan] = useState('');
   const [editPackaging, setEditPackaging] = useState('');
@@ -1121,6 +1122,7 @@ function App() {
   const openEditModal = (result) => {
     previousFocusRef.current = document.activeElement;
     setEditingResult(result);
+    setLearnSpelling(false);
     setEditPrice(result.price);
     setEditSTStatus(result.stStatus);
     setEditAvailability(result.availability);
@@ -1154,7 +1156,7 @@ function App() {
         ean: editEan,
         packaging: editPackaging,
         quantity
-      });
+      }, editReviewStatus === 'APROVADO' && learnSpelling);
       setActiveQuote(updatedQuote);
       setEditingResult(null);
       loadHistory();
@@ -2526,6 +2528,11 @@ function App() {
               </div>
 
               <div>
+                {editReviewStatus === 'APROVADO' && (
+                  <label style={{ display: 'block', marginBottom: '0.6rem' }}>
+                    <input type="checkbox" checked={learnSpelling} onChange={e => setLearnSpelling(e.target.checked)} /> Memorizar correção de grafia nas próximas buscas
+                  </label>
+                )}
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '0.2rem' }}>Observações</label>
                 <textarea
                   value={editNotes}

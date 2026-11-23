@@ -4,6 +4,8 @@ import { getConnectorSessionIdentity } from './connector-session.js';
 const ORIGINS = new Set(['https://egam.com.br', 'https://www.egam.com.br']);
 const HEADERS = ['Cód', 'Inf.', 'Mercadoria', 'Ind/Marca', 'Qtd', 'Desc (%)', 'Preço', 'Líquido + Imposto', 'P.M.C.'];
 const activeAccounts = new Set();
+const gamSessions = new Map();
+const SESSION_IDLE_TTL_MS = 120_000;
 const gamError = code => Object.assign(new Error(code), { code, failureCode: code });
 
 function trustedGamUrl(value) {
@@ -50,11 +52,11 @@ export function inspectGamResults(snapshot, ean) {
   if (snapshot.login) return { state: 'BLOCKED', failureCode: 'AUTH_REQUIRED' };
   if (snapshot.captcha) return { state: 'BLOCKED', failureCode: 'CAPTCHA_REQUIRED' };
   if (snapshot.url !== expected || !snapshot.headings?.some(value => value.trim() === 'Produtos') ||
-      JSON.stringify(snapshot.headers) !== JSON.stringify(HEADERS)) return { state: 'WAIT' };
+      !Array.isArray(snapshot.headers) || JSON.stringify(snapshot.headers.slice(0, HEADERS.length)) !== JSON.stringify(HEADERS)) return { state: 'WAIT' };
   if (snapshot.rows?.length === 0) return { state: snapshot.noRecords ? 'EMPTY' : 'WAIT', results: [] };
   const results = [];
   for (const row of snapshot.rows || []) {
-    if (!Array.isArray(row.cells) || row.cells.length !== HEADERS.length) return { state: 'WAIT' };
+    if (!Array.isArray(row.cells) || row.cells.length !== snapshot.headers.length) return { state: 'WAIT' };
     const merchandise = String(row.cells[2]);
     const identities = merchandise.split(/\r?\n/).map(line => line.trim().match(/^(\d+)\s*:\s*(.*)$/)).filter(Boolean);
     if (identities.length !== 1) continue;
@@ -67,12 +69,32 @@ export function inspectGamResults(snapshot, ean) {
     if (price === null && !unavailable) return { state: 'WAIT' };
     const name = match[2].replace(/\s*\(Avise-me quando chegar\)\s*/gi, ' ').trim();
     const parsed = parseSearchQuery(name);
+    // Only uniquely labelled columns of this product row establish commercial facts.
+    const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const cell = label => {
+      const indexes = snapshot.headers.map((header, index) => normalize(header) === label ? index : -1).filter(index => index >= 0);
+      return indexes.length === 1 ? String(row.cells[indexes[0]] || '').trim() : '';
+    };
+    const condition = cell('condicao comercial');
+    const conditionConfirmed = Boolean(condition && !/[\r\n]/.test(condition) && /[a-z]/i.test(normalize(condition)) &&
+      !['-', '--', 'n/a', 'nao informado', 'nao informada', 'nao consta', 'desconhecido', 'desconhecida', 'livre', 'padrao'].includes(normalize(condition)));
+    const minimumText = cell('minimo (apresentacoes)');
+    const minimum = /^[1-9]\d*$/.test(minimumText) && Number.isSafeInteger(Number(minimumText)) ? Number(minimumText) : null;
+    const unit = cell('unidade de preco');
+    const unitConfirmed = ['apresentacao', 'por apresentacao'].includes(normalize(unit));
+    const taxText = cell('st (r$)');
+    const tax = /^(?:R\$\s*)?\d+(?:\.\d{3})*,\d{2}$/.test(taxText)
+      ? Number(taxText.replace(/^R\$\s*/, '').replace(/\./g, '').replace(',', '.')) : null;
     results.push({ source: 'GAM', supplierProductName: name, laboratory: String(row.cells[3]).trim(),
       ean: observedIdentity ? match[1] : null,
       eanEvidence: observedIdentity ? 'PORTAL_ROW' : 'LEADING_ZERO_REMOVAL_CANDIDATE',
       ...(candidateIdentity ? { candidateEan: ean, portalProductCode: match[1] } : {}),
       price, priceSourceLabel: 'Líquido + Imposto',
-      stStatus: 'ST_DESCONHECIDO', commercialCondition: 'Custo com impostos; regime de ST nao discriminado pela tabela GAM',
+      stStatus: tax === null ? 'ST_DESCONHECIDO' : tax > 0 ? 'COM_ST' : 'SEM_ST', stAmount: tax,
+      commercialCondition: condition, commercialConditionConfirmed: conditionConfirmed,
+      minimumQuantity: minimum, minimumQuantityConfirmed: minimum !== null,
+      priceUnit: unitConfirmed ? 'PURCHASE_PRESENTATION' : unit || 'UNCONFIRMED', priceUnitConfirmed: unitConfirmed,
+      currency: cell('moeda') || 'BRL', sourceUrl: new URL(snapshot.url).origin,
       availability: unavailable ? 'indisponivel' : row.quantityEnabled === true ? 'disponivel' : 'disponibilidade nao confirmada',
       availabilityEvidence: unavailable ? 'AVISE_ME' : row.quantityEnabled === true ? 'PORTAL_QUANTITY_CONTROL' : 'UNKNOWN',
       stockQuantity: null, dosage: parsed.dosage, presentation: parsed.presentation,
@@ -135,6 +157,81 @@ export function submitVerifiedGamLogin(document, currentUrl, credentials) {
   } catch { return { state: 'BLOCKED' }; }
 }
 
+function disposeGamSession(entry) {
+  if (entry.disposed || entry.disposing) return null;
+  entry.disposing = true;
+  const ownsLock = !activeAccounts.has(entry.account);
+  if (ownsLock) activeAccounts.add(entry.account);
+  clearTimeout(entry.idleTimer);
+  if (gamSessions.get(entry.account) === entry) gamSessions.delete(entry.account);
+  entry.operation = null;
+  let cleanupError = null;
+  const attempt = cleanup => {
+    try { cleanup(); } catch { cleanupError ||= gamError('CONNECTION_FAILURE'); }
+  };
+  let destroyed = false;
+  attempt(() => { destroyed = entry.win.isDestroyed(); });
+  // Keep native handles captured while alive; destroyed windows reject their getters.
+  if (!destroyed) {
+    for (const [event, listener] of [['will-navigate', entry.navigation], ['will-redirect', entry.navigation], ['destroyed', entry.destroyed]]) {
+      if (listener) attempt(() => entry.contents.removeListener?.(event, listener));
+    }
+  }
+  // Release the operation/window closure while retaining a fail-closed session guard.
+  attempt(() => entry.session.webRequest.onBeforeRequest((_request, callback) => callback({ cancel: true })));
+  if (!destroyed) attempt(() => entry.win.destroy());
+  attempt(() => { destroyed = entry.win.isDestroyed(); });
+  entry.disposed = destroyed;
+  entry.disposing = false;
+  if (ownsLock && destroyed) activeAccounts.delete(entry.account);
+  return cleanupError;
+}
+
+export function closeGamSessions() {
+  for (const entry of [...gamSessions.values()]) {
+    if (entry.operation) entry.operation.fail(gamError('USER_CANCELLED'));
+    else disposeGamSession(entry);
+  }
+}
+
+function createGamSession(BrowserWindow, account) {
+  const win = new BrowserWindow({ width: 1100, height: 800, show: false, skipTaskbar: true,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false, partition: `gam-audit-${account}` } });
+  const contents = win.webContents;
+  const session = contents.session;
+  const entry = { account, win, contents, session, operation: null, idleTimer: null, disposed: false, disposing: false };
+  gamSessions.set(account, entry);
+  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  // The single window handler reads the current operation; idle sessions deny everything.
+  session.webRequest.onBeforeRequest((request, callback) => {
+    const operation = entry.operation;
+    const allowed = Boolean(operation && isAllowedGamRequest(request, operation));
+    if (allowed && String(request.method).toUpperCase() === 'POST') operation.loginArmed = false;
+    callback({ cancel: !allowed });
+    if (!allowed && request.resourceType === 'mainFrame') {
+      if (operation) operation.fail(gamError('AUTH_REQUIRED'));
+      else disposeGamSession(entry);
+    }
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  entry.navigation = (event, url) => {
+    const operation = entry.operation;
+    if (!operation || !isAllowedGamRequest({ url, method: 'GET', resourceType: 'mainFrame' }, operation)) {
+      event.preventDefault();
+      if (operation) operation.fail(gamError('AUTH_REQUIRED'));
+      else disposeGamSession(entry);
+    }
+  };
+  entry.destroyed = () => {
+    if (entry.operation) entry.operation.fail(gamError('CONNECTION_FAILURE'));
+    else disposeGamSession(entry);
+  };
+  win.webContents.on('will-navigate', entry.navigation);
+  win.webContents.on('will-redirect', entry.navigation);
+  win.webContents.on('destroyed', entry.destroyed);
+  return entry;
+}
+
 export async function scrapeGamPortal(credentials, ean, options = {}) {
   const loginUrl = normalizeGamUrl(credentials.url || undefined);
   gamSearchUrl(loginUrl, ean);
@@ -144,40 +241,41 @@ export async function scrapeGamPortal(credentials, ean, options = {}) {
   const timeoutMs = Number(options.timeoutMs || 180_000);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600_000) throw gamError('SUPPLIER_TIMEOUT');
   activeAccounts.add(account);
-  let win;
+  let entry;
   try {
-    const { BrowserWindow } = options.runtime || await import('electron');
-    win = new BrowserWindow({ width: 1100, height: 800, show: false, skipTaskbar: true,
-      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false, partition: `gam-audit-${account}` } });
+    const reuse = process.env.SUPPLIER_SESSION_REUSE !== 'false';
+    entry = gamSessions.get(account);
+    if (entry && (!reuse || entry.win.isDestroyed())) { disposeGamSession(entry); entry = null; }
+    const reused = Boolean(entry);
+    if (!entry) {
+      const { BrowserWindow } = options.runtime || await import('electron');
+      entry = createGamSession(BrowserWindow, account);
+    }
+    clearTimeout(entry.idleTimer);
+    const win = entry.win;
     return await new Promise((resolve, reject) => {
-      let done = false, running = false, loaded = false, loginAttempted = false, loginArmed = false, searchNavigated = false;
-      let loginOrigin = new URL(loginUrl).origin;
+      let done = false, running = false, loaded = false, loginAttempted = false, searchNavigated = reused;
       let interval;
       const finish = (error, rows) => {
         if (done) return;
         done = true; clearTimeout(timer); clearInterval(interval);
         options.signal?.removeEventListener('abort', abort);
-        if (!win.isDestroyed()) win.destroy();
+        entry.operation = null;
+        if (error || !reuse) {
+          const cleanupError = disposeGamSession(entry);
+          error ||= cleanupError;
+        }
+        else {
+          entry.idleTimer = setTimeout(() => disposeGamSession(entry), SESSION_IDLE_TTL_MS);
+          entry.idleTimer.unref?.();
+        }
         if (error) reject(error);
         else resolve(rows);
       };
       const abort = () => finish(gamError('USER_CANCELLED'));
       const timer = setTimeout(() => finish(gamError('SUPPLIER_TIMEOUT')), timeoutMs);
-      const session = win.webContents.session;
-      session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-      session.webRequest.onBeforeRequest((request, callback) => {
-        const allowed = isAllowedGamRequest(request, { ean, loginArmed, loginOrigin });
-        if (allowed && String(request.method).toUpperCase() === 'POST') loginArmed = false;
-        callback({ cancel: !allowed });
-        if (!allowed && request.resourceType === 'mainFrame') finish(gamError('AUTH_REQUIRED'));
-      });
-      win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-      const navigation = (event, url) => {
-        if (!isAllowedGamRequest({ url, method: 'GET', resourceType: 'mainFrame' }, { ean })) {
-          event.preventDefault(); finish(gamError('AUTH_REQUIRED'));
-        }
-      };
-      win.webContents.on('will-navigate', navigation); win.webContents.on('will-redirect', navigation);
+      const operation = { ean, loginArmed: false, loginOrigin: new URL(loginUrl).origin, fail: error => finish(error) };
+      entry.operation = operation;
       options.signal?.addEventListener('abort', abort, { once: true });
       const poll = async () => {
         if (done || running || !loaded || win.isDestroyed() || win.webContents.isLoadingMainFrame()) return;
@@ -185,17 +283,21 @@ export async function scrapeGamPortal(credentials, ean, options = {}) {
         try {
           trustedGamUrl(win.webContents.getURL());
           const snapshot = await win.webContents.executeJavaScript(`(${readGamSnapshot.toString()})(document, location.href)`);
+          if (done) return;
           if (snapshot.blocked) throw gamError('AUTH_REQUIRED');
           if (snapshot.captcha) throw gamError('CAPTCHA_REQUIRED');
           if (snapshot.login) {
-            if (loginAttempted) throw gamError('AUTH_REQUIRED');
-            loginOrigin = trustedGamUrl(win.webContents.getURL()).origin;
-            loginAttempted = true; loginArmed = true;
+            if (reused || loginAttempted) throw gamError('AUTH_REQUIRED');
+            operation.loginOrigin = trustedGamUrl(win.webContents.getURL()).origin;
+            loginAttempted = true; operation.loginArmed = true;
             const result = await win.webContents.executeJavaScript(`(${submitVerifiedGamLogin.toString()})(document, location.href, ${JSON.stringify({ username: credentials.username, password: credentials.password })})`);
+            if (done) return;
             if (result.state !== 'SUBMITTED') throw gamError('AUTH_REQUIRED');
           } else if (!searchNavigated && snapshot.hasSearch) {
             searchNavigated = true;
+            loaded = false;
             await win.loadURL(gamSearchUrl(snapshot.url, ean));
+            if (!done) loaded = true;
           } else if (searchNavigated) {
             const result = inspectGamResults(snapshot, ean);
             if (result.state === 'READY' || result.state === 'EMPTY') finish(null, result.results);
@@ -205,11 +307,15 @@ export async function scrapeGamPortal(credentials, ean, options = {}) {
         } finally { running = false; }
       };
       interval = setInterval(poll, 300);
-      win.loadURL(loginUrl).then(() => { loaded = true; return poll(); }).catch(() => finish(gamError('CONNECTION_FAILURE')));
-      if (options.signal?.aborted) abort();
+      if (options.signal?.aborted) { abort(); return; }
+      // Update request/navigation guards before GET and never inspect the previous EAN's DOM.
+      win.loadURL(reused ? gamSearchUrl(loginUrl, ean) : loginUrl)
+        .then(() => { if (!done) { loaded = true; return poll(); } })
+        .catch(() => finish(gamError('CONNECTION_FAILURE')));
     });
   } finally {
-    activeAccounts.delete(account);
-    if (win && !win.isDestroyed()) win.destroy();
+    // Error cleanup happens while the account is still locked, including physical destruction.
+    if (entry?.operation) disposeGamSession(entry);
+    if (!entry || entry.disposed || gamSessions.get(account) === entry) activeAccounts.delete(account);
   }
 }
